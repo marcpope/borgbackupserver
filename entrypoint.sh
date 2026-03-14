@@ -44,6 +44,9 @@ for i in {1..30}; do
     sleep 1
 done
 
+# Ensure MariaDB stores timestamps in UTC so TimeHelper::format() displays them correctly
+mysql -u root -e "SET GLOBAL time_zone = '+00:00';"
+
 # Start ClickHouse (catalog engine)
 echo "Starting ClickHouse..."
 if command -v clickhouse-server &>/dev/null; then

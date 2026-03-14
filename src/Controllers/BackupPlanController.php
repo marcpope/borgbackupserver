@@ -132,6 +132,7 @@ class BackupPlanController extends Controller
                 'times' => $times ?: null,
                 'day_of_week' => $dayOfWeek,
                 'day_of_month' => $dayOfMonth,
+                'timezone' => $_SESSION['timezone'] ?? 'America/New_York',
                 'enabled' => $frequency === 'manual' ? 0 : 1,
                 'next_run' => $nextRun,
             ], 'backup_plan_id = ?', [$id]);

@@ -65,6 +65,22 @@ class ProfileController extends Controller
         if ($timezone && in_array($timezone, timezone_identifiers_list()) && $timezone !== $user['timezone']) {
             $this->db->update('users', ['timezone' => $timezone], 'id = ?', [$userId]);
             $_SESSION['timezone'] = $timezone;
+            // Also update the timezone on all schedules this user has access to,
+            // so that SchedulerService recalculates next_run in the correct timezone.
+            if (($_SESSION['user_role'] ?? '') === 'admin') {
+                // Admin has access to all agents — update every schedule.
+                $this->db->query("UPDATE schedules SET timezone = ?", [$timezone]);
+            } else {
+                // Regular users are linked to agents via user_agents.
+                $this->db->query(
+                    "UPDATE schedules s
+                     JOIN backup_plans bp ON bp.id = s.backup_plan_id
+                     JOIN user_agents ua ON ua.agent_id = bp.agent_id
+                     SET s.timezone = ?
+                     WHERE ua.user_id = ?",
+                    [$timezone, $userId]
+                );
+            }
             $this->flash('success', 'Timezone updated.');
         }
 
