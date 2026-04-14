@@ -32,7 +32,7 @@ git config --global --add safe.directory "$BBS_DIR" 2>/dev/null || true
 
 # Pull / checkout code
 if [ -n "$GIT_TAG" ]; then
-    echo "[1/10] Upgrading to $GIT_TAG..."
+    echo "[1/9] Upgrading to $GIT_TAG..."
     git -C "$BBS_DIR" fetch --all --tags --force
     git -C "$BBS_DIR" checkout main 2>/dev/null || true
     if [ "$GIT_TAG" = "main" ]; then
@@ -41,7 +41,7 @@ if [ -n "$GIT_TAG" ]; then
         git -C "$BBS_DIR" reset --hard "$GIT_TAG"
     fi
 else
-    echo "[1/10] Checking for latest release..."
+    echo "[1/9] Checking for latest release..."
     git -C "$BBS_DIR" fetch --all --tags --force
     LATEST_TAG=$(git -C "$BBS_DIR" tag --sort=-v:refname | grep -E '^v[0-9]' | head -1)
     if [ -n "$LATEST_TAG" ]; then
