@@ -1,6 +1,6 @@
 FROM php:8.4-apache
 
-# Install system dependencies, apply security patches, and clean up in one layer
+# Install system dependencies, apply security patches and clean up in one layer
 RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
     git \
     curl \
