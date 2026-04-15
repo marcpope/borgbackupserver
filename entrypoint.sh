@@ -4,6 +4,61 @@ set -e
 echo "=== BBS Container Starting ==="
 echo "Version: $(cat /var/www/bbs/VERSION 2>/dev/null || echo 'unknown')"
 
+# --- Helper: ensure directory exists with correct owner and permissions ---
+ensure_dir() {
+    local dir="$1" owner="$2" mode="${3:-755}"
+    mkdir -p "$dir"
+    chown "$owner" "$dir"
+    chmod "$mode" "$dir"
+}
+
+# --- UID/GID remapping for bind mount compatibility ---
+PUID=${PUID:-33}
+PGID=${PGID:-33}
+
+if [ "$PGID" != "33" ]; then
+    echo "Remapping www-data group to GID $PGID..."
+    # Avoid conflict if GID is already in use by another group
+    EXISTING_GROUP=$(getent group "$PGID" 2>/dev/null | cut -d: -f1)
+    if [ -n "$EXISTING_GROUP" ] && [ "$EXISTING_GROUP" != "www-data" ]; then
+        groupmod -g 9999 "$EXISTING_GROUP"
+    fi
+    groupmod -g "$PGID" www-data
+fi
+
+if [ "$PUID" != "33" ]; then
+    echo "Remapping www-data user to UID $PUID..."
+    EXISTING_USER=$(getent passwd "$PUID" 2>/dev/null | cut -d: -f1)
+    if [ -n "$EXISTING_USER" ] && [ "$EXISTING_USER" != "www-data" ]; then
+        usermod -u 9999 "$EXISTING_USER"
+    fi
+    usermod -u "$PUID" www-data
+fi
+
+# Update ownership on static app files (only needed when remapped)
+if [ "$PUID" != "33" ] || [ "$PGID" != "33" ]; then
+    echo "Updating file ownership for UID=$PUID GID=$PGID..."
+    chown -R www-data:www-data /var/www/bbs
+fi
+
+# --- Storage directories (unified) ---
+# All persistent directories are created and permissioned in one place.
+# This ensures correct ownership AND write permissions on filesystems
+# like btrfs (Synology) that may create directories without write bits.
+ensure_dir /var/bbs                 www-data:www-data   755
+ensure_dir /var/bbs/home            www-data:www-data   755
+ensure_dir /var/bbs/cache           www-data:www-data   755
+ensure_dir /var/bbs/backups         www-data:www-data   750
+ensure_dir /var/bbs/tmp             www-data:www-data   1777
+ensure_dir /var/bbs/config          www-data:www-data   755
+ensure_dir /var/bbs/clickhouse      clickhouse:clickhouse 755
+ensure_dir /var/bbs/mysql           mysql:mysql         755
+ensure_dir /run/mysqld              mysql:mysql         755
+ensure_dir /run/sshd                root:root           755
+ensure_dir /var/log/clickhouse-server clickhouse:clickhouse 755
+
+export TMPDIR=/var/bbs/tmp
+
 # --- SSH host key persistence ---
 # Persist host keys on the data volume so agents don't see "host key changed"
 # errors after a container rebuild
@@ -22,23 +77,13 @@ fi
 # NOTE: sshd is started AFTER SSH users are recreated (see below)
 
 # --- MariaDB ---
-# Store database files on the persistent volume
 MYSQL_DATADIR="/var/bbs/mysql"
-mkdir -p "$MYSQL_DATADIR"
-chown mysql:mysql "$MYSQL_DATADIR"
 
 echo "Starting MariaDB..."
 if [ ! -d "$MYSQL_DATADIR/mysql" ]; then
     echo "Initializing MariaDB data directory..."
-    mysql_install_db --user=mysql --datadir="$MYSQL_DATADIR" > /dev/null 2>&1
+    mysql_install_db --user=mysql --datadir="$MYSQL_DATADIR" --skip-test-db > /dev/null 2>&1
 fi
-
-# Use persistent volume for temp files so large catalog imports and MySQL
-# temp tables don't fill the container's overlay filesystem
-mkdir -p /var/bbs/tmp
-chown www-data:www-data /var/bbs/tmp
-chmod 1777 /var/bbs/tmp
-export TMPDIR=/var/bbs/tmp
 
 # Force MariaDB to use UTC so CURRENT_TIMESTAMP values are consistent
 # with what TimeHelper::format() expects, regardless of the Docker host timezone.
@@ -49,7 +94,7 @@ default-time-zone = '+00:00'
 tmpdir = /var/bbs/tmp
 MYCNF
 
-mysqld_safe --datadir="$MYSQL_DATADIR" &
+mariadbd-safe --datadir="$MYSQL_DATADIR" &
 sleep 3
 
 # Wait for MySQL to be ready
@@ -64,9 +109,7 @@ done
 # Start ClickHouse (catalog engine)
 echo "Starting ClickHouse..."
 if command -v clickhouse-server &>/dev/null; then
-    # Store ClickHouse data on persistent volume (same pattern as MariaDB)
-    mkdir -p /var/bbs/clickhouse /var/log/clickhouse-server /etc/clickhouse-server/config.d
-    chown -R clickhouse:clickhouse /var/bbs/clickhouse /var/log/clickhouse-server
+    mkdir -p /etc/clickhouse-server/config.d
     # Install config override to disable system log tables (reduces idle disk I/O)
     if [ -f "/var/www/bbs/config/clickhouse-server-override.xml" ]; then
         cp /var/www/bbs/config/clickhouse-server-override.xml /etc/clickhouse-server/config.d/bbs-override.xml
@@ -109,7 +152,7 @@ SERVER_HOST="$(echo "${APP_URL:-http://localhost}" | sed -E 's|https?://||' | se
 # all encrypted data becomes unrecoverable.
 ENV_VOLUME="/var/bbs/config/.env"
 ENV_APP="/var/www/bbs/config/.env"
-mkdir -p /var/bbs/config /var/www/bbs/config
+mkdir -p /var/www/bbs/config
 
 # Migration: move existing .env from container filesystem to volume
 if [ -f "$ENV_APP" ] && [ ! -L "$ENV_APP" ] && [ ! -f "$ENV_VOLUME" ]; then
@@ -173,18 +216,8 @@ if ! mysql -e "SELECT 1 FROM mysql.user WHERE user='bbs'" 2>/dev/null | grep -q 
     mysql -e "FLUSH PRIVILEGES;"
 fi
 
-# --- Storage directories ---
-mkdir -p /var/bbs/home
-mkdir -p /var/bbs/cache
-mkdir -p /var/bbs/backups
-
-# Set permissions on persistent volume directories
-# Only chown the top-level dirs (not -R) — per-user subdirs under home/ and cache/
-# have their own ownership (user:www-data) set by bbs-ssh-helper. A recursive chown
-# would clobber .ssh/authorized_keys and per-user borg cache directories.
-chown www-data:www-data /var/bbs/home /var/bbs/cache
+# Set permissions on backups (recursive for nested content)
 chown -R www-data:www-data /var/bbs/backups
-chown -R mysql:mysql "$MYSQL_DATADIR"
 
 # Create ClickHouse database and tables
 if curl -sf http://localhost:8123/ping >/dev/null 2>&1; then

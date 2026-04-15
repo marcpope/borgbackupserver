@@ -8,3 +8,9 @@ CLAUDE.md
 __pycache__
 *.pyc
 config/.env
+docker-compose.yml
+.env
+.env.example
+README.md
+LICENSE
+docs/

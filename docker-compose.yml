@@ -17,11 +17,16 @@ services:
     # build: .    # uncomment to build locally instead of pulling from Docker Hub
     container_name: bbs
     ports:
-      - "${WEB_PORT:-8080}:80"      # Web UI
-      - "${SSH_PORT:-2222}:22"      # SSH for borg agent connections
+      - "${WEB_PORT:-8080}:80" # Web UI
+      - "${SSH_PORT:-2222}:22" # SSH for borg agent connections
     environment:
       - APP_URL=${APP_URL:-http://localhost:8080}
       - SSH_PORT=${SSH_PORT:-2222}
+      # Map container user to your host user's UID/GID. Fixes permission issues
+      # with bind mounts, especially on btrfs filesystems (e.g. Synology NAS).
+      # Find your values with: id -u && id -g
+      # - PUID=${PUID:-33}
+      # - PGID=${PGID:-33}
       # Admin password — only used on first run. Omit to auto-generate (shown in logs).
       # - ADMIN_PASS=${ADMIN_PASS}
     volumes:
