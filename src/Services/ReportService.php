@@ -446,7 +446,7 @@ class ReportService
 
         $html = $this->renderHtml($report['data'], $userId);
         $dateFormatted = date('M j, Y', strtotime($report['report_date']));
-        $subject = "BBS Daily Report — {$dateFormatted}";
+        $subject = "[BBS] Daily Report — {$dateFormatted}";
 
         return $mailer->send($toEmail, $subject, $html);
     }
