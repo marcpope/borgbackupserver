@@ -188,6 +188,8 @@ CREATE TABLE backup_plans (
     prune_weeks INT NOT NULL DEFAULT 4,
     prune_months INT NOT NULL DEFAULT 6,
     prune_years INT NOT NULL DEFAULT 0,
+    use_vss TINYINT(1) NOT NULL DEFAULT 0,
+    vss_strict TINYINT(1) NOT NULL DEFAULT 1,
     enabled TINYINT(1) NOT NULL DEFAULT 1,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE,

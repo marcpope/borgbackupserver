@@ -51,6 +51,9 @@ class BackupPlanController extends Controller
             $this->redirect("/clients/{$agentId}?tab=schedules");
         }
 
+        $useVss    = isset($_POST['use_vss'])    ? 1 : 0;
+        $vssStrict = isset($_POST['vss_strict']) ? 1 : 0;
+
         // Create backup plan
         $planId = $this->db->insert('backup_plans', [
             'agent_id' => $agentId,
@@ -65,6 +68,8 @@ class BackupPlanController extends Controller
             'prune_weeks' => $pruneWeeks,
             'prune_months' => $pruneMonths,
             'prune_years' => $pruneYears,
+            'use_vss' => $useVss,
+            'vss_strict' => $vssStrict,
         ]);
 
         // Create associated schedule
@@ -114,6 +119,11 @@ class BackupPlanController extends Controller
         if (isset($_POST['prune_weeks'])) $data['prune_weeks'] = (int) $_POST['prune_weeks'];
         if (isset($_POST['prune_months'])) $data['prune_months'] = (int) $_POST['prune_months'];
         if (isset($_POST['prune_years'])) $data['prune_years'] = (int) $_POST['prune_years'];
+        if (isset($_POST['use_vss']))    $data['use_vss']    = 1;
+        if (isset($_POST['vss_strict'])) $data['vss_strict'] = 1;
+        // Unchecked checkboxes are not submitted — force 0 when the plan form was submitted
+        if (isset($_POST['name']) && !isset($_POST['use_vss']))    $data['use_vss']    = 0;
+        if (isset($_POST['name']) && !isset($_POST['vss_strict'])) $data['vss_strict'] = 0;
 
         if (!empty($data)) {
             $this->db->update('backup_plans', $data, 'id = ?', [$id]);

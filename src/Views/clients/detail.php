@@ -1535,6 +1535,31 @@ $sizeDisplay = $totalSize > 0 ? \BBS\Services\ServerStats::formatBytes((int) $to
                         </div>
                     </div>
 
+                    <?php if (stripos($agent['os_info'] ?? '', 'Windows') !== false): ?>
+                    <div class="row mb-3">
+                        <label class="col-md-3 col-form-label fw-semibold">Volume Shadow Copy</label>
+                        <div class="col-md-9">
+                            <div class="form-check form-switch">
+                                <input class="form-check-input" type="checkbox"
+                                       id="useVss<?= $plan['id'] ?>" name="use_vss" value="1"
+                                       <?= !empty($plan['use_vss']) ? 'checked' : '' ?>>
+                                <label class="form-check-label" for="useVss<?= $plan['id'] ?>">
+                                    Use Volume Shadow Copy (VSS)
+                                    <i class="bi bi-info-circle text-muted ms-1" data-bs-toggle="tooltip" data-bs-placement="right"
+                                       title="Enable this to back up files that are currently open or locked by other programs (e.g., Outlook, Databases)."></i>
+                                </label>
+                            </div>
+                            <div class="form-check form-switch ms-3 mt-1" id="vss-strict-row-<?= $plan['id'] ?>"
+                                 style="<?= empty($plan['use_vss']) ? 'display:none' : '' ?>">
+                                <input class="form-check-input" type="checkbox"
+                                       id="vssStrict<?= $plan['id'] ?>" name="vss_strict" value="1"
+                                       <?= !isset($plan['vss_strict']) || $plan['vss_strict'] ? 'checked' : '' ?>>
+                                <label class="form-check-label" for="vssStrict<?= $plan['id'] ?>">Abort backup if VSS snapshot creation fails (strict mode)</label>
+                            </div>
+                        </div>
+                    </div>
+                    <?php endif; ?>
+
                     <div class="row mb-3">
                         <label class="col-md-3 col-form-label fw-semibold">Prune Retention</label>
                         <div class="col-md-9">
@@ -1850,6 +1875,26 @@ $sizeDisplay = $totalSize > 0 ? \BBS\Services\ServerStats::formatBytes((int) $to
                     </div>
                 </div>
 
+                <?php if ($isWindows): ?>
+                <div class="row mb-3" id="vss-section">
+                    <label class="col-md-3 col-form-label fw-semibold">Volume Shadow Copy</label>
+                    <div class="col-md-9">
+                        <div class="form-check form-switch">
+                            <input class="form-check-input" type="checkbox" id="useVss" name="use_vss" value="1">
+                            <label class="form-check-label" for="useVss">
+                                Use Volume Shadow Copy (VSS)
+                                <i class="bi bi-info-circle text-muted ms-1" data-bs-toggle="tooltip" data-bs-placement="right"
+                                   title="Enable this to back up files that are currently open or locked by other programs (e.g., Outlook, Databases)."></i>
+                            </label>
+                        </div>
+                        <div class="form-check form-switch ms-3 mt-1" id="vss-strict-row" style="display:none">
+                            <input class="form-check-input" type="checkbox" id="vssStrict" name="vss_strict" value="1" checked>
+                            <label class="form-check-label" for="vssStrict">Abort backup if VSS snapshot creation fails (strict mode)</label>
+                        </div>
+                    </div>
+                </div>
+                <?php endif; ?>
+
                 <div class="row mb-3">
                     <label class="col-md-3 col-form-label fw-semibold">Prune Retention</label>
                     <div class="col-md-9">
@@ -2127,6 +2172,15 @@ $sizeDisplay = $totalSize > 0 ? \BBS\Services\ServerStats::formatBytes((int) $to
 
         createForm.addEventListener('submit', syncCreateField);
 
+        // VSS strict row visibility (create form)
+        const useVssCreate = document.getElementById('useVss');
+        const vssStrictRow = document.getElementById('vss-strict-row');
+        if (useVssCreate && vssStrictRow) {
+            useVssCreate.addEventListener('change', function() {
+                vssStrictRow.style.display = this.checked ? '' : 'none';
+            });
+        }
+
         // Template selector (create form)
         const tplSelect = document.getElementById('templateSelect');
         if (tplSelect) {
@@ -2197,6 +2251,18 @@ $sizeDisplay = $totalSize > 0 ? \BBS\Services\ServerStats::formatBytes((int) $to
         syncEditField();
 
         form.addEventListener('submit', syncEditField);
+
+        // VSS strict row visibility (edit form)
+        const useVssEdit = panel.querySelector('input[name="use_vss"]');
+        if (useVssEdit) {
+            const strictRowId = 'vss-strict-row-' + (form.closest('.edit-plan-panel')?.id?.replace('edit-plan-', '') || '');
+            const strictRow = document.getElementById(strictRowId);
+            if (strictRow) {
+                useVssEdit.addEventListener('change', function() {
+                    strictRow.style.display = this.checked ? '' : 'none';
+                });
+            }
+        }
     });
 
     // Edit form template selectors

@@ -45,7 +45,7 @@ if not hasattr(subprocess, "run"):
     subprocess.run = _subprocess_run
     subprocess.CompletedProcess = _CompletedProcess
 
-AGENT_VERSION = "2.25.1"
+AGENT_VERSION = "2.25.2"
 BORG_PATH = None  # Resolved in get_system_info()
 IS_WINDOWS = sys.platform == "win32"
 
@@ -181,6 +181,215 @@ def _verify_key_readable(path):
     except Exception:
         pass
     return False
+
+
+# ---------------------------------------------------------------------------
+# Windows VSS (Volume Shadow Copy Service) support
+# ---------------------------------------------------------------------------
+
+class VSSContext:
+    """Context manager that creates VSS snapshots, mounts them as directory
+    junctions, and translates source paths so borg reads from the shadow copy.
+    This allows backing up open / locked files (e.g. Outlook PST, databases).
+
+    Usage::
+
+        ctx = VSSContext(job_id=42, source_dirs=["C:\\Data", "D:\\Logs"], strict=True)
+        try:
+            translated = ctx.enter()   # returns translated path list
+            # ... run borg with translated paths ...
+        finally:
+            ctx.cleanup()
+
+    Requires Administrator privileges.  Only meaningful on Windows.
+    """
+
+    def __init__(self, job_id, source_dirs, strict=True):
+        temp_base = os.environ.get("TEMP", os.environ.get("TMP", r"C:\Temp"))
+        self.mount_base = os.path.join(temp_base, "BorgVSS_{}".format(job_id))
+        self.source_dirs = source_dirs
+        self.strict = strict
+        # drive_letter (upper, e.g. 'C') -> GUID string
+        self.shadow_ids = {}
+        # drive_letter -> DeviceObject path
+        self.device_objects = {}
+        # drive_letter -> full mount-point path
+        self.mount_points = {}
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    def enter(self):
+        """Create snapshots, mount them, return translated source paths."""
+        drives = self._parse_drives()
+        if not drives:
+            raise VSSError("No drive letters found in source paths: {}".format(self.source_dirs))
+
+        os.makedirs(self.mount_base, exist_ok=True)
+
+        for drive in sorted(drives):
+            self._create_shadow(drive)
+            self._mount_shadow(drive)
+
+        return self._translate_paths(self.source_dirs)
+
+    def cleanup(self):
+        """Remove junctions and delete VSS snapshots.  Always call this,
+        even if enter() raised — partial state is cleaned up safely."""
+        # Remove junctions first (rmdir without /s — never recurse into shadow data)
+        for drive, mount_point in list(self.mount_points.items()):
+            try:
+                result = subprocess.run(
+                    ["cmd.exe", "/c", "rmdir", mount_point],
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                    timeout=30,
+                )
+                if result.returncode == 0:
+                    logger.info("VSS: removed junction {}".format(mount_point))
+                else:
+                    err = result.stderr.decode("utf-8", errors="replace").strip()
+                    logger.warning("VSS: rmdir {} failed (rc={}): {}".format(mount_point, result.returncode, err))
+            except Exception as e:
+                logger.warning("VSS: error removing junction {}: {}".format(mount_point, e))
+
+        # Delete shadow copies via PowerShell Remove-CimInstance
+        for drive, shadow_id in list(self.shadow_ids.items()):
+            try:
+                ps = (
+                    "$s = Get-CimInstance Win32_ShadowCopy -Filter \"ID='{sid}'\"; "
+                    "if ($s) {{ Remove-CimInstance -InputObject $s }}"
+                ).format(sid=shadow_id.replace("'", "''"))
+                result = subprocess.run(
+                    ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps],
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                    timeout=60,
+                )
+                if result.returncode == 0:
+                    logger.info("VSS: deleted shadow copy {} ({})".format(shadow_id, drive))
+                else:
+                    err = result.stderr.decode("utf-8", errors="replace").strip()
+                    logger.warning("VSS: failed to delete shadow {} (rc={}): {}".format(shadow_id, result.returncode, err))
+            except Exception as e:
+                logger.warning("VSS: error deleting shadow {}: {}".format(shadow_id, e))
+
+        # Try to remove the now-empty mount base directory
+        try:
+            os.rmdir(self.mount_base)
+        except Exception:
+            pass  # Non-fatal — OS will clean it up eventually
+
+    # ------------------------------------------------------------------
+    # Private helpers
+    # ------------------------------------------------------------------
+
+    def _parse_drives(self):
+        """Return the set of upper-case drive letters present in source_dirs."""
+        drives = set()
+        for p in self.source_dirs:
+            if len(p) >= 2 and p[1] == ':':
+                drives.add(p[0].upper())
+        return drives
+
+    def _create_shadow(self, drive):
+        """Create a VSS snapshot of <drive>:\\ and record its ID + DeviceObject."""
+        volume = "{}:\\".format(drive)
+        # PowerShell: create shadow copy and retrieve its ID and DeviceObject in one shot
+        ps = (
+            "$r = Invoke-CimMethod -ClassName Win32_ShadowCopy -MethodName Create "
+            "-Arguments @{{Volume='{vol}'}}; "
+            "if ($r.ReturnValue -ne 0) {{ throw ('VSS Create failed, ReturnValue=' + $r.ReturnValue) }}; "
+            "$sc = Get-CimInstance Win32_ShadowCopy -Filter (\"ID='\" + $r.ShadowID + \"'\"); "
+            "Write-Output ($sc.ID + '|' + $sc.DeviceObject)"
+        ).format(vol=volume.replace("'", "''"))
+
+        logger.info("VSS: creating shadow copy for {}:\\".format(drive))
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            timeout=120,
+        )
+        if result.returncode != 0:
+            err = result.stderr.decode("utf-8", errors="replace").strip()
+            raise VSSError("VSS snapshot creation failed for drive {}: {}".format(drive, err))
+
+        output = result.stdout.decode("utf-8", errors="replace").strip()
+        # Expected output: "{GUID}|\\?\GLOBALROOT\Device\HarddiskVolumeShadowCopyN"
+        if '|' not in output:
+            raise VSSError("Unexpected VSS output for drive {}: {!r}".format(drive, output))
+
+        shadow_id, device_object = output.split('|', 1)
+        shadow_id = shadow_id.strip()
+        device_object = device_object.strip()
+
+        if not shadow_id or not device_object:
+            raise VSSError("Could not parse VSS output for drive {}: {!r}".format(drive, output))
+
+        self.shadow_ids[drive] = shadow_id
+        self.device_objects[drive] = device_object
+        logger.info("VSS: drive {}:\\ -> shadow {} ({})".format(drive, shadow_id, device_object))
+
+    def _mount_shadow(self, drive):
+        """Create a directory junction from mount_base\\<drive> to the shadow DeviceObject."""
+        mount_point = os.path.join(self.mount_base, drive)
+        device_object = self.device_objects[drive]
+
+        # CRITICAL: the junction target MUST have a trailing backslash.
+        # Without it Windows treats the device object as a file rather than a
+        # directory, and borg will fail with "not a directory" errors.
+        target = device_object.rstrip("\\") + "\\"
+
+        logger.info("VSS: mounting {} -> {}".format(mount_point, target))
+        result = subprocess.run(
+            ["cmd.exe", "/c", "mklink", "/j", mount_point, target],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            timeout=30,
+        )
+        if result.returncode != 0:
+            err = result.stderr.decode("utf-8", errors="replace").strip()
+            raise VSSError("mklink /j failed for drive {}: {}".format(drive, err))
+
+        self.mount_points[drive] = mount_point
+
+    def _translate_paths(self, paths):
+        """Map original source paths to their VSS mount equivalents."""
+        result = []
+        for p in paths:
+            if len(p) >= 2 and p[1] == ':':
+                drive = p[0].upper()
+                if drive in self.mount_points:
+                    # Strip "X:" prefix, then join with mount point
+                    # e.g. C:\Data\foo -> <mount_base>\C\Data\foo
+                    relative = p[2:].lstrip("\\/")
+                    result.append(os.path.join(self.mount_points[drive], relative) if relative
+                                  else self.mount_points[drive])
+                    continue
+            result.append(p)
+        return result
+
+
+class VSSError(Exception):
+    """Raised when a VSS operation fails."""
+
+
+def _vss_translate_command(command, original_dirs, translated_dirs):
+    """Replace source path arguments in a borg command array with VSS paths.
+
+    The server constructs the borg command with the original source paths as
+    trailing positional arguments.  This function swaps them out for the
+    VSS-translated equivalents so borg reads from the shadow copy.
+    """
+    if not original_dirs or not translated_dirs:
+        return command
+
+    translation = {}
+    for orig, trans in zip(original_dirs, translated_dirs):
+        translation[orig] = trans
+
+    new_command = []
+    for arg in command:
+        new_command.append(translation.get(arg, arg))
+    return new_command
 
 
 def setup_logging():
@@ -2894,6 +3103,42 @@ def _execute_task_inner(config, task, job_id, task_type, command, env_vars,
             })
             return
 
+    # Windows VSS: create shadow copies before file counting so count_files
+    # also operates on the shadow paths (avoids locked-file errors there too)
+    vss_ctx = None
+    if IS_WINDOWS and task.get("use_vss") and task_type == "backup":
+        source_dirs = [d.strip() for d in directories.splitlines() if d.strip()]
+        vss_strict = task.get("vss_strict", True)
+        api_request(config, "/api/agent/progress", method="POST", data={
+            "job_id": job_id,
+            "status_message": "Creating VSS snapshots...",
+        })
+        try:
+            vss_ctx = VSSContext(job_id, source_dirs, strict=vss_strict)
+            translated_dirs = vss_ctx.enter()
+            # Swap the original source paths in the borg command for VSS paths
+            command = _vss_translate_command(command, source_dirs, translated_dirs)
+            # Also update directories string so file counting uses shadow paths
+            directories = "\n".join(translated_dirs)
+            logger.info("VSS snapshots created; translated {} path(s)".format(len(translated_dirs)))
+        except Exception as vss_err:
+            logger.error("VSS snapshot creation failed: {}".format(vss_err))
+            if vss_ctx:
+                try:
+                    vss_ctx.cleanup()
+                except Exception:
+                    pass
+                vss_ctx = None
+            if vss_strict:
+                report_status(config, {
+                    "job_id": job_id,
+                    "result": "failed",
+                    "error_log": "VSS snapshot creation failed: {}".format(vss_err),
+                })
+                return
+            else:
+                logger.warning("VSS failed; proceeding with original paths (non-strict mode)")
+
     # Pre-count files for progress
     files_total = 0
     if task_type == "backup" and directories:
@@ -3228,6 +3473,13 @@ def _execute_task_inner(config, task, job_id, task_type, command, env_vars,
         logger.error("Job #{} error: {}".format(job_id, e))
     finally:
         current_borg_proc = None
+
+        # Clean up VSS snapshots and junctions regardless of borg outcome
+        if vss_ctx is not None:
+            try:
+                vss_ctx.cleanup()
+            except Exception as vss_cleanup_err:
+                logger.error("VSS cleanup error: {}".format(vss_cleanup_err))
 
         # Close the catalog SSH pipe
         catalog_ssh_error = ""
