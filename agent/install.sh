@@ -188,7 +188,7 @@ install_borg() {
         fedora)
             dnf install -y borgbackup python3 >/dev/null 2>&1
             ;;
-        arch|manjaro|endeavouros)
+        arch|manjaro|endeavouros|cachyos)
             pacman -Sy --noconfirm borg python >/dev/null 2>&1
             ;;
         opensuse*|sles)
