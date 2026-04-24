@@ -45,7 +45,7 @@ if not hasattr(subprocess, "run"):
     subprocess.run = _subprocess_run
     subprocess.CompletedProcess = _CompletedProcess
 
-AGENT_VERSION = "2.29.1"
+AGENT_VERSION = "2.29.2"
 BORG_PATH = None  # Resolved in get_system_info()
 IS_WINDOWS = sys.platform == "win32"
 
@@ -2950,6 +2950,8 @@ def _execute_task_inner(config, task, job_id, task_type, command, env_vars,
     files_processed = 0
     original_size = 0
     deduplicated_size = 0
+    bytes_processed = 0  # restore-only: bytes extracted (borg progress_percent
+                         # current/total are byte offsets for extract, not files)
     error_output = ""
     last_progress_time = time.time()
     catalog_count = 0
@@ -3089,12 +3091,14 @@ def _execute_task_inner(config, task, job_id, task_type, command, env_vars,
                     tot = entry.get("total")
                     if cur is not None and tot not in (None, 0):
                         # Persist the count locally for non-backup tasks so
-                        # we can distinguish "extracted N files" from
-                        # "extracted 0 files" at completion. borg extract
+                        # we can distinguish "extracted something" from
+                        # "extracted nothing" at completion. borg extract
                         # exits 0 even when the path filter matched
                         # nothing, so this is the only signal we have.
+                        # Note: for extract these are byte offsets, not
+                        # file counts — track separately.
                         if task_type != "backup":
-                            files_processed = int(cur)
+                            bytes_processed = int(cur)
                             files_total = int(tot)
                         now = time.time()
                         if now - last_progress_time >= 3:
@@ -3206,16 +3210,25 @@ def _execute_task_inner(config, task, job_id, task_type, command, env_vars,
             # anything was actually written — if the path filter matched
             # zero archive entries, borg extract still exits 0. Catch that
             # so the server doesn't show a green check on a no-op restore.
-            if task_type != "backup" and files_processed == 0:
+            if task_type != "backup" and bytes_processed == 0:
                 result = "failed"
-                error_output = "Restore extracted 0 files — the requested path may not exist in this archive"
-                logger.error("Job #{} failed: 0 files extracted".format(job_id))
+                error_output = "Restore extracted 0 bytes — the requested path may not exist in this archive"
+                logger.error("Job #{} failed: nothing extracted".format(job_id))
             else:
                 result = "completed"
-                logger.info(
-                    "Job #{} completed: {} files, "
-                    "{} bytes original, {} bytes dedup".format(job_id, files_processed, original_size, deduplicated_size)
-                )
+                if task_type == "backup":
+                    logger.info(
+                        "Job #{} completed: {} files, "
+                        "{} bytes original, {} bytes dedup".format(job_id, files_processed, original_size, deduplicated_size)
+                    )
+                else:
+                    # borg extract without --list doesn't expose a per-file
+                    # count, so report the byte total we collected from
+                    # progress_percent — accurate, and shows the user that
+                    # data actually moved.
+                    logger.info(
+                        "Job #{} completed: {} bytes restored".format(job_id, bytes_processed)
+                    )
         elif job_cancelled:
             pass  # Already set result='failed', error_output='Cancelled by user'
         elif proc.returncode == 1:
