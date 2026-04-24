@@ -721,6 +721,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 { label: 'Backups', data: chartData.map(d => d.backups), backgroundColor: 'rgba(54, 162, 235, 0.7)', borderRadius: 2 },
                 { label: 'Restores', data: chartData.map(d => d.restores), backgroundColor: 'rgba(255, 159, 64, 0.7)', borderRadius: 2 },
                 { label: 'S3 Sync', data: chartData.map(d => d.s3_sync), backgroundColor: 'rgba(75, 192, 192, 0.7)', borderRadius: 2 },
+                { label: 'Errors', data: chartData.map(d => d.errors), backgroundColor: 'rgba(220, 53, 69, 0.8)', borderRadius: 2 },
             ]
         },
         options: {

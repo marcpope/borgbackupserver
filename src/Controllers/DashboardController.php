@@ -336,7 +336,34 @@ class DashboardController extends Controller
         if ($agentWhere !== '1=1') {
             $errorCountQuery .= " AND ({$agentWhere} OR sl.agent_id IS NULL)";
         }
-        $errorCount = $this->db->fetchOne($errorCountQuery, $jobParams)['cnt'];
+        $logErrorCount = (int) $this->db->fetchOne($errorCountQuery, $jobParams)['cnt'];
+
+        $failedJobCount = (int) $this->db->fetchOne(
+            "SELECT COUNT(*) as cnt
+             FROM backup_jobs bj
+             JOIN agents a ON a.id = bj.agent_id
+             WHERE bj.status = 'failed'
+               AND bj.completed_at > DATE_SUB(NOW(), INTERVAL 24 HOUR)
+               {$jobScope}",
+            $jobParams
+        )['cnt'];
+
+        // Operational alerts such as an offline client missing a schedule do not
+        // always create a failed backup_job row, but they are still dashboard
+        // errors the user needs to notice.
+        $alertScope = $agentWhere === '1=1' ? '' : "AND ({$agentWhere} OR n.agent_id IS NULL)";
+        $operationalAlertCount = (int) $this->db->fetchOne(
+            "SELECT COUNT(*) as cnt
+             FROM notifications n
+             LEFT JOIN agents a ON a.id = n.agent_id
+             WHERE n.type IN ('agent_offline', 'missed_schedule')
+               AND n.resolved_at IS NULL
+               AND n.last_occurred_at > DATE_SUB(NOW(), INTERVAL 24 HOUR)
+               {$alertScope}",
+            $jobParams
+        )['cnt'];
+
+        $errorCount = $logErrorCount + $failedJobCount + $operationalAlertCount;
 
         // Optional task-type filter for the Recently Completed list. Accepts
         // a comma-separated list of category keys (backup, restore, prune,
@@ -411,6 +438,31 @@ class DashboardController extends Controller
             ORDER BY hour
         ", $jobParams);
 
+        $failedJobsChart = $this->db->fetchAll("
+            SELECT DATE_FORMAT(bj.completed_at, '%Y-%m-%d %H:00') as hour,
+                   COUNT(*) as count
+            FROM backup_jobs bj
+            JOIN agents a ON a.id = bj.agent_id
+            WHERE bj.status = 'failed'
+              AND bj.completed_at > DATE_SUB(NOW(), INTERVAL 24 HOUR)
+              {$jobScope}
+            GROUP BY hour
+            ORDER BY hour
+        ", $jobParams);
+
+        $alertChart = $this->db->fetchAll("
+            SELECT DATE_FORMAT(n.last_occurred_at, '%Y-%m-%d %H:00') as hour,
+                   COUNT(*) as count
+            FROM notifications n
+            LEFT JOIN agents a ON a.id = n.agent_id
+            WHERE n.type IN ('agent_offline', 'missed_schedule')
+              AND n.resolved_at IS NULL
+              AND n.last_occurred_at > DATE_SUB(NOW(), INTERVAL 24 HOUR)
+              {$alertScope}
+            GROUP BY hour
+            ORDER BY hour
+        ", $jobParams);
+
         // Group task types into 3 categories
         $categoryMap = [
             'backup' => 'backups',
@@ -423,6 +475,12 @@ class DashboardController extends Controller
             $cat = $categoryMap[$row['task_type']] ?? null;
             if ($cat === null) continue;
             $hourCounts[$row['hour']][$cat] = ($hourCounts[$row['hour']][$cat] ?? 0) + (int) $row['count'];
+        }
+        foreach ($failedJobsChart as $row) {
+            $hourCounts[$row['hour']]['errors'] = ($hourCounts[$row['hour']]['errors'] ?? 0) + (int) $row['count'];
+        }
+        foreach ($alertChart as $row) {
+            $hourCounts[$row['hour']]['errors'] = ($hourCounts[$row['hour']]['errors'] ?? 0) + (int) $row['count'];
         }
 
         // Fill in missing hours
@@ -443,6 +501,7 @@ class DashboardController extends Controller
                 'backups' => $counts['backups'] ?? 0,
                 'restores' => $counts['restores'] ?? 0,
                 's3_sync' => $counts['s3_sync'] ?? 0,
+                'errors' => $counts['errors'] ?? 0,
             ];
         }
 
