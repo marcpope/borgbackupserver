@@ -424,12 +424,21 @@ install_ssh_key() {
 
     if [ -n "$ssh_key" ] && [ "$ssh_key" != "" ]; then
         echo "$ssh_key" > "$CONFIG_DIR/ssh_key"
-        # Check if ssh is Dropbear (common on embedded devices) and convert if needed
+        # Check if we have Dropbear ssh (common on embedded devices) and convert if needed
         if ssh -V 2>&1 | grep -q "Dropbear"; then
-            print_info "Converting SSH key to Dropbear format"
-            dropbearconvert openssh dropbear "$CONFIG_DIR/ssh_key" "$CONFIG_DIR/ssh_key.dropbear"
-            mv -f "$CONFIG_DIR/ssh_key.dropbear" "$CONFIG_DIR/ssh_key"
+            if command -v dropbearconvert >/dev/null 2>&1; then 
+                print_info "Converting SSH key to Dropbear format"
+                if dropbearconvert openssh dropbear "$CONFIG_DIR/ssh_key" "$CONFIG_DIR/ssh_key.dropbear" 2>/dev/null; then
+                    mv -f "$CONFIG_DIR/ssh_key.dropbear" "$CONFIG_DIR/ssh_key"
+                else
+                    print_warning "dropbearconvert failed; leaving key in OpenSSH format"
+                    rm -f "$CONFIG_DIR/ssh_key.dropbear"
+                fi
+            else
+                print_warning "dropbearconvert not found; leaving key in OpenSSH format"
+            fi
         fi
+
         chmod 600 "$CONFIG_DIR/ssh_key"
         print_success "SSH key installed to ${DIM}$CONFIG_DIR/ssh_key${NC}"
         SSH_STATUS="installed"
