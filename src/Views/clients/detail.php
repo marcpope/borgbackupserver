@@ -1095,7 +1095,7 @@ $sizeDisplay = $totalSize > 0 ? \BBS\Services\ServerStats::formatBytes((int) $to
     <div class="card border-0 shadow-sm mt-4">
         <div class="card-header bg-body fw-semibold d-flex justify-content-between align-items-center">
             <span><i class="bi bi-cloud text-info me-1"></i> Offsite Backups</span>
-            <span class="badge bg-info"><?= count($s3Orphans) ?> available to restore</span>
+            <span class="badge text-bg-info"><?= count($s3Orphans) ?> available to restore</span>
         </div>
         <div class="card-body">
             <p class="text-muted small mb-3">

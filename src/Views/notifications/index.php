@@ -48,21 +48,21 @@
                 <td><?= htmlspecialchars($n['agent_name'] ?? '—') ?></td>
                 <td>
                     <?php if ($n['severity'] === 'critical'): ?>
-                        <span class="badge bg-danger">Critical</span>
+                        <span class="badge text-bg-danger">Critical</span>
                     <?php elseif ($n['severity'] === 'info'): ?>
-                        <span class="badge bg-info text-dark">Info</span>
+                        <span class="badge text-bg-primary">Info</span>
                     <?php else: ?>
-                        <span class="badge bg-warning text-dark">Warning</span>
+                        <span class="badge text-bg-warning">Warning</span>
                     <?php endif; ?>
                 </td>
                 <td class="small"><?= \BBS\Core\TimeHelper::format($n['last_occurred_at'], 'M j, g:i A') ?></td>
                 <td>
                     <?php if ($resolved): ?>
-                        <span class="badge bg-success">Resolved</span>
+                        <span class="badge text-bg-success">Resolved</span>
                     <?php elseif (!$unread): ?>
-                        <span class="badge bg-secondary">Read</span>
+                        <span class="badge text-bg-secondary">Read</span>
                     <?php else: ?>
-                        <span class="badge bg-info text-dark">New</span>
+                        <span class="badge text-bg-primary">New</span>
                     <?php endif; ?>
                 </td>
                 <td>

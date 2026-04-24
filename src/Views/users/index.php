@@ -61,7 +61,7 @@
                     <span class="badge bg-success" title="2FA Enabled"><i class="bi bi-shield-check"></i></span>
                     <?php endif; ?>
                     <?php if (($user['auth_provider'] ?? 'local') === 'oidc'): ?>
-                    <span class="badge bg-info" title="SSO User"><i class="bi bi-box-arrow-in-right me-1"></i>SSO</span>
+                    <span class="badge text-bg-info" title="SSO User"><i class="bi bi-box-arrow-in-right me-1"></i>SSO</span>
                     <?php endif; ?>
                     <?php if (($user['oidc_status'] ?? 'active') === 'pending'): ?>
                     <span class="badge bg-warning text-dark" title="Pending SSO Approval">Pending</span>

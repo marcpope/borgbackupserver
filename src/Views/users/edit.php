@@ -45,7 +45,7 @@ $columnLabels = [
                 <div class="col-md-6">
                     <?php if (($user['auth_provider'] ?? 'local') === 'oidc'): ?>
                     <label class="form-label fw-semibold">Authentication</label>
-                    <div><span class="badge bg-info"><i class="bi bi-box-arrow-in-right me-1"></i>SSO (OIDC)</span></div>
+                    <div><span class="badge text-bg-info"><i class="bi bi-box-arrow-in-right me-1"></i>SSO (OIDC)</span></div>
                     <div class="form-text">This user authenticates via Single Sign-On. No password required.</div>
                     <?php else: ?>
                     <label class="form-label fw-semibold">New Password</label>

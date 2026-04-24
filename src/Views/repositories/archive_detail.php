@@ -13,10 +13,10 @@ function fmtSize($bytes) {
 // subtle variants — the old `bg-body-secondary` single-class token rendered
 // near-invisibly on dark cards (#132).
 $statusLabels = [
-    'A' => ['Added',            'bg-success'],
-    'M' => ['Modified',         'bg-warning text-dark'],
-    'C' => ['Metadata Changed', 'bg-info text-dark'],
-    'U' => ['Unchanged',        'bg-secondary'],
+    'A' => ['Added',            'text-bg-success'],
+    'M' => ['Modified',         'text-bg-warning'],
+    'C' => ['Metadata Changed', 'text-bg-primary'],
+    'U' => ['Unchanged',        'text-bg-secondary'],
     'D' => ['Directory',        'bg-secondary-subtle text-secondary-emphasis'],
     'S' => ['Symlink',          'bg-secondary-subtle text-secondary-emphasis'],
     'H' => ['Hardlink',         'bg-secondary-subtle text-secondary-emphasis'],
@@ -101,7 +101,7 @@ if ($savings >= 100 && $archive['deduplicated_size'] > 0) {
                     <i class="bi bi-archive text-primary me-2"></i>
                     <?= htmlspecialchars($planName ?: $archive['archive_name']) ?>
                     <?php if ($hasDatabases): ?>
-                    <span class="badge bg-info ms-2" style="font-size: 0.6em; vertical-align: middle;"><i class="bi bi-database me-1"></i>Databases</span>
+                    <span class="badge text-bg-info ms-2" style="font-size: 0.6em; vertical-align: middle;"><i class="bi bi-database me-1"></i>Databases</span>
                     <?php endif; ?>
                 </h4>
                 <?php if ($planName): ?>
@@ -196,7 +196,7 @@ if ($savings >= 100 && $archive['deduplicated_size'] > 0) {
                         <?php endforeach; ?>
                         <?php if ($prevArchive): ?>
                         <tr id="row-deleted" hidden>
-                            <td><span class="badge bg-danger">Deleted</span></td>
+                            <td><span class="badge text-bg-danger">Deleted</span></td>
                             <td class="text-end" id="deleted-count">--</td>
                             <td class="text-end" id="deleted-size">--</td>
                         </tr>
@@ -284,12 +284,12 @@ if ($savings >= 100 && $archive['deduplicated_size'] > 0) {
     <div class="card-body pb-0">
         <ul class="nav nav-tabs" id="fileBrowserTabs">
             <li class="nav-item"><a class="nav-link active" href="javascript:void(0)" data-status="">All</a></li>
-            <li class="nav-item"><a class="nav-link" href="javascript:void(0)" data-status="A">Added <span class="badge bg-success" id="tab-count-A"></span></a></li>
-            <li class="nav-item"><a class="nav-link" href="javascript:void(0)" data-status="M">Modified <span class="badge bg-warning" id="tab-count-M"></span></a></li>
+            <li class="nav-item"><a class="nav-link" href="javascript:void(0)" data-status="A">Added <span class="badge text-bg-success" id="tab-count-A"></span></a></li>
+            <li class="nav-item"><a class="nav-link" href="javascript:void(0)" data-status="M">Modified <span class="badge text-bg-warning" id="tab-count-M"></span></a></li>
             <?php if ($prevArchive): ?>
-            <li class="nav-item"><a class="nav-link" href="javascript:void(0)" data-status="deleted">Deleted <span class="badge bg-danger" id="tab-count-deleted"></span></a></li>
+            <li class="nav-item"><a class="nav-link" href="javascript:void(0)" data-status="deleted">Deleted <span class="badge text-bg-danger" id="tab-count-deleted"></span></a></li>
             <?php endif; ?>
-            <li class="nav-item"><a class="nav-link" href="javascript:void(0)" data-status="U">Unchanged <span class="badge bg-secondary" id="tab-count-U"></span></a></li>
+            <li class="nav-item"><a class="nav-link" href="javascript:void(0)" data-status="U">Unchanged <span class="badge text-bg-secondary" id="tab-count-U"></span></a></li>
         </ul>
     </div>
     <div class="card-body p-0">
@@ -331,15 +331,15 @@ if ($savings >= 100 && $archive['deduplicated_size'] > 0) {
 
     // [label, full-badge-class-token] — must mirror $statusLabels in the PHP prelude
     var statusLabels = {
-        'A': ['Added',            'bg-success'],
-        'M': ['Modified',         'bg-warning text-dark'],
-        'C': ['Metadata Changed', 'bg-info text-dark'],
-        'U': ['Unchanged',        'bg-secondary'],
+        'A': ['Added',            'text-bg-success'],
+        'M': ['Modified',         'text-bg-warning'],
+        'C': ['Metadata Changed', 'text-bg-primary'],
+        'U': ['Unchanged',        'text-bg-secondary'],
         'D': ['Directory',        'bg-secondary-subtle text-secondary-emphasis'],
         'S': ['Symlink',          'bg-secondary-subtle text-secondary-emphasis'],
         'H': ['Hardlink',         'bg-secondary-subtle text-secondary-emphasis'],
         'X': ['Excluded',         'bg-warning-subtle text-warning-emphasis'],
-        'deleted': ['Deleted',    'bg-danger']
+        'deleted': ['Deleted',    'text-bg-danger']
     };
 
     <?php foreach ($statusBreakdown as $row): ?>
@@ -476,7 +476,7 @@ if ($savings >= 100 && $archive['deduplicated_size'] > 0) {
     </div>
     <div class="card-body">
         <?php foreach ($dbInfo['databases'] as $db): ?>
-        <span class="badge bg-info me-1 mb-1"><?= htmlspecialchars($db) ?></span>
+        <span class="badge text-bg-info me-1 mb-1"><?= htmlspecialchars($db) ?></span>
         <?php endforeach; ?>
     </div>
 </div>

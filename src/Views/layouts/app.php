@@ -93,7 +93,7 @@
                     <i class="bi bi-cloud-arrow-down me-1"></i> Upgrade
                 </a>
                 <?php elseif ($agentUpgradeCount > 0): ?>
-                <a href="/settings?tab=updates" class="badge bg-info text-white text-decoration-none me-2 me-md-3 py-2 px-2 d-none d-sm-inline-block">
+                <a href="/settings?tab=updates" class="badge text-bg-primary text-decoration-none me-2 me-md-3 py-2 px-2 d-none d-sm-inline-block">
                     <i class="bi bi-box-seam me-1"></i> Upgrade Agents
                 </a>
                 <?php endif; ?>
