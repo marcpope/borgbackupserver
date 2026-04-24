@@ -45,7 +45,7 @@ if not hasattr(subprocess, "run"):
     subprocess.run = _subprocess_run
     subprocess.CompletedProcess = _CompletedProcess
 
-AGENT_VERSION = "2.25.1"
+AGENT_VERSION = "2.29.0"
 BORG_PATH = None  # Resolved in get_system_info()
 IS_WINDOWS = sys.platform == "win32"
 
@@ -3432,10 +3432,22 @@ def main():
     hb_thread = threading.Thread(target=heartbeat_thread, args=(config,), daemon=True)
     hb_thread.start()
 
+    # Re-report system info hourly so manual borg updates on clients that
+    # can't use auto-update (armv7l etc.) are picked up by the server (#198).
+    last_info_report = time.time()
+    info_report_interval = 3600
+
     while running:
         try:
             # Poll for tasks
             result = api_request(config, "/api/agent/tasks")
+
+            if time.time() - last_info_report >= info_report_interval:
+                try:
+                    api_request(config, "/api/agent/info", method="POST", data=get_system_info())
+                except Exception as e:
+                    logger.debug("Periodic info report failed: {}".format(e))
+                last_info_report = time.time()
 
             # Update poll interval if server sends one
             if result and "poll_interval" in result:
