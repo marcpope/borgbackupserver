@@ -46,7 +46,10 @@ foreach ($blocksByDay as &$dayBlocks) {
 }
 unset($dayBlocks);
 
-$todayIdx = ((int) (new \DateTime('now', new \DateTimeZone($userTz)))->format('N')) - 1;
+$nowInUserTz = new \DateTime('now', new \DateTimeZone($userTz));
+$todayIdx = ((int) $nowInUserTz->format('N')) - 1;
+$currentMinuteOfDay = ((int) $nowInUserTz->format('G')) * 60 + (int) $nowInUserTz->format('i');
+$currentTimeLabel = $is24h ? $nowInUserTz->format('H:i') : $nowInUserTz->format('g:i A');
 
 function bbs_agent_color(int $id): string
 {
@@ -102,6 +105,44 @@ function bbs_histogram_ticks(int $max): array
     width: 1px;
     background: var(--bs-border-color);
     opacity: 0.15;
+}
+.hist-current-time-line {
+    position: absolute;
+    top: 0;
+    bottom: 18px;
+    width: 0;
+    border-left: 2px solid var(--bs-danger);
+    z-index: 3;
+    pointer-events: none;
+}
+.hist-current-time-line::before {
+    content: "";
+    position: absolute;
+    left: -5px;
+    top: -5px;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--bs-danger);
+}
+.hist-current-time-line .current-time-label {
+    position: absolute;
+    top: 2px;
+    left: 8px;
+    padding: 1px 6px;
+    border-radius: 4px;
+    background: var(--bs-danger);
+    color: #fff;
+    font-size: 0.68rem;
+    line-height: 1.25;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+}
+.hist-current-time-line.near-end .current-time-label {
+    left: auto;
+    right: 8px;
 }
 .hist-bar-wrap {
     position: relative;
@@ -250,6 +291,39 @@ function bbs_histogram_ticks(int $max): array
     opacity: 0.35;
 }
 .day-col .hour-line.major { opacity: 0.6; }
+.current-time-line {
+    position: absolute;
+    left: 0;
+    right: 0;
+    height: 0;
+    border-top: 2px solid var(--bs-danger);
+    z-index: 20;
+    pointer-events: none;
+}
+.current-time-line::before {
+    content: "";
+    position: absolute;
+    left: -5px;
+    top: -5px;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--bs-danger);
+}
+.current-time-line .current-time-label {
+    position: absolute;
+    right: 8px;
+    top: -11px;
+    padding: 1px 6px;
+    border-radius: 4px;
+    background: var(--bs-danger);
+    color: #fff;
+    font-size: 0.68rem;
+    line-height: 1.25;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+}
 .day-block {
     position: absolute;
     padding: 1px 8px;
@@ -470,6 +544,14 @@ function bbs_histogram_ticks(int $max): array
                         <div class="vline" style="left: <?= $leftPct ?>%;"></div>
                     <?php endfor; ?>
                 </div>
+                <?php if ($dIdx === $todayIdx): ?>
+                    <?php $nowLeftPct = ($currentMinuteOfDay / 1440) * 100; ?>
+                    <div class="hist-current-time-line <?= $nowLeftPct > 80 ? 'near-end' : '' ?>"
+                         style="left: calc(56px + ((100% - 56px) * <?= $nowLeftPct / 100 ?>));"
+                         title="Current time in <?= htmlspecialchars($userTz) ?>">
+                        <span class="current-time-label">Now time: <?= htmlspecialchars($currentTimeLabel) ?></span>
+                    </div>
+                <?php endif; ?>
 
                 <div class="hist-yaxis">
                     <?php foreach ($yTicks as $tick): ?>
@@ -562,6 +644,13 @@ function bbs_histogram_ticks(int $max): array
 
                     <?php for ($dIdx = 0; $dIdx < 7; $dIdx++): ?>
                     <div class="day-content" data-day-idx="<?= $dIdx ?>" style="<?= $dIdx === $todayIdx ? '' : 'display: none;' ?>">
+                        <?php if ($dIdx === $todayIdx): ?>
+                        <div class="current-time-line"
+                             style="top: <?= $currentMinuteOfDay * ($pxPerHour / 60) ?>px;"
+                             title="Current time in <?= htmlspecialchars($userTz) ?>">
+                            <span class="current-time-label">Now time: <?= htmlspecialchars($currentTimeLabel) ?></span>
+                        </div>
+                        <?php endif; ?>
                         <?php foreach ($blocksByDay[$dIdx] as $b): ?>
                             <?php
                             $top = $b['start_min'] * ($pxPerHour / 60);
