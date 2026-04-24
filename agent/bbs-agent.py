@@ -45,7 +45,7 @@ if not hasattr(subprocess, "run"):
     subprocess.run = _subprocess_run
     subprocess.CompletedProcess = _CompletedProcess
 
-AGENT_VERSION = "2.29.0"
+AGENT_VERSION = "2.29.1"
 BORG_PATH = None  # Resolved in get_system_info()
 IS_WINDOWS = sys.platform == "win32"
 
@@ -3085,11 +3085,19 @@ def _execute_task_inner(config, task, job_id, task_type, command, env_vars,
                     # fires. Forward "current / total" to /api/agent/progress
                     # so the restore UI shows a live bar instead of staying
                     # pinned at "Starting task..." (#168).
-                    now = time.time()
-                    if now - last_progress_time >= 3:
-                        cur = entry.get("current")
-                        tot = entry.get("total")
-                        if cur is not None and tot not in (None, 0):
+                    cur = entry.get("current")
+                    tot = entry.get("total")
+                    if cur is not None and tot not in (None, 0):
+                        # Persist the count locally for non-backup tasks so
+                        # we can distinguish "extracted N files" from
+                        # "extracted 0 files" at completion. borg extract
+                        # exits 0 even when the path filter matched
+                        # nothing, so this is the only signal we have.
+                        if task_type != "backup":
+                            files_processed = int(cur)
+                            files_total = int(tot)
+                        now = time.time()
+                        if now - last_progress_time >= 3:
                             api_request(config, "/api/agent/progress", method="POST", data={
                                 "job_id": job_id,
                                 "files_total": int(tot),
@@ -3194,17 +3202,35 @@ def _execute_task_inner(config, task, job_id, task_type, command, env_vars,
                 pass
 
         if proc.returncode == 0:
-            result = "completed"
-            logger.info(
-                "Job #{} completed: {} files, "
-                "{} bytes original, {} bytes dedup".format(job_id, files_processed, original_size, deduplicated_size)
-            )
+            # borg returned success, but for restore that doesn't guarantee
+            # anything was actually written — if the path filter matched
+            # zero archive entries, borg extract still exits 0. Catch that
+            # so the server doesn't show a green check on a no-op restore.
+            if task_type != "backup" and files_processed == 0:
+                result = "failed"
+                error_output = "Restore extracted 0 files — the requested path may not exist in this archive"
+                logger.error("Job #{} failed: 0 files extracted".format(job_id))
+            else:
+                result = "completed"
+                logger.info(
+                    "Job #{} completed: {} files, "
+                    "{} bytes original, {} bytes dedup".format(job_id, files_processed, original_size, deduplicated_size)
+                )
         elif job_cancelled:
             pass  # Already set result='failed', error_output='Cancelled by user'
         elif proc.returncode == 1:
-            # borg returns 1 for warnings (still successful)
-            result = "completed"
-            logger.warning("Job #{} completed with warnings".format(job_id))
+            # borg returns 1 for warnings. For backup that's fine — usually
+            # a file vanished mid-read and the archive is still useful. For
+            # restore (and any other op) exit 1 means at least one file
+            # failed to extract, which the user needs to know about.
+            if task_type == "backup":
+                result = "completed"
+                logger.warning("Job #{} completed with warnings".format(job_id))
+            else:
+                result = "failed"
+                if not error_output:
+                    error_output = "borg exited with warnings (code 1) — see job log for details"
+                logger.error("Job #{} failed with warnings (borg code 1)".format(job_id))
         else:
             result = "failed"
             logger.error(
