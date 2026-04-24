@@ -45,7 +45,7 @@ if not hasattr(subprocess, "run"):
     subprocess.run = _subprocess_run
     subprocess.CompletedProcess = _CompletedProcess
 
-AGENT_VERSION = "2.29.3"
+AGENT_VERSION = "2.29.4"
 BORG_PATH = None  # Resolved in get_system_info()
 IS_WINDOWS = sys.platform == "win32"
 
@@ -3114,13 +3114,6 @@ def _execute_task_inner(config, task, job_id, task_type, command, env_vars,
                             })
                             last_progress_time = now
 
-                elif msg_type in ("file_status", "file_item") and task_type != "backup":
-                    # borg extract --list emits one file_status per extracted
-                    # item. Count them so the server sees an accurate
-                    # "Files Processed" value on restore.
-                    files_processed += 1
-                    continue
-
                 elif msg_type in ("file_status", "file_item") and task_type == "backup" and catalog_ssh:
                     # Stream file entry to server via SSH pipe
                     fpath = entry.get("path", "")
@@ -3163,6 +3156,15 @@ def _execute_task_inner(config, task, job_id, task_type, command, env_vars,
                     if log_level in ("WARNING", "ERROR", "CRITICAL"):
                         error_output += message + "\n"
                         logger.warning("borg: {}".format(message))
+                    elif (entry.get("name") == "borg.output.list"
+                          and task_type != "backup"):
+                        # borg extract --list writes one INFO log_message
+                        # per extracted item on the "borg.output.list"
+                        # logger (confirmed in borg 1.4). That's the only
+                        # reliable per-file signal during restore — count
+                        # them so the server's Files Processed field is
+                        # accurate.
+                        files_processed += 1
 
             except ValueError:
                 # Non-JSON output, might be regular progress text
