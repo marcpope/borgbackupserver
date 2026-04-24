@@ -63,7 +63,7 @@ stop_spinner() {
 print_header() {
     echo ""
     echo -e "${BOLD}${BLUE}╔══════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${BOLD}${BLUE}║${NC}          ${BOLD}Borg Backup Server — Agent Installer${NC}                ${BOLD}${BLUE}║${NC}"
+    echo -e "${BOLD}${BLUE}║${NC}             ${BOLD}Borg Backup Server — Agent Installer${NC}             ${BOLD}${BLUE}║${NC}"
     echo -e "${BOLD}${BLUE}╚══════════════════════════════════════════════════════════════╝${NC}"
     echo ""
 }
@@ -424,6 +424,12 @@ install_ssh_key() {
 
     if [ -n "$ssh_key" ] && [ "$ssh_key" != "" ]; then
         echo "$ssh_key" > "$CONFIG_DIR/ssh_key"
+        # Check if ssh is Dropbear (common on embedded devices) and convert if needed
+        if ssh -V 2>&1 | grep -q "Dropbear"; then
+            print_info "Converting SSH key to Dropbear format"
+            dropbearconvert openssh dropbear "$CONFIG_DIR/ssh_key" "$CONFIG_DIR/ssh_key.dropbear"
+            mv -f "$CONFIG_DIR/ssh_key.dropbear" "$CONFIG_DIR/ssh_key"
+        fi
         chmod 600 "$CONFIG_DIR/ssh_key"
         print_success "SSH key installed to ${DIM}$CONFIG_DIR/ssh_key${NC}"
         SSH_STATUS="installed"
@@ -717,7 +723,7 @@ print_summary() {
 
     echo ""
     echo -e "${BOLD}${GREEN}╔══════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${BOLD}${GREEN}║${NC}                  ${BOLD}${GREEN}Installation Complete!${NC}                     ${BOLD}${GREEN}║${NC}"
+    echo -e "${BOLD}${GREEN}║${NC}                    ${BOLD}${GREEN}Installation Complete!${NC}                    ${BOLD}${GREEN}║${NC}"
     echo -e "${BOLD}${GREEN}╚══════════════════════════════════════════════════════════════╝${NC}"
     echo ""
 
