@@ -53,14 +53,21 @@ $dfFix = function (string $s): string {
 }
 .v2 .health-row:last-child { margin-bottom: 0; }
 .v2 .health-row .lbl {
-    width: 140px;
+    /* Left-align and content-size. A fixed 140px column was pushing short
+       labels like "CPU" far from the card edge and squeezing the progress
+       bars on narrower cards (#199). Now the column fits the longest label
+       in its own row and truncates with ellipsis past 140px, so bars always
+       get the remaining space. */
+    flex: 0 0 auto;
+    min-width: 50px;
+    max-width: 140px;
     font-size: 0.82rem;
     color: var(--bs-secondary-color);
     font-weight: 400;
-    /* Right-align so short labels ("CPU", "Memory") hug the bar instead of
-       leaving empty space inside the fixed-width column. Longer partition
-       names get room to breathe in the full 140px. */
-    text-align: right;
+    text-align: left;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 .v2 .health-row .progress {
     flex: 1;
@@ -638,7 +645,7 @@ $dfFix = function (string $s): string {
     <?php endif; ?>
 
     <!-- Server identity footer -->
-    <div class="text-center text-muted small mt-4 pb-2">
+    <div class="text-center text-muted mt-4 pb-2" style="font-size: 0.8125rem;">
         <span title="Server version"><i class="bi bi-box-seam me-1"></i>Borg Backup Server <?= htmlspecialchars($bbsVersion) ?></span>
         <span class="mx-2">·</span>
         <span title="Hostname"><i class="bi bi-hdd-network me-1"></i><?= htmlspecialchars($serverHost) ?></span>
@@ -647,9 +654,8 @@ $dfFix = function (string $s): string {
         <span class="mx-2">·</span>
         <span title="Uptime"><i class="bi bi-clock-history me-1"></i><?= $fmtUptime($uptimeSec) ?></span>
         <span class="mx-2">·</span>
-        <a href="https://github.com/sponsors/marcpope" target="_blank" rel="noopener" class="text-decoration-none text-muted" title="Support this project on GitHub Sponsors">
-            <i class="bi bi-heart-fill text-danger me-1"></i>Sponsor
-        </a>
+        <span>Open Source &amp; Made with <i class="bi bi-heart-fill text-danger"></i> by Marc Pope</span>
+        <a href="https://github.com/sponsors/marcpope" target="_blank" rel="noopener" class="text-decoration-none ms-2" title="Support this project on GitHub Sponsors">Sponsor</a>
     </div>
 </div>
 
