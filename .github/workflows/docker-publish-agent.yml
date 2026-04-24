@@ -1,0 +1,87 @@
+name: Build and Push Agent Docker Image
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'agent/bbs-agent.py'
+      - 'docker/agent/**'
+      - '.github/workflows/docker-publish-agent.yml'
+  workflow_dispatch:
+
+env:
+  REGISTRY: docker.io
+  IMAGE_NAME: marcpope/borgbackupserver-agent
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Extract AGENT_VERSION
+        id: version
+        run: |
+          version=$(grep -E '^AGENT_VERSION\s*=' agent/bbs-agent.py | head -1 | sed -E 's/^AGENT_VERSION[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/')
+          if [ -z "$version" ]; then
+            echo "::error::Could not extract AGENT_VERSION from agent/bbs-agent.py"
+            exit 1
+          fi
+          echo "AGENT_VERSION=$version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Compute short SHA
+        id: sha
+        run: echo "short=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      - name: Check if tag already exists on Docker Hub
+        id: check
+        run: |
+          version="${{ steps.version.outputs.version }}"
+          token=$(curl -fsS "https://auth.docker.io/token?service=registry.docker.io&scope=repository:${IMAGE_NAME}:pull" | jq -r .token)
+          status=$(curl -s -o /dev/null -w "%{http_code}" \
+              -H "Authorization: Bearer $token" \
+              -H "Accept: application/vnd.oci.image.index.v1+json" \
+              -H "Accept: application/vnd.docker.distribution.manifest.list.v2+json" \
+              "https://registry-1.docker.io/v2/${IMAGE_NAME}/manifests/$version")
+          if [ "$status" = "200" ]; then
+            echo "Tag $version already exists on Docker Hub — skipping build."
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Tag $version not found (HTTP $status) — building."
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up QEMU
+        if: steps.check.outputs.exists == 'false'
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        if: steps.check.outputs.exists == 'false'
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        if: steps.check.outputs.exists == 'false'
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push Docker image
+        if: steps.check.outputs.exists == 'false'
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: docker/agent/Dockerfile
+          push: true
+          tags: |
+            ${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}
+            ${{ env.IMAGE_NAME }}:latest
+            ${{ env.IMAGE_NAME }}:sha-${{ steps.sha.outputs.short }}
+          platforms: linux/amd64,linux/arm64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
