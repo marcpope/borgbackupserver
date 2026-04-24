@@ -913,7 +913,7 @@ class ClientController extends Controller
         ]);
 
         $this->flash('success', 'Restore job queued. It will run when a slot is available.');
-        $this->redirect("/clients/{$id}?tab=restore");
+        $this->redirect("/queue/{$jobId}");
     }
 
     /**
@@ -1098,7 +1098,7 @@ class ClientController extends Controller
         ]);
 
         $this->flash('success', 'MySQL restore job queued. It will run when a slot is available.');
-        $this->redirect("/clients/{$id}?tab=restore");
+        $this->redirect("/queue/{$jobId}");
     }
 
     /**
@@ -1202,7 +1202,7 @@ class ClientController extends Controller
         ]);
 
         $this->flash('success', 'PostgreSQL restore job queued. It will run when a slot is available.');
-        $this->redirect("/clients/{$id}?tab=restore");
+        $this->redirect("/queue/{$jobId}");
     }
 
     /**
@@ -1305,7 +1305,7 @@ class ClientController extends Controller
         ]);
 
         $this->flash('success', 'MongoDB restore job queued. It will run when a slot is available.');
-        $this->redirect("/clients/{$id}?tab=restore");
+        $this->redirect("/queue/{$jobId}");
     }
 
     /**
