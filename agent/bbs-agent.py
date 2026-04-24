@@ -45,7 +45,7 @@ if not hasattr(subprocess, "run"):
     subprocess.run = _subprocess_run
     subprocess.CompletedProcess = _CompletedProcess
 
-AGENT_VERSION = "2.29.2"
+AGENT_VERSION = "2.29.3"
 BORG_PATH = None  # Resolved in get_system_info()
 IS_WINDOWS = sys.platform == "win32"
 
@@ -2950,8 +2950,12 @@ def _execute_task_inner(config, task, job_id, task_type, command, env_vars,
     files_processed = 0
     original_size = 0
     deduplicated_size = 0
-    bytes_processed = 0  # restore-only: bytes extracted (borg progress_percent
-                         # current/total are byte offsets for extract, not files)
+    # Restore-only counters. borg extract's progress_percent carries byte
+    # offsets (not file counts), and its --list output carries file entries
+    # (one per extracted item) — track both so we can report accurate
+    # Files Total/Processed + Bytes Total/Processed to the server.
+    bytes_processed = 0
+    bytes_total = 0
     error_output = ""
     last_progress_time = time.time()
     catalog_count = 0
@@ -3090,25 +3094,32 @@ def _execute_task_inner(config, task, job_id, task_type, command, env_vars,
                     cur = entry.get("current")
                     tot = entry.get("total")
                     if cur is not None and tot not in (None, 0):
-                        # Persist the count locally for non-backup tasks so
-                        # we can distinguish "extracted something" from
-                        # "extracted nothing" at completion. borg extract
-                        # exits 0 even when the path filter matched
-                        # nothing, so this is the only signal we have.
-                        # Note: for extract these are byte offsets, not
-                        # file counts — track separately.
+                        # For extract these are byte offsets, not file
+                        # counts — track them as bytes. File counts are
+                        # driven separately by file_status events below.
                         if task_type != "backup":
                             bytes_processed = int(cur)
-                            files_total = int(tot)
+                            bytes_total = int(tot)
                         now = time.time()
                         if now - last_progress_time >= 3:
+                            # For backup we never hit this branch (archive_progress
+                            # drives the UI), so the "cur/tot as files" usage
+                            # below is restore-only and is actually bytes —
+                            # sent as bytes_* to the server.
                             api_request(config, "/api/agent/progress", method="POST", data={
                                 "job_id": job_id,
-                                "files_total": int(tot),
-                                "files_processed": int(cur),
-                                "bytes_processed": 0,
+                                "bytes_total": int(tot),
+                                "bytes_processed": int(cur),
+                                "files_processed": files_processed,
                             })
                             last_progress_time = now
+
+                elif msg_type in ("file_status", "file_item") and task_type != "backup":
+                    # borg extract --list emits one file_status per extracted
+                    # item. Count them so the server sees an accurate
+                    # "Files Processed" value on restore.
+                    files_processed += 1
+                    continue
 
                 elif msg_type in ("file_status", "file_item") and task_type == "backup" and catalog_ssh:
                     # Stream file entry to server via SSH pipe
@@ -3210,9 +3221,13 @@ def _execute_task_inner(config, task, job_id, task_type, command, env_vars,
             # anything was actually written — if the path filter matched
             # zero archive entries, borg extract still exits 0. Catch that
             # so the server doesn't show a green check on a no-op restore.
-            if task_type != "backup" and bytes_processed == 0:
+            if task_type != "backup" and files_processed == 0:
+                # borg extract --list emits one file_status per item, so
+                # files_processed stays 0 only when the path filter
+                # matched nothing at all (directories count too, which
+                # is why we use file count rather than bytes).
                 result = "failed"
-                error_output = "Restore extracted 0 bytes — the requested path may not exist in this archive"
+                error_output = "Restore extracted nothing — the requested path may not exist in this archive"
                 logger.error("Job #{} failed: nothing extracted".format(job_id))
             else:
                 result = "completed"
@@ -3222,12 +3237,9 @@ def _execute_task_inner(config, task, job_id, task_type, command, env_vars,
                         "{} bytes original, {} bytes dedup".format(job_id, files_processed, original_size, deduplicated_size)
                     )
                 else:
-                    # borg extract without --list doesn't expose a per-file
-                    # count, so report the byte total we collected from
-                    # progress_percent — accurate, and shows the user that
-                    # data actually moved.
                     logger.info(
-                        "Job #{} completed: {} bytes restored".format(job_id, bytes_processed)
+                        "Job #{} completed: {} files, {} bytes restored".format(
+                            job_id, files_processed, bytes_processed)
                     )
         elif job_cancelled:
             pass  # Already set result='failed', error_output='Cancelled by user'
@@ -3303,16 +3315,28 @@ def _execute_task_inner(config, task, job_id, task_type, command, env_vars,
             error_output = warning
         logger.warning("Job #{}: {}".format(job_id, warning))
 
-    # Build status data
-    status_data = {
-        "job_id": job_id,
-        "files_total": files_total if files_total else files_processed,
-        "files_processed": files_processed,
-        "original_size": original_size,
-        "deduplicated_size": deduplicated_size,
-        "bytes_total": original_size,
-        "bytes_processed": original_size,
-    }
+    # Build status data. For restore (and other non-backup tasks) the
+    # byte counts come from progress_percent and the file counts come
+    # from file_status events; original_size/deduplicated_size aren't
+    # meaningful since borg extract doesn't emit archive stats.
+    if task_type == "backup":
+        status_data = {
+            "job_id": job_id,
+            "files_total": files_total if files_total else files_processed,
+            "files_processed": files_processed,
+            "original_size": original_size,
+            "deduplicated_size": deduplicated_size,
+            "bytes_total": original_size,
+            "bytes_processed": original_size,
+        }
+    else:
+        status_data = {
+            "job_id": job_id,
+            "files_total": files_processed,
+            "files_processed": files_processed,
+            "bytes_total": bytes_total if bytes_total else bytes_processed,
+            "bytes_processed": bytes_processed,
+        }
 
     if archive_name:
         status_data["archive_name"] = archive_name

@@ -137,9 +137,12 @@ class BorgCommandBuilder
         // --progress tells borg to emit progress_percent events; the agent
         // forwards those to /api/agent/progress so the UI shows a live bar
         // during restore instead of staying stuck at "Starting task..." (#168).
+        // --list makes borg emit one file_status event per extracted item
+        // so the agent can report an accurate file count back to the
+        // server (otherwise progress_percent only carries bytes).
         // --lock-wait=600 matches borg create — avoid instant failure when
         // another transient op is holding the repo lock (#194).
-        $cmd = ['borg', 'extract', '--log-json', '--progress', '--lock-wait=600'];
+        $cmd = ['borg', 'extract', '--log-json', '--progress', '--list', '--lock-wait=600'];
 
         if ($stripComponents > 0) {
             $cmd[] = '--strip-components=' . $stripComponents;
