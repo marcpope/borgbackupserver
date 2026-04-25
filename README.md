@@ -90,7 +90,7 @@ All documentation lives on the **[GitHub Wiki](https://github.com/marcpope/borgb
 
 ## Architecture
 
-<img width="100%" alt="Borg Backup Server Architecture" src="https://github.com/user-attachments/assets/5c9c2b9a-d639-43ba-b4e3-1406d8aa284c" />
+<img width="100%" alt="Borg Backup Server Web GUI Architecture" src="https://github.com/user-attachments/assets/5163abe0-c2aa-44f0-b4c9-5feb6f2436fb" />
 
 
 - **HTTPS** for control plane (task polling, progress, status)
