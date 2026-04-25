@@ -436,6 +436,7 @@ install_ssh_key() {
                 fi
             else
                 print_warning "dropbearconvert not found; leaving key in OpenSSH format"
+                print_info "Install dropbearconvert and re-run installer to convert key if using Dropbear SSH"
             fi
         fi
 
