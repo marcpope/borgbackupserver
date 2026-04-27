@@ -45,7 +45,7 @@ if not hasattr(subprocess, "run"):
     subprocess.run = _subprocess_run
     subprocess.CompletedProcess = _CompletedProcess
 
-AGENT_VERSION = "2.29.4"
+AGENT_VERSION = "2.29.5"
 BORG_PATH = None  # Resolved in get_system_info()
 IS_WINDOWS = sys.platform == "win32"
 
@@ -486,12 +486,63 @@ def download_ssh_key(config):
             _lockdown_key_windows(SSH_KEY_PATH)
         else:
             os.chmod(SSH_KEY_PATH, 0o600)
+            _maybe_convert_dropbear_key(SSH_KEY_PATH)
         logger.info("SSH key saved to {}".format(SSH_KEY_PATH))
         _save_ssh_info(result)
         return True
     except Exception as e:
         logger.error("Failed to save SSH key: {}".format(e))
         return False
+
+
+def _maybe_convert_dropbear_key(key_path):
+    """If the local SSH client is Dropbear (common on embedded systems
+    like OpenATV/Enigma2 receivers), convert the OpenSSH-format key the
+    server hands us into Dropbear's binary format. install.sh does this
+    once on first install, but the agent re-downloads on auth failure
+    after a server-side key rotation — without a runtime conversion the
+    rewritten OpenSSH key would be unreadable by dbclient and the agent
+    would loop. Mirrors the install.sh fallback: warn and leave the key
+    in OpenSSH format if dropbearconvert isn't available."""
+    try:
+        ver = subprocess.run(["ssh", "-V"], stdout=subprocess.PIPE,
+                             stderr=subprocess.STDOUT, timeout=5)
+        banner = (ver.stdout or b"").decode("utf-8", errors="replace")
+        if "Dropbear" not in banner:
+            return
+    except Exception:
+        return
+
+    try:
+        which = subprocess.run(["dropbearconvert", "-h"],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
+        if which.returncode not in (0, 1):  # -h often exits 1 but proves the binary exists
+            raise FileNotFoundError
+    except FileNotFoundError:
+        logger.warning("Dropbear SSH detected but dropbearconvert not found; "
+                       "key left in OpenSSH format (may not authenticate)")
+        return
+    except Exception:
+        return
+
+    tmp_path = key_path + ".dropbear"
+    try:
+        conv = subprocess.run(
+            ["dropbearconvert", "openssh", "dropbear", key_path, tmp_path],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=15)
+        if conv.returncode == 0 and os.path.exists(tmp_path):
+            os.replace(tmp_path, key_path)
+            os.chmod(key_path, 0o600)
+            logger.info("Converted SSH key to Dropbear format")
+        else:
+            err = conv.stderr.decode("utf-8", errors="replace").strip()
+            logger.warning("dropbearconvert failed: {}".format(err[:200]))
+            try: os.unlink(tmp_path)
+            except OSError: pass
+    except Exception as e:
+        logger.warning("Dropbear key conversion error: {}".format(e))
+        try: os.unlink(tmp_path)
+        except OSError: pass
 
 
 def _save_ssh_info(result):
