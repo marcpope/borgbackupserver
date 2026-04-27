@@ -1689,6 +1689,8 @@ class RepositoryController extends Controller
 
         if ($storageType === 'remote_ssh') {
             $this->importRemoteSsh($agentId, $name, $encryption, $passphrase, $remoteSshConfigId);
+        } else {
+            $this->importLocal($agentId, $agent, $name, $encryption, $passphrase, $storageLocationId);
         }
     }
 
