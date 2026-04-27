@@ -228,6 +228,7 @@ CREATE TABLE backup_jobs (
     bytes_processed BIGINT DEFAULT NULL,
     duration_seconds INT DEFAULT NULL,
     error_log TEXT DEFAULT NULL,
+    had_warnings TINYINT(1) NOT NULL DEFAULT 0,
     status_message VARCHAR(255) DEFAULT NULL,
     restore_archive_id INT DEFAULT NULL,
     restore_paths JSON DEFAULT NULL,

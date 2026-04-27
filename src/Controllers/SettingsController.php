@@ -110,7 +110,7 @@ class SettingsController extends Controller
         }
 
         // Checkbox toggles: unchecked = not posted, so explicitly save '0'
-        $checkboxKeys = ['maintenance_mode', 'email_on_backup_failed', 'email_on_agent_offline', 'email_on_storage_low', 'email_on_missed_schedule', 'apprise_on_backup_failed', 'apprise_on_agent_offline', 'apprise_on_storage_low', 'apprise_on_missed_schedule', 'force_2fa', 'debug_mode', 'self_backup_enabled', 'self_backup_catalogs', 'telemetry_opt_out', 'inapp_notify_success_events'];
+        $checkboxKeys = ['maintenance_mode', 'email_on_backup_failed', 'email_on_backup_warning', 'email_on_agent_offline', 'email_on_storage_low', 'email_on_missed_schedule', 'apprise_on_backup_failed', 'apprise_on_backup_warning', 'apprise_on_agent_offline', 'apprise_on_storage_low', 'apprise_on_missed_schedule', 'force_2fa', 'debug_mode', 'self_backup_enabled', 'self_backup_catalogs', 'telemetry_opt_out', 'inapp_notify_success_events'];
         foreach ($checkboxKeys as $key) {
             $value = isset($_POST[$key]) ? '1' : '0';
             $existing = $this->db->fetchOne("SELECT `key` FROM settings WHERE `key` = ?", [$key]);

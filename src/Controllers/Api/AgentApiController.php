@@ -393,6 +393,7 @@ class AgentApiController extends Controller
         if (isset($input['bytes_total']))     $data['bytes_total'] = (int) $input['bytes_total'];
         if (isset($input['bytes_processed'])) $data['bytes_processed'] = (int) $input['bytes_processed'];
         if (!empty($input['error_log']))      $data['error_log'] = $input['error_log'];
+        if (!empty($input['had_warnings']))   $data['had_warnings'] = 1;
 
         $this->db->update('backup_jobs', $data, 'id = ?', [$jobId]);
 
@@ -507,8 +508,27 @@ class AgentApiController extends Controller
                         "Backup failed for plan \"{$planName}\" on client \"{$agent['name']}\" — " . ($input['error_log'] ?? 'unknown error'),
                         'critical'
                     );
+                } elseif ($result === 'completed' && !empty($input['had_warnings'])) {
+                    // borg returned a warning — most commonly a configured
+                    // source path that didn't exist (#203). Resolve any
+                    // prior backup_failed and fire a warning-level event so
+                    // the user actually sees this instead of a silent green.
+                    if ($job['backup_plan_id']) {
+                        $notificationService->resolve('backup_failed', $agent['id'], (int)$job['backup_plan_id']);
+                    }
+                    $warningTail = !empty($input['error_log'])
+                        ? ' — ' . trim(substr($input['error_log'], 0, 300))
+                        : '';
+                    $notificationService->notify(
+                        'backup_warning',
+                        $agent['id'],
+                        $job['backup_plan_id'] ? (int)$job['backup_plan_id'] : null,
+                        "Backup completed with warnings for plan \"{$planName}\" on client \"{$agent['name']}\"{$warningTail}",
+                        'warning'
+                    );
                 } elseif ($result === 'completed' && $job['backup_plan_id']) {
                     $notificationService->resolve('backup_failed', $agent['id'], (int)$job['backup_plan_id']);
+                    $notificationService->resolve('backup_warning', $agent['id'], (int)$job['backup_plan_id']);
                     $notificationService->notify(
                         'backup_completed',
                         $agent['id'],

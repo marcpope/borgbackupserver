@@ -524,8 +524,13 @@ $dfFix = function (string $s): string {
                     ?>
                     <?php foreach ($recentJobs as $j): ?>
                         <?php
-                            $statusIcon = $j['status'] === 'completed' ? 'bi-check-circle-fill text-success'
-                                : ($j['status'] === 'failed' ? 'bi-x-circle-fill text-danger' : 'bi-slash-circle-fill text-secondary');
+                            $hadWarn = ($j['status'] === 'completed' && !empty($j['had_warnings']));
+                            $statusIcon = $hadWarn ? 'bi-exclamation-triangle-fill text-warning'
+                                : ($j['status'] === 'completed' ? 'bi-check-circle-fill text-success'
+                                : ($j['status'] === 'failed' ? 'bi-x-circle-fill text-danger' : 'bi-slash-circle-fill text-secondary'));
+                            $statusTitle = $hadWarn
+                                ? 'Completed with warnings: ' . substr($j['error_log'] ?? '', 0, 200)
+                                : '';
                             $taskIcon = $taskIcons[$j['task_type']] ?? 'bi-gear text-muted';
                         ?>
                         <tr style="cursor:pointer" onclick="window.location='/queue/<?= (int) $j['id'] ?>'">
@@ -535,7 +540,7 @@ $dfFix = function (string $s): string {
                             <td class="d-table-cell-md"><?= htmlspecialchars($j['repo_name'] ?? '--') ?></td>
                             <td><?= TimeHelper::ago($j['completed_at']) ?></td>
                             <td class="d-table-cell-md"><?= $fmtDuration((int) ($j['duration_seconds'] ?? 0)) ?></td>
-                            <td class="text-center"><i class="bi <?= $statusIcon ?>"></i></td>
+                            <td class="text-center"><i class="bi <?= $statusIcon ?>"<?= $statusTitle ? ' data-bs-toggle="tooltip" title="' . htmlspecialchars($statusTitle) . '"' : '' ?>></i></td>
                         </tr>
                     <?php endforeach; ?>
                     </tbody>

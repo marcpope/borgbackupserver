@@ -392,6 +392,7 @@ $updateAvailable = $updateService->isUpdateAvailable();
 $eventGroups = [
     'Backups' => [
         'backup_completed' => 'Backup Completed',
+        'backup_warning' => 'Backup Completed with Warnings',
         'backup_failed' => 'Backup Failed',
     ],
     'Restores' => [
@@ -434,6 +435,7 @@ $eventColors = [
     'repo_check_failed' => 'danger',
     's3_sync_failed' => 'danger',
     // Warning events - orange/warning
+    'backup_warning' => 'warning',
     'agent_offline' => 'warning',
     'storage_low' => 'warning',
     'missed_schedule' => 'warning',

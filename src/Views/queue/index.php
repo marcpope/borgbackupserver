@@ -200,7 +200,9 @@
                             ?>
                         </td>
                         <td class="text-center">
-                            <?php if ($job['status'] === 'completed'): ?>
+                            <?php if ($job['status'] === 'completed' && !empty($job['had_warnings'])): ?>
+                                <i class="bi bi-exclamation-triangle-fill text-warning" data-bs-toggle="tooltip" title="<?= htmlspecialchars('Completed with warnings: ' . substr($job['error_log'] ?? '', 0, 200)) ?>"></i>
+                            <?php elseif ($job['status'] === 'completed'): ?>
                                 <i class="bi bi-check-circle-fill text-success"></i>
                             <?php else: ?>
                                 <i class="bi bi-x-circle-fill text-danger"></i>
@@ -313,7 +315,9 @@ document.querySelectorAll('[data-bs-toggle="tooltip"]').forEach(el => new bootst
 
     function buildCompletedRow(job) {
         let statusHtml;
-        if (job.status === 'completed') {
+        if (job.status === 'completed' && job.had_warnings) {
+            statusHtml = '<i class="bi bi-exclamation-triangle-fill text-warning" data-bs-toggle="tooltip" title="' + esc('Completed with warnings: ' + String(job.error_log || '').substring(0, 200)) + '"></i>';
+        } else if (job.status === 'completed') {
             statusHtml = '<i class="bi bi-check-circle-fill text-success"></i>';
         } else {
             statusHtml = '<i class="bi bi-x-circle-fill text-danger"></i>';

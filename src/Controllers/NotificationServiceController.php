@@ -10,6 +10,7 @@ class NotificationServiceController extends Controller
     private array $eventTypes = [
         // Backups
         'backup_completed' => 'Backup Completed',
+        'backup_warning' => 'Backup Completed with Warnings',
         'backup_failed' => 'Backup Failed',
         // Restores
         'restore_completed' => 'Restore Completed',

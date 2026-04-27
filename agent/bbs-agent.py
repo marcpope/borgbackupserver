@@ -45,7 +45,7 @@ if not hasattr(subprocess, "run"):
     subprocess.run = _subprocess_run
     subprocess.CompletedProcess = _CompletedProcess
 
-AGENT_VERSION = "2.29.5"
+AGENT_VERSION = "2.29.6"
 BORG_PATH = None  # Resolved in get_system_info()
 IS_WINDOWS = sys.platform == "win32"
 
@@ -3008,6 +3008,7 @@ def _execute_task_inner(config, task, job_id, task_type, command, env_vars,
     bytes_processed = 0
     bytes_total = 0
     error_output = ""
+    had_warnings = False
     last_progress_time = time.time()
     catalog_count = 0
     catalog_ssh = None  # SSH subprocess for streaming catalog to server
@@ -3297,12 +3298,19 @@ def _execute_task_inner(config, task, job_id, task_type, command, env_vars,
         elif job_cancelled:
             pass  # Already set result='failed', error_output='Cancelled by user'
         elif proc.returncode == 1:
-            # borg returns 1 for warnings. For backup that's fine — usually
-            # a file vanished mid-read and the archive is still useful. For
-            # restore (and any other op) exit 1 means at least one file
-            # failed to extract, which the user needs to know about.
+            # borg returns 1 for warnings. For backup the archive is
+            # usually still useful (a file vanished mid-read, or — more
+            # importantly — a configured source path didn't exist and was
+            # silently skipped, #203). Mark the job completed-with-warnings
+            # so the server can decorate the UI and fire a backup_warning
+            # notification instead of pretending it was a clean success.
+            # For restore (and any other op) exit 1 means at least one
+            # file failed to extract — fail the job outright.
             if task_type == "backup":
                 result = "completed"
+                had_warnings = True
+                if not error_output:
+                    error_output = "borg exited with warnings (code 1) — see job log for details"
                 logger.warning("Job #{} completed with warnings".format(job_id))
             else:
                 result = "failed"
@@ -3395,6 +3403,8 @@ def _execute_task_inner(config, task, job_id, task_type, command, env_vars,
         status_data["archive_name"] = archive_name
     if error_output:
         status_data["error_log"] = error_output[:10000]  # Limit size
+    if had_warnings:
+        status_data["had_warnings"] = True
 
     # Report backed-up databases from mysql_dump plugin
     if result == "completed" and task_type == "backup" and plugin_results.get("mysql_dump"):

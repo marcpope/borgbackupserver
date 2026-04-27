@@ -1,11 +1,14 @@
 <?php
 $statusClass = match($job['status']) {
-    'completed' => 'success',
+    'completed' => !empty($job['had_warnings']) ? 'warning' : 'success',
     'failed', 'cancelled' => 'danger',
     'running' => 'primary',
     'sent' => 'primary',
     default => 'warning',
 };
+$statusLabel = ($job['status'] === 'completed' && !empty($job['had_warnings']))
+    ? 'Completed with warnings'
+    : ucfirst($job['status']);
 
 $d = $job['duration_seconds'] ?? 0;
 $durLabel = $d >= 3600 ? floor($d / 3600) . 'h ' . floor(($d % 3600) / 60) . 'm'
@@ -68,7 +71,7 @@ $taskLabel = ucfirst(str_replace('_', ' ', $job['task_type']));
     <a href="/queue" class="btn btn-sm btn-outline-secondary me-3"><i class="bi bi-arrow-left"></i> Queue</a>
     <h4 class="mb-0">
         Job #<?= $job['id'] ?>
-        <span class="badge text-bg-<?= $statusClass ?> fs-6 ms-2"><?= ucfirst($job['status']) ?></span>
+        <span class="badge text-bg-<?= $statusClass ?> fs-6 ms-2"><?= htmlspecialchars($statusLabel) ?></span>
     </h4>
 </div>
 
@@ -198,6 +201,18 @@ $taskLabel = ucfirst(str_replace('_', ' ', $job['task_type']));
             </div>
         </div>
         <div class="text-muted small">Duration: <?= $durLabel ?> &middot; See activity log below for details</div>
+    </div>
+</div>
+<?php elseif ($job['status'] === 'completed' && !empty($job['had_warnings'])): ?>
+<div class="card border-0 shadow-sm mb-4 bg-warning-subtle">
+    <div class="card-body py-3">
+        <div class="fw-semibold text-warning-emphasis mb-1"><i class="bi bi-exclamation-triangle me-1"></i> Completed with warnings</div>
+        <div class="progress mb-1" style="height: 22px;">
+            <div class="progress-bar bg-warning" role="progressbar" style="width: 100%;">
+                <?= number_format($job['files_total'] ?? 0) ?> files processed
+            </div>
+        </div>
+        <div class="text-warning-emphasis small mt-1"><i class="bi bi-info-circle me-1"></i>borg created the archive but reported one or more warnings — see Warning Log below</div>
     </div>
 </div>
 <?php elseif ($job['status'] === 'completed' && ($job['files_total'] ?? 0) > 0): ?>
@@ -402,6 +417,19 @@ $taskLabel = ucfirst(str_replace('_', ' ', $job['task_type']));
         <pre class="mb-0 small text-danger" style="white-space: pre-wrap; word-break: break-all; overflow-wrap: anywhere;"><?= htmlspecialchars($job['error_log']) ?></pre>
     </div>
 </div>
+<?php elseif ($job['status'] === 'completed' && !empty($job['had_warnings'])): ?>
+<!-- Warning Log (completed with warnings — e.g. a configured source path didn't exist, #203) -->
+<div id="warning-section" class="card border-0 shadow-sm mb-4 border-warning">
+    <div class="card-header bg-body fw-semibold text-warning">
+        <i class="bi bi-exclamation-triangle me-1"></i> Backup Completed with Warnings
+    </div>
+    <div class="card-body">
+        <p class="small text-muted mb-2">borg created the archive but reported one or more warnings — check that every source path actually exists on the client.</p>
+        <?php if (!empty($job['error_log'])): ?>
+        <pre class="mb-0 small text-warning-emphasis" style="white-space: pre-wrap; word-break: break-all; overflow-wrap: anywhere;"><?= htmlspecialchars($job['error_log']) ?></pre>
+        <?php endif; ?>
+    </div>
+</div>
 <?php endif; ?>
 
 <!-- Server Log -->
@@ -559,9 +587,14 @@ $taskLabel = ucfirst(str_replace('_', ' ', $job['task_type']));
         // Update status badge in header
         const badge = document.querySelector('h4 .badge');
         if (badge) {
-            const cls = {completed:'success',failed:'danger',cancelled:'danger',running:'primary',sent:'primary',queued:'warning'}[job.status] || 'secondary';
+            let cls = {completed:'success',failed:'danger',cancelled:'danger',running:'primary',sent:'primary',queued:'warning'}[job.status] || 'secondary';
+            let label = job.status[0].toUpperCase() + job.status.slice(1);
+            if (job.status === 'completed' && job.had_warnings) {
+                cls = 'warning';
+                label = 'Completed with warnings';
+            }
             badge.className = 'badge text-bg-' + cls + ' fs-6 ms-2';
-            badge.textContent = job.status[0].toUpperCase() + job.status.slice(1);
+            badge.textContent = label;
         }
     }
 
@@ -633,16 +666,28 @@ $taskLabel = ucfirst(str_replace('_', ' ', $job['task_type']));
                     previousStatus = job.status;
                 }
 
-                // Update error log section
+                // Update error / warning log section
                 if (job.status === 'failed' && job.error_log) {
-                    let errSection = document.getElementById('error-section');
+                    let errSection = document.getElementById('error-section') || document.getElementById('warning-section');
                     if (!errSection) {
                         errSection = document.createElement('div');
-                        errSection.id = 'error-section';
                         const logEl = document.getElementById('log-section');
                         if (logEl) logEl.parentNode.insertBefore(errSection, logEl);
                     }
+                    errSection.id = 'error-section';
                     errSection.innerHTML = '<div class="card border-0 shadow-sm mb-4 border-danger"><div class="card-header bg-body fw-semibold text-danger"><i class="bi bi-exclamation-triangle me-1"></i> Error Log</div><div class="card-body"><pre class="mb-0 small text-danger" style="white-space:pre-wrap;word-break:break-all;overflow-wrap:anywhere;">' + esc(job.error_log) + '</pre></div></div>';
+                } else if (job.status === 'completed' && job.had_warnings) {
+                    let warnSection = document.getElementById('warning-section') || document.getElementById('error-section');
+                    if (!warnSection) {
+                        warnSection = document.createElement('div');
+                        const logEl = document.getElementById('log-section');
+                        if (logEl) logEl.parentNode.insertBefore(warnSection, logEl);
+                    }
+                    warnSection.id = 'warning-section';
+                    const body = job.error_log
+                        ? '<pre class="mb-0 small text-warning-emphasis" style="white-space:pre-wrap;word-break:break-all;overflow-wrap:anywhere;">' + esc(job.error_log) + '</pre>'
+                        : '';
+                    warnSection.innerHTML = '<div class="card border-0 shadow-sm mb-4 border-warning"><div class="card-header bg-body fw-semibold text-warning"><i class="bi bi-exclamation-triangle me-1"></i> Backup Completed with Warnings</div><div class="card-body"><p class="small text-muted mb-2">borg created the archive but reported one or more warnings — check that every source path actually exists on the client.</p>' + body + '</div></div>';
                 }
 
                 // Decide whether to keep polling
