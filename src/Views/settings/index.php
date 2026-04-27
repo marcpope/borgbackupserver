@@ -467,7 +467,7 @@ unset($ns);
                     <div class="row">
                         <div class="col-md-6">
                             <strong>Discord:</strong> discord://webhook_id/webhook_token<br>
-                            <strong>Telegram:</strong> tgram://bot_token/chat_id<br>
+                            <strong>Telegram:</strong> tgram://bot_token/chat_id[:thread]<br>
                             <strong>Slack:</strong> slack://tokenA/tokenB/tokenC<br>
                             <strong>Pushover:</strong> pover://user@token
                         </div>
@@ -977,11 +977,15 @@ const serviceSchemas = {
         label: 'Telegram',
         fields: [
             { name: 'bot_token', label: 'Bot Token', type: 'text', required: true, placeholder: '123456789:ABCdefGHI...', width: 'col-md-6' },
-            { name: 'chat_id', label: 'Chat ID', type: 'text', required: true, placeholder: '-1001234567890', width: 'col-md-6' }
+            { name: 'chat_id', label: 'Chat ID', type: 'text', required: true, placeholder: '-1001234567890', width: 'col-md-4' },
+            { name: 'thread', label: 'Thread (optional)', type: 'text', placeholder: '1234567', width: 'col-md-2' }
         ],
-        help: 'Create a bot via @BotFather, then get chat ID by messaging @userinfobot or from group info',
+        help: 'Create a bot via @BotFather, then get chat ID by messaging @userinfobot or from group info. Use Thread for a Telegram topic ID.',
         build: function(f) {
-            return `tgram://${f.bot_token || ''}/${f.chat_id || ''}`;
+            const chatId = f.chat_id || '';
+            const thread = (f.thread || '').trim();
+            const target = thread ? `${chatId}:${encodeURIComponent(thread)}` : chatId;
+            return `tgram://${f.bot_token || ''}/${target}`;
         }
     },
     pover: {
