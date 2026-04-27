@@ -39,6 +39,20 @@ $taskLabel = ucfirst(str_replace('_', ' ', $job['task_type']));
         display: inline-block;
         max-width: 100%;
     }
+    /* Whole progress card: status_message can carry a full file path from
+       borg. Without overflow protection a long path stretches the card
+       past the viewport and the page scrolls horizontally (#209,
+       regression of #108). overflow-wrap:anywhere only breaks when needed,
+       so normal sentences stay unbroken. Excluding .text-truncate so the
+       single-line ellipsis on currentFile still works. */
+    #progress-section .card-body {
+        min-width: 0;
+    }
+    #progress-section .card-body :not(.text-truncate):not(.progress):not(.progress-bar) {
+        overflow-wrap: anywhere;
+        word-break: break-word;
+        min-width: 0;
+    }
     #log-section .list-group-item .small {
         word-break: break-all;
         overflow-wrap: anywhere;
