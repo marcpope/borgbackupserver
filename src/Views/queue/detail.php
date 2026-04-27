@@ -2,7 +2,7 @@
 $statusClass = match($job['status']) {
     'completed' => 'success',
     'failed', 'cancelled' => 'danger',
-    'running' => 'info',
+    'running' => 'primary',
     'sent' => 'primary',
     default => 'warning',
 };
@@ -68,7 +68,7 @@ $taskLabel = ucfirst(str_replace('_', ' ', $job['task_type']));
     <a href="/queue" class="btn btn-sm btn-outline-secondary me-3"><i class="bi bi-arrow-left"></i> Queue</a>
     <h4 class="mb-0">
         Job #<?= $job['id'] ?>
-        <span class="badge bg-<?= $statusClass ?> fs-6 ms-2"><?= ucfirst($job['status']) ?></span>
+        <span class="badge text-bg-<?= $statusClass ?> fs-6 ms-2"><?= ucfirst($job['status']) ?></span>
     </h4>
 </div>
 
@@ -251,7 +251,7 @@ $taskLabel = ucfirst(str_replace('_', ' ', $job['task_type']));
                                     default => 'warning',
                                 };
                                 ?>
-                                <span class="badge bg-<?= $agentBadge ?> ms-1"><?= ucfirst($job['agent_status']) ?></span>
+                                <span class="badge text-bg-<?= $agentBadge ?> ms-1"><?= ucfirst($job['agent_status']) ?></span>
                             </td>
                         </tr>
                         <tr>
@@ -559,8 +559,8 @@ $taskLabel = ucfirst(str_replace('_', ' ', $job['task_type']));
         // Update status badge in header
         const badge = document.querySelector('h4 .badge');
         if (badge) {
-            const cls = {completed:'success',failed:'danger',cancelled:'danger',running:'info',sent:'primary',queued:'warning'}[job.status] || 'secondary';
-            badge.className = 'badge bg-' + cls + ' fs-6 ms-2';
+            const cls = {completed:'success',failed:'danger',cancelled:'danger',running:'primary',sent:'primary',queued:'warning'}[job.status] || 'secondary';
+            badge.className = 'badge text-bg-' + cls + ' fs-6 ms-2';
             badge.textContent = job.status[0].toUpperCase() + job.status.slice(1);
         }
     }

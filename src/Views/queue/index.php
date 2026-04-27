@@ -137,12 +137,12 @@
                         <td>
                             <?php
                             $sc = match($job['status']) {
-                                'running' => 'info',
+                                'running' => 'primary',
                                 'sent' => 'primary',
                                 default => 'warning',
                             };
                             ?>
-                            <span class="badge bg-<?= $sc ?>"><?= $job['status'] ?></span>
+                            <span class="badge text-bg-<?= $sc ?>"><?= $job['status'] ?></span>
                         </td>
                         <td class="text-end" onclick="event.stopPropagation()">
                             <a href="/queue/<?= $job['id'] ?>" class="btn btn-sm btn-outline-secondary" title="View Details"><i class="bi bi-eye"></i></a>
@@ -255,8 +255,8 @@ document.querySelectorAll('[data-bs-toggle="tooltip"]').forEach(el => new bootst
     }
 
     function statusBadge(status) {
-        const colors = { running: 'info', sent: 'primary', queued: 'warning', completed: 'success', failed: 'danger' };
-        return '<span class="badge bg-' + (colors[status] || 'secondary') + '">' + status + '</span>';
+        const colors = { running: 'primary', sent: 'primary', queued: 'warning', completed: 'success', failed: 'danger' };
+        return '<span class="badge text-bg-' + (colors[status] || 'secondary') + '">' + status + '</span>';
     }
 
     function jobTypeIcon(type) {

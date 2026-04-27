@@ -388,7 +388,7 @@ $dfFix = function (string $s): string {
                             <?php foreach ($activeJobs as $j): ?>
                                 <?php
                                     $pct = ($j['files_total'] ?? 0) > 0 ? round(($j['files_processed'] / $j['files_total']) * 100) : null;
-                                    $badgeClass = $j['status'] === 'queued' ? 'bg-warning text-dark' : 'bg-primary';
+                                    $badgeClass = $j['status'] === 'queued' ? 'text-bg-warning' : 'text-bg-primary';
                                 ?>
                                 <tr style="cursor:pointer" onclick="window.location='/queue/<?= (int) $j['id'] ?>'">
                                     <td><?= htmlspecialchars($j['agent_name']) ?></td>
