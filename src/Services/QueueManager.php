@@ -293,7 +293,16 @@ class QueueManager
                 ]);
 
                 $promoted[] = $job;
-                $promotedCount++;
+
+                // Management tasks (update_borg, update_agent) bypass the
+                // slot count on the way in — they must also bypass it on
+                // the way out. Otherwise a batch of queued agent updates
+                // (especially for offline agents that can never pick them
+                // up) eats every slot in this iteration and a backup later
+                // in FIFO order hits the `break` below. #206
+                if (!$isManagement) {
+                    $promotedCount++;
+                }
 
                 // Mark this repo and plan as busy for remaining iterations
                 if ($job['repository_id']) {
