@@ -17,10 +17,29 @@
             margin: 0;
             min-height: 100vh;
             display: flex;
-            /* Single dark navy gradient base — both panes share it so the
-               split feels cohesive rather than light-pane-vs-dark-pane. */
-            background: linear-gradient(180deg, #07101f 0%, #050a14 100%);
+            align-items: center;
+            justify-content: center;
+            padding: 32px;
+            /* Outer page is a near-black field so the framed card pops. */
+            background:
+                radial-gradient(ellipse 60% 50% at 50% 50%, rgba(35, 75, 165, 0.08), transparent 70%),
+                #03070d;
             color: #e8edf5;
+        }
+        /* Centered card frame — the whole login experience lives inside this
+           rounded panel, with a thin highlight ring and a soft drop shadow
+           so it floats above the page. */
+        .auth-frame {
+            display: flex;
+            width: 100%;
+            max-width: 1280px;
+            min-height: 720px;
+            border-radius: 22px;
+            overflow: hidden;
+            background: linear-gradient(180deg, #07101f 0%, #050a14 100%);
+            box-shadow:
+                0 30px 80px rgba(0, 0, 0, 0.55),
+                0 0 0 1px rgba(255, 255, 255, 0.05);
         }
         .auth-art {
             flex: 1 1 50%;
@@ -134,14 +153,29 @@
         }
         .auth-footer a { color: rgba(255, 255, 255, 0.6); }
 
+        /* On small screens drop the framing — full-bleed form, no art pane,
+           no card chrome. Trying to keep an inset frame on a phone wastes
+           too much real estate. */
         @media (max-width: 991.98px) {
-            body.auth-split { flex-direction: column; }
+            body.auth-split {
+                padding: 0;
+                align-items: stretch;
+                background: linear-gradient(180deg, #07101f 0%, #050a14 100%);
+            }
+            .auth-frame {
+                flex-direction: column;
+                max-width: none;
+                min-height: 100vh;
+                border-radius: 0;
+                box-shadow: none;
+            }
             .auth-art { display: none; }
-            .auth-form-pane { padding: 48px 24px 24px; min-height: 100vh; }
+            .auth-form-pane { padding: 48px 24px 24px; }
         }
     </style>
 </head>
 <body class="auth-split">
+    <div class="auth-frame">
     <div class="auth-art">
         <?php if (!empty($loginLogo)): ?>
             <img src="data:image/png;base64,<?= $loginLogo ?>" alt="Logo" class="auth-art-logo">
@@ -187,6 +221,7 @@
             <?php endif; ?>
         </div>
     </div>
+    </div><!-- /.auth-frame -->
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>
