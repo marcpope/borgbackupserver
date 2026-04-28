@@ -286,27 +286,20 @@ html, body {
     overflow: visible;
 }
 
-/* Oversized mascot logo. Anchored to the top-left of the 90px logo
-   column, scaled to 100px tall so it hangs ~36px below the 64px
-   topbar — the robot's hands at the bottom of the artwork end up
-   visually grabbing the edge between the topbar and the page below.
-   The 3:2 aspect makes it ~150px wide, intentionally overflowing
-   into the page-title area on the right. pointer-events: none lets
-   clicks fall through to the navbar-brand link underneath. */
+/* Mascot logo. Width-anchored at ~97px so it sits close to the 90px
+   sidebar column with just a few pixels of overflow on the right.
+   At the artwork's 3:2 aspect this gives ~65px tall — barely past
+   the 64px topbar, so the robot's hands appear to brush the edge
+   between the topbar and the page content without dominating.
+   pointer-events: none keeps the navbar-brand link clickable. */
 .topbar-mascot {
     position: absolute;
     top: 0;
     left: 0;
-    height: 100px;
-    width: auto;
+    width: 97px;
+    height: auto;
     z-index: 1031;
     pointer-events: none;
-}
-
-/* Push the page-title text right of where the mascot extends to
-   prevent overlap. ~150px logo width + ~16px breathing room. */
-.topbar .navbar-text {
-    margin-left: 80px !important;
 }
 
 /* Mobile bottom navigation */
