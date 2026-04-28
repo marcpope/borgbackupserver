@@ -202,7 +202,7 @@ html, body {
 
 /* Sidebar */
 .sidebar {
-    width: 90px;
+    width: 98px;
     height: calc(100vh - 64px);
     background-color: var(--bbs-nav-bg);
     position: fixed;
@@ -282,7 +282,7 @@ html, body {
 }
 
 .topbar-logo {
-    width: 90px;
+    width: 98px;
     overflow: visible;
 }
 
@@ -296,7 +296,7 @@ html, body {
     position: absolute;
     top: 0;
     left: 0;
-    width: 107px;
+    width: 115px;
     height: auto;
     z-index: 1031;
     pointer-events: none;
@@ -373,7 +373,7 @@ html, body {
 /* Offset main content for fixed sidebar on desktop */
 @media (min-width: 768px) {
     .main-content {
-        margin-left: 90px;
+        margin-left: 98px;
     }
 }
 
@@ -384,28 +384,14 @@ html, body {
         min-width: 0;
         overflow-x: hidden;
     }
+    /* Hide the logo entirely on mobile — bottom-nav handles navigation
+       and the page-title gets the full topbar width. */
+    .topbar .navbar-brand,
     .topbar-logo {
-        width: 64px;
-        padding: 0 8px !important;
-    }
-    .topbar .navbar-brand {
-        width: 64px;
-        padding: 0 !important;
-    }
-    .topbar .navbar-brand img {
-        height: 28px !important;
-    }
-    /* On mobile the topbar is too cramped for the oversized mascot
-       overflow trick — fall back to a normal inline icon. */
-    .topbar-mascot {
-        position: static !important;
-        height: 36px !important;
-        width: auto !important;
-        z-index: auto !important;
-        pointer-events: auto !important;
+        display: none !important;
     }
     .topbar .navbar-text {
-        margin-left: 0.5rem !important;
+        margin-left: 0.75rem !important;
     }
 }
 
