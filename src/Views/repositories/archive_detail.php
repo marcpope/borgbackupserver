@@ -136,12 +136,46 @@ if ($savings >= 100 && $archive['deduplicated_size'] > 0) {
                     <div class="sub"><?= $savings ?>% dedup savings</div>
                 </div>
             </div>
+            <?php
+            // Two file counts coexist for an archive (#192):
+            //
+            //   - $grandTotalCount comes from our ClickHouse catalog —
+            //     one row per path emitted by `borg create --list`. This
+            //     is what's actually navigable in the restore browser.
+            //   - $archive['file_count'] is borg's own `nfiles` from the
+            //     archive stats. It counts each hardlink target separately,
+            //     so on systems with heavy hardlinks (package caches,
+            //     Docker layers, NixOS) it can run 2-3x higher than the
+            //     real path count and swing wildly between backups.
+            //
+            // Show the catalog-derived count as the headline since it's
+            // the meaningful one, and surface borg's number underneath
+            // when it differs noticeably so the user has the full picture.
+            $borgFileCount = (int) ($archive['file_count'] ?? 0);
+            $catalogCount = (int) $grandTotalCount;
+            $primaryCount = $catalogCount > 0 ? $catalogCount : $borgFileCount;
+            $showBorgSub = $catalogCount > 0
+                && $borgFileCount > 0
+                && abs($borgFileCount - $catalogCount) > max(10, $catalogCount * 0.01);
+            $tileTitle = $catalogCount > 0
+                ? "Counted from one event per path emitted by borg's --list output during backup. "
+                  . "Borg's archive stats also report 'nfiles' = " . number_format($borgFileCount)
+                  . ($showBorgSub
+                      ? "; the difference is normal on systems with many hardlinks — borg's nfiles counts each hardlink target separately, while the catalog records one entry per path."
+                      : '.')
+                : "File count as recorded by borg when the archive was created.";
+            ?>
             <div class="col-6 col-md-3">
-                <div class="metric-tile info h-100"
-                     title="File count as recorded by borg when the archive was created. This is the authoritative number. The pre-scan count shown during backup is a quick filesystem estimate and may differ.">
+                <div class="metric-tile info h-100" title="<?= htmlspecialchars($tileTitle) ?>">
                     <div class="label"><i class="bi bi-files me-1"></i>Files in Archive</div>
-                    <div class="value"><?= number_format((int) $archive['file_count']) ?></div>
-                    <div class="sub">from borg manifest</div>
+                    <div class="value"><?= number_format($primaryCount) ?></div>
+                    <div class="sub">
+                        <?php if ($catalogCount > 0): ?>
+                            from catalog<?php if ($showBorgSub): ?> · borg: <?= number_format($borgFileCount) ?><?php endif; ?>
+                        <?php else: ?>
+                            from borg manifest
+                        <?php endif; ?>
+                    </div>
                 </div>
             </div>
             <div class="col-6 col-md-3">
