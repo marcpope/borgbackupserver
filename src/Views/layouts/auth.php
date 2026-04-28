@@ -30,16 +30,24 @@
            rounded panel, with a thin highlight ring and a soft drop shadow
            so it floats above the page. */
         .auth-frame {
+            position: relative;
             display: flex;
             width: 100%;
-            max-width: 1100px;
+            max-width: 1000px;
             min-height: 580px;
             border-radius: 18px;
             overflow: hidden;
             background: linear-gradient(180deg, #07101f 0%, #050a14 100%);
+            z-index: 1;
+            /* Layered halo: tight inner cyan ring, soft outer atmospheric
+               glow, plus the original drop shadow and 1px highlight ring.
+               Keeps the card feeling "lit from within" without becoming
+               cheesy. */
             box-shadow:
-                0 24px 60px rgba(0, 0, 0, 0.5),
-                0 0 0 1px rgba(255, 255, 255, 0.05);
+                0 0 0 1px rgba(255, 255, 255, 0.05),
+                0 0 30px rgba(78, 167, 255, 0.18),
+                0 0 80px rgba(78, 167, 255, 0.12),
+                0 24px 60px rgba(0, 0, 0, 0.55);
         }
         .auth-art {
             flex: 1 1 50%;
@@ -68,7 +76,6 @@
         .auth-art-logo {
             display: block;
             width: 100%;
-            max-width: 380px;
             height: auto;
             position: relative;
             z-index: 1;
@@ -155,6 +162,36 @@
         }
         .auth-footer a { color: rgba(255, 255, 255, 0.6); }
 
+        /* Background binary-stream layer. A tiny, slow drift of 0/1 glyphs
+           across the page — sparse on purpose. Keeps the page from feeling
+           static without ever becoming the focus. Each glyph is spawned
+           by JS below with random Y, size, opacity, and duration. */
+        .bg-binary {
+            position: fixed;
+            inset: 0;
+            pointer-events: none;
+            overflow: hidden;
+            z-index: 0;
+        }
+        .bg-bit {
+            position: absolute;
+            left: -40px;
+            color: #6ab0ff;
+            font-family: 'JetBrains Mono', 'Menlo', 'Consolas', monospace;
+            font-weight: 600;
+            text-shadow: 0 0 8px rgba(78, 167, 255, 0.4);
+            white-space: nowrap;
+            animation: bg-bit-fly linear forwards;
+            will-change: transform;
+        }
+        @keyframes bg-bit-fly {
+            from { transform: translateX(0); }
+            to   { transform: translateX(calc(100vw + 80px)); }
+        }
+        @media (prefers-reduced-motion: reduce) {
+            .bg-binary { display: none; }
+        }
+
         /* On small screens drop the framing — full-bleed form, no art pane,
            no card chrome. Trying to keep an inset frame on a phone wastes
            too much real estate. */
@@ -173,10 +210,12 @@
             }
             .auth-art { display: none; }
             .auth-form-pane { padding: 48px 24px 24px; }
+            .bg-binary { display: none; }
         }
     </style>
 </head>
 <body class="auth-split">
+    <div class="bg-binary" aria-hidden="true"></div>
     <div class="auth-frame">
     <div class="auth-art">
         <?php if (!empty($loginLogo)): ?>
@@ -225,5 +264,42 @@
     </div>
     </div><!-- /.auth-frame -->
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+    /* Sparse binary-stream background: spawns one glyph every ~450ms,
+       randomized Y / size / opacity / speed so they feel like data
+       drifting past in the deep distance rather than a Matrix wall.
+       Each glyph fades out near the end of its travel and removes
+       itself once the animation completes. */
+    (function () {
+        var layer = document.querySelector('.bg-binary');
+        if (!layer) return;
+
+        // Honor reduced-motion at the JS level too — defense in depth
+        // against the CSS not loading or being overridden.
+        if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+            return;
+        }
+
+        function rand(min, max) { return min + Math.random() * (max - min); }
+
+        function spawn() {
+            var bit = document.createElement('span');
+            bit.className = 'bg-bit';
+            bit.textContent = Math.random() < 0.5 ? '0' : '1';
+            bit.style.top = rand(2, 96).toFixed(2) + 'vh';
+            bit.style.fontSize = rand(10, 17).toFixed(1) + 'px';
+            bit.style.opacity = rand(0.06, 0.18).toFixed(2);
+            // Faster glyphs feel closer; slower feel deeper. Mixing both
+            // gives a parallax sense of depth.
+            bit.style.animationDuration = rand(3.5, 9).toFixed(2) + 's';
+            layer.appendChild(bit);
+            bit.addEventListener('animationend', function () { bit.remove(); });
+        }
+
+        // Initial scatter so the field isn't empty on first paint.
+        for (var i = 0; i < 6; i++) setTimeout(spawn, i * 250);
+        setInterval(spawn, 450);
+    })();
+    </script>
 </body>
 </html>
