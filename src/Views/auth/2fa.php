@@ -5,34 +5,34 @@
 </div>
 <?php endif; ?>
 
-<div class="card shadow-sm">
-    <div class="card-body p-4">
-        <h5 class="text-muted mb-3">Two-Factor Authentication</h5>
-        <p class="text-muted small mb-4">
-            Enter the 6-digit code from your authenticator app<?php if (!empty($username)): ?> to continue as <strong><?= htmlspecialchars($username) ?></strong><?php endif; ?>.
-        </p>
-        <form method="POST" action="/login/2fa">
-            <div class="mb-3">
-                <label for="code" class="form-label fw-semibold">Authentication Code</label>
-                <input
-                    type="text"
-                    class="form-control text-center"
-                    id="code"
-                    name="code"
-                    placeholder="000000"
-                    maxlength="9"
-                    required
-                    autofocus
-                    autocomplete="one-time-code"
-                >
-                <div class="form-text">Or enter a recovery code (XXXX-XXXX).</div>
-            </div>
-            <div class="d-flex justify-content-between align-items-center">
-                <button type="submit" class="btn btn-success">
-                    <i class="bi bi-shield-check me-1"></i> Verify
-                </button>
-                <a href="/login" class="text-muted small">Back to Login</a>
-            </div>
-        </form>
-    </div>
+<h1>Two-factor authentication</h1>
+<div class="auth-subtitle">
+    Enter the 6-digit code from your authenticator app<?php if (!empty($username)): ?> to continue as <strong><?= htmlspecialchars($username) ?></strong><?php endif; ?>.
 </div>
+
+<form method="POST" action="/login/2fa">
+    <div class="mb-2">
+        <label for="code" class="form-label fw-semibold">Authentication Code</label>
+        <div class="input-group">
+            <span class="input-group-text"><i class="bi bi-shield-lock"></i></span>
+            <input
+                type="text"
+                class="form-control text-center"
+                id="code"
+                name="code"
+                placeholder="000000"
+                maxlength="9"
+                required
+                autofocus
+                autocomplete="one-time-code"
+            >
+        </div>
+        <div class="form-text small mt-2">Or enter a recovery code (XXXX-XXXX).</div>
+    </div>
+    <button type="submit" class="btn btn-primary w-100 py-2 fw-semibold mt-3 mb-3">
+        <i class="bi bi-shield-check me-2"></i>Verify
+    </button>
+    <div class="text-center">
+        <a href="/login" class="text-decoration-none small">Back to login</a>
+    </div>
+</form>
