@@ -87,6 +87,7 @@
             justify-content: space-between;
             width: calc(100% - 48px);
             max-width: 460px;
+            margin-bottom: 24px;
             background: rgba(255, 255, 255, 0.04);
             border: 1px solid rgba(255, 255, 255, 0.08);
             border-radius: 12px;
@@ -175,18 +176,31 @@
         }
         .bg-bit {
             position: absolute;
-            left: -40px;
+            left: -120px;
             color: #6ab0ff;
             font-family: 'JetBrains Mono', 'Menlo', 'Consolas', monospace;
             font-weight: 600;
+            letter-spacing: 0.04em;
             text-shadow: 0 0 8px rgba(78, 167, 255, 0.4);
             white-space: nowrap;
             animation: bg-bit-fly linear forwards;
             will-change: transform;
         }
+        /* Reverse-direction variant: starts off-screen right, drifts left.
+           Mixing both directions gives the field a sense of independent
+           data streams rather than one uniform conveyor. */
+        .bg-bit.reverse {
+            left: auto;
+            right: -120px;
+            animation-name: bg-bit-fly-reverse;
+        }
         @keyframes bg-bit-fly {
             from { transform: translateX(0); }
-            to   { transform: translateX(calc(100vw + 80px)); }
+            to   { transform: translateX(calc(100vw + 240px)); }
+        }
+        @keyframes bg-bit-fly-reverse {
+            from { transform: translateX(0); }
+            to   { transform: translateX(calc(-100vw - 240px)); }
         }
         @media (prefers-reduced-motion: reduce) {
             .bg-binary { display: none; }
@@ -285,7 +299,14 @@
         function spawn() {
             var bit = document.createElement('span');
             bit.className = 'bg-bit';
-            bit.textContent = Math.random() < 0.5 ? '0' : '1';
+            // Roughly 45% of streams flow right-to-left for variety.
+            if (Math.random() < 0.45) bit.className += ' reverse';
+            // Each glyph is a short cluster of 3-12 bits — feels like a
+            // packet drifting by rather than a lone digit.
+            var len = 3 + Math.floor(Math.random() * 10);
+            var s = '';
+            for (var i = 0; i < len; i++) s += Math.random() < 0.5 ? '0' : '1';
+            bit.textContent = s;
             bit.style.top = rand(2, 96).toFixed(2) + 'vh';
             bit.style.fontSize = rand(10, 17).toFixed(1) + 'px';
             bit.style.opacity = rand(0.06, 0.18).toFixed(2);
