@@ -32,8 +32,8 @@
         .auth-frame {
             display: flex;
             width: 100%;
-            max-width: 1280px;
-            min-height: 720px;
+            max-width: 1480px;
+            min-height: 760px;
             border-radius: 22px;
             overflow: hidden;
             background: linear-gradient(180deg, #07101f 0%, #050a14 100%);
@@ -48,10 +48,11 @@
             flex-direction: column;
             align-items: center;
             justify-content: center;
-            gap: 32px;
-            padding: 48px 40px;
+            gap: 28px;
+            padding: 40px 32px;
             position: relative;
             background: radial-gradient(ellipse at center, rgba(35, 75, 165, 0.22), transparent 60%);
+            border-right: 1px solid rgba(255, 255, 255, 0.07);
             overflow: hidden;
         }
         /* Subtle starfield-style dot pattern in the background */
@@ -65,7 +66,7 @@
             pointer-events: none;
         }
         .auth-art-logo {
-            max-width: 450px;
+            max-width: 675px;
             width: 100%;
             height: auto;
             position: relative;
@@ -74,14 +75,14 @@
         }
         .auth-features {
             display: flex;
-            gap: 12px;
+            gap: 10px;
             justify-content: space-between;
             width: 100%;
-            max-width: 560px;
+            max-width: 675px;
             background: rgba(255, 255, 255, 0.04);
             border: 1px solid rgba(255, 255, 255, 0.08);
             border-radius: 14px;
-            padding: 16px 20px;
+            padding: 14px 18px;
             backdrop-filter: blur(8px);
             position: relative;
             z-index: 1;
@@ -89,18 +90,20 @@
         .auth-feature {
             display: flex;
             align-items: center;
-            gap: 12px;
+            gap: 10px;
             color: #fff;
             flex: 1;
             min-width: 0;
         }
         .auth-feature i {
-            font-size: 1.6rem;
+            font-size: 1.3rem;
             color: #4ea7ff;
             flex-shrink: 0;
         }
-        .auth-feature-title { font-weight: 600; font-size: 0.9rem; line-height: 1.2; }
-        .auth-feature-sub   { font-size: 0.72rem; color: rgba(255,255,255,0.55); line-height: 1.2; margin-top: 2px; }
+        /* Feature text scaled ~20% smaller so all three fit comfortably under
+           the 675px logo without crowding. */
+        .auth-feature-title { font-weight: 600; font-size: 0.78rem; line-height: 1.2; }
+        .auth-feature-sub   { font-size: 0.6rem;  color: rgba(255,255,255,0.55); line-height: 1.2; margin-top: 2px; }
 
         .auth-form-pane {
             flex: 1 1 50%;
@@ -109,8 +112,10 @@
             flex-direction: column;
             justify-content: space-between;
             padding: 64px 64px 28px;
-            /* Inherit the body navy — no separate background — so the split
-               reads as one cohesive scene rather than two stitched halves. */
+            /* A few percent lighter than the art pane so the divider line
+               between them reads, but still dark enough that the form
+               inputs and the artwork feel like the same scene. */
+            background: linear-gradient(180deg, #0c1729 0%, #08111e 100%);
         }
         .auth-form-inner {
             max-width: 440px;
