@@ -203,10 +203,10 @@ html, body {
 /* Sidebar */
 .sidebar {
     width: 90px;
-    height: calc(100vh - 56px);
+    height: calc(100vh - 64px);
     background-color: var(--bbs-nav-bg);
     position: fixed;
-    top: 56px;
+    top: 64px;
     left: 0;
     overflow-y: auto;
     z-index: 1020;
@@ -242,7 +242,7 @@ html, body {
 
 /* Topbar */
 .topbar {
-    height: 56px;
+    height: 64px;
     background-color: var(--bbs-topbar-bg);
     position: fixed;
     top: 0;
@@ -250,10 +250,13 @@ html, body {
     right: 0;
     z-index: 1030;
     padding-left: 0 !important;
+    /* Allow the mascot logo to hang below the topbar so the robot's
+       hands appear to grab the edge of the page header. */
+    overflow: visible;
 }
 
 .main-content {
-    margin-top: 56px;
+    margin-top: 64px;
 }
 
 .topbar .navbar-text {
@@ -272,12 +275,38 @@ html, body {
 
 .topbar .navbar-brand {
     background-color: transparent;
-    height: 56px;
+    height: 64px;
     flex-shrink: 0;
+    position: relative;
+    overflow: visible;
 }
 
 .topbar-logo {
     width: 90px;
+    overflow: visible;
+}
+
+/* Oversized mascot logo. Anchored to the top-left of the 90px logo
+   column, scaled to 100px tall so it hangs ~36px below the 64px
+   topbar — the robot's hands at the bottom of the artwork end up
+   visually grabbing the edge between the topbar and the page below.
+   The 3:2 aspect makes it ~150px wide, intentionally overflowing
+   into the page-title area on the right. pointer-events: none lets
+   clicks fall through to the navbar-brand link underneath. */
+.topbar-mascot {
+    position: absolute;
+    top: 0;
+    left: 0;
+    height: 100px;
+    width: auto;
+    z-index: 1031;
+    pointer-events: none;
+}
+
+/* Push the page-title text right of where the mascot extends to
+   prevent overlap. ~150px logo width + ~16px breathing room. */
+.topbar .navbar-text {
+    margin-left: 80px !important;
 }
 
 /* Mobile bottom navigation */
@@ -372,6 +401,18 @@ html, body {
     }
     .topbar .navbar-brand img {
         height: 28px !important;
+    }
+    /* On mobile the topbar is too cramped for the oversized mascot
+       overflow trick — fall back to a normal inline icon. */
+    .topbar-mascot {
+        position: static !important;
+        height: 36px !important;
+        width: auto !important;
+        z-index: auto !important;
+        pointer-events: auto !important;
+    }
+    .topbar .navbar-text {
+        margin-left: 0.5rem !important;
     }
 }
 

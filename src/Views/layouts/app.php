@@ -26,7 +26,7 @@
                 ?>
                 <img src="data:image/png;base64,<?= $brandIcon['value'] ?>" alt="Logo" style="height: 36px;">
                 <?php else: ?>
-                <img src="/images/borg_icon_dark.png" alt="BBS" style="height: 36px;">
+                <img src="/images/bbs-logo-mascot.png" alt="BBS" class="topbar-mascot">
                 <?php endif; ?>
             </a>
             <?php
