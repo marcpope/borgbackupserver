@@ -1,9 +1,10 @@
 <!DOCTYPE html>
-<html lang="en" data-bs-theme="<?= htmlspecialchars($defaultTheme ?? 'dark') ?>">
+<!-- Auth pages are always dark — the split-pane design with the navy
+     gradient and binary-stream background only works in dark. The
+     branding "Login Page Theme" override is currently disabled in
+     settings; re-enable both if/when a light variant exists. -->
+<html lang="en" data-bs-theme="dark">
 <head>
-    <?php if (empty($loginThemeForced)): ?>
-    <script>(function(){var t=localStorage.getItem('bbs-theme');if(t)document.documentElement.setAttribute('data-bs-theme',t);})()</script>
-    <?php endif; ?>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title><?= htmlspecialchars($pageTitle ?? 'Login') ?> - Borg Backup Server</title>

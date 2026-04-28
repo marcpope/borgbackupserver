@@ -24,7 +24,7 @@
                     $brandIcon = \BBS\Core\Database::getInstance()->fetchOne("SELECT `value` FROM settings WHERE `key` = 'branding_icon'");
                     if (!empty($brandIcon['value'])):
                 ?>
-                <img src="data:image/png;base64,<?= $brandIcon['value'] ?>" alt="Logo" style="height: 36px;">
+                <img src="data:image/png;base64,<?= $brandIcon['value'] ?>" alt="Logo" class="topbar-mascot">
                 <?php else: ?>
                 <img src="/images/bbs-logo-mascot.png" alt="BBS" class="topbar-mascot">
                 <?php endif; ?>

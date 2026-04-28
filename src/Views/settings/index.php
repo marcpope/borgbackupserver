@@ -1554,9 +1554,9 @@ document.getElementById('oidcNewUserPolicy').addEventListener('change', function
 
             <!-- Navbar Icon -->
             <div class="row mb-4">
-                <div class="col-md-8">
+                <div class="col-md-7">
                     <h6><i class="bi bi-image me-1"></i> Navbar Icon</h6>
-                    <p class="text-muted small">Square transparent PNG shown in the top-left corner. Will be resized to 120x120px max.</p>
+                    <p class="text-muted small">Transparent PNG shown in the top-left corner of every page. Wide landscape artwork works best — it sits in a ~115×100px slot and overflows slightly into the page header. Will be resized to fit within 360×200 pixels max.</p>
                     <input type="file" class="form-control form-control-sm" id="iconFileInput" accept="image/png">
                     <div class="small text-muted mt-1" id="iconDimensions"></div>
                     <?php if (!empty($settings['branding_icon'])): ?>
@@ -1566,14 +1566,17 @@ document.getElementById('oidcNewUserPolicy').addEventListener('change', function
                     </div>
                     <?php endif; ?>
                 </div>
-                <div class="col-md-4 text-center">
+                <div class="col-md-5 text-center">
                     <label class="form-label small text-muted">Preview</label>
-                    <div class="p-3 rounded <?= ($_SESSION['theme'] ?? 'dark') === 'dark' ? 'bg-dark' : 'bg-body-secondary' ?>">
-                        <img id="iconPreview" src="<?= !empty($settings['branding_icon']) ? 'data:image/png;base64,' . $settings['branding_icon'] : '/images/borg_icon_dark.png' ?>" alt="Icon preview" style="height: 36px;">
-                        <?php if (empty($settings['branding_icon'])): ?>
-                        <div class="text-muted small mt-1" id="iconDefaultLabel">Default</div>
-                        <?php endif; ?>
+                    <div class="p-3 rounded bg-dark d-flex align-items-center justify-content-center" style="min-height: 130px;">
+                        <img id="iconPreview"
+                             src="<?= !empty($settings['branding_icon']) ? 'data:image/png;base64,' . $settings['branding_icon'] : '/images/bbs-logo-mascot.png' ?>"
+                             alt="Icon preview"
+                             style="max-width: 180px; max-height: 110px; width: auto; height: auto;">
                     </div>
+                    <?php if (empty($settings['branding_icon'])): ?>
+                    <div class="text-muted small mt-1" id="iconDefaultLabel">Default — Borg Backup Server mascot</div>
+                    <?php endif; ?>
                 </div>
             </div>
 
@@ -1581,9 +1584,9 @@ document.getElementById('oidcNewUserPolicy').addEventListener('change', function
 
             <!-- Login Logo -->
             <div class="row mb-4">
-                <div class="col-md-8">
+                <div class="col-md-7">
                     <h6><i class="bi bi-card-image me-1"></i> Login Page Logo</h6>
-                    <p class="text-muted small">Transparent PNG displayed on the login page. Will be resized to fit within 475 x 100 pixels.</p>
+                    <p class="text-muted small">Transparent PNG displayed on the left half of the login screen. Square or near-square artwork works best — fills a column up to about 500px wide. Will be resized to fit within 800×800 pixels max.</p>
                     <input type="file" class="form-control form-control-sm" id="loginLogoFileInput" accept="image/png">
                     <div class="small text-muted mt-1" id="loginLogoDimensions"></div>
                     <?php if (!empty($settings['branding_login_logo'])): ?>
@@ -1593,20 +1596,26 @@ document.getElementById('oidcNewUserPolicy').addEventListener('change', function
                     </div>
                     <?php endif; ?>
                 </div>
-                <div class="col-md-4 text-center">
+                <div class="col-md-5 text-center">
                     <label class="form-label small text-muted">Preview</label>
-                    <div class="p-3 rounded <?= ($_SESSION['theme'] ?? 'dark') === 'dark' ? 'bg-dark' : 'bg-body-secondary' ?>">
-                        <img id="loginLogoPreview" src="<?= !empty($settings['branding_login_logo']) ? 'data:image/png;base64,' . $settings['branding_login_logo'] : '/images/borg_icon_dark.png' ?>" alt="Login logo preview" style="<?= !empty($settings['branding_login_logo']) ? 'max-width:300px;max-height:80px;' : 'max-width:80px;' ?>">
-                        <?php if (empty($settings['branding_login_logo'])): ?>
-                        <div class="text-muted small mt-1" id="loginLogoDefaultLabel">Default</div>
-                        <?php endif; ?>
+                    <div class="p-3 rounded bg-dark d-flex align-items-center justify-content-center" style="min-height: 280px;">
+                        <img id="loginLogoPreview"
+                             src="<?= !empty($settings['branding_login_logo']) ? 'data:image/png;base64,' . $settings['branding_login_logo'] : '/images/login-logo.png' ?>"
+                             alt="Login logo preview"
+                             style="max-width: 100%; max-height: 260px; width: auto; height: auto;">
                     </div>
+                    <?php if (empty($settings['branding_login_logo'])): ?>
+                    <div class="text-muted small mt-1" id="loginLogoDefaultLabel">Default — Borg Backup Server mascot</div>
+                    <?php endif; ?>
                 </div>
             </div>
 
-            <hr>
+            <?php /*
+            Login Page Theme override commented out — the new login design is
+            built specifically for dark and only works in dark. Re-enable
+            this block once light styling exists.
 
-            <!-- Login Page Theme -->
+            <hr>
             <div class="mb-4">
                 <h6><i class="bi bi-moon-stars me-1"></i> Login Page Theme</h6>
                 <p class="text-muted small">Override the login page theme independently. Useful when your logo only works well on a specific background.</p>
@@ -1617,6 +1626,7 @@ document.getElementById('oidcNewUserPolicy').addEventListener('change', function
                     <option value="light" <?= $loginTheme === 'light' ? 'selected' : '' ?>>Always Light</option>
                 </select>
             </div>
+            */ ?>
 
             <button type="submit" class="btn btn-primary">
                 <i class="bi bi-check-lg me-1"></i> Save Branding
@@ -1652,9 +1662,12 @@ function resizeImage(file, maxW, maxH, callback) {
 
 document.getElementById('iconFileInput').addEventListener('change', function() {
     if (!this.files[0]) return;
-    resizeImage(this.files[0], 120, 120, function(dataUrl, w, h) {
-        document.getElementById('iconPreview').src = dataUrl;
-        document.getElementById('iconPreview').style.height = '36px';
+    // Bumped from 120x120 to 360x200 — the new topbar slot is wider and
+    // benefits from higher-res source artwork, especially on retina screens.
+    resizeImage(this.files[0], 360, 200, function(dataUrl, w, h) {
+        var preview = document.getElementById('iconPreview');
+        preview.src = dataUrl;
+        // Let CSS sizing take over — preview's max-width/height already set inline.
         document.getElementById('brandingIconData').value = dataUrl.split(',')[1];
         document.getElementById('iconDimensions').textContent = 'Resized to ' + w + 'x' + h + 'px';
         var lbl = document.getElementById('iconDefaultLabel');
@@ -1664,11 +1677,11 @@ document.getElementById('iconFileInput').addEventListener('change', function() {
 
 document.getElementById('loginLogoFileInput').addEventListener('change', function() {
     if (!this.files[0]) return;
-    resizeImage(this.files[0], 475, 100, function(dataUrl, w, h) {
+    // Bumped from 475x100 to 800x800 — the new login layout uses square /
+    // near-square artwork that fills its column, not a wide banner.
+    resizeImage(this.files[0], 800, 800, function(dataUrl, w, h) {
         var preview = document.getElementById('loginLogoPreview');
         preview.src = dataUrl;
-        preview.style.maxWidth = '300px';
-        preview.style.maxHeight = '80px';
         document.getElementById('brandingLoginLogoData').value = dataUrl.split(',')[1];
         document.getElementById('loginLogoDimensions').textContent = 'Resized to ' + w + 'x' + h + 'px';
         var lbl = document.getElementById('loginLogoDefaultLabel');
