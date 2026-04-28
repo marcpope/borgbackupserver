@@ -32,13 +32,13 @@
         .auth-frame {
             display: flex;
             width: 100%;
-            max-width: 1480px;
-            min-height: 760px;
-            border-radius: 22px;
+            max-width: 1100px;
+            min-height: 580px;
+            border-radius: 18px;
             overflow: hidden;
             background: linear-gradient(180deg, #07101f 0%, #050a14 100%);
             box-shadow:
-                0 30px 80px rgba(0, 0, 0, 0.55),
+                0 24px 60px rgba(0, 0, 0, 0.5),
                 0 0 0 1px rgba(255, 255, 255, 0.05);
         }
         .auth-art {
@@ -46,8 +46,9 @@
             min-width: 0;
             display: flex;
             flex-direction: column;
-            align-items: stretch;
-            justify-content: flex-start;
+            align-items: center;
+            justify-content: center;
+            gap: 20px;
             padding: 0;
             position: relative;
             background: radial-gradient(ellipse at center, rgba(35, 75, 165, 0.22), transparent 60%);
@@ -67,25 +68,22 @@
         .auth-art-logo {
             display: block;
             width: 100%;
-            max-width: 100%;
+            max-width: 380px;
             height: auto;
             position: relative;
             z-index: 1;
-            /* Zero margin to the surrounding pane — the artwork fills its
-               column edge-to-edge. Features ribbon below keeps its inset. */
+            filter: drop-shadow(0 10px 30px rgba(0, 0, 0, 0.5));
         }
         .auth-features {
             display: flex;
-            gap: 10px;
+            gap: 8px;
             justify-content: space-between;
-            align-self: center;
-            width: calc(100% - 56px);
-            max-width: 675px;
-            margin: 24px 28px 32px;
+            width: calc(100% - 48px);
+            max-width: 460px;
             background: rgba(255, 255, 255, 0.04);
             border: 1px solid rgba(255, 255, 255, 0.08);
-            border-radius: 14px;
-            padding: 14px 18px;
+            border-radius: 12px;
+            padding: 10px 14px;
             backdrop-filter: blur(8px);
             position: relative;
             z-index: 1;
@@ -93,20 +91,18 @@
         .auth-feature {
             display: flex;
             align-items: center;
-            gap: 10px;
+            gap: 8px;
             color: #fff;
             flex: 1;
             min-width: 0;
         }
         .auth-feature i {
-            font-size: 1.3rem;
+            font-size: 1.05rem;
             color: #4ea7ff;
             flex-shrink: 0;
         }
-        /* Feature text scaled ~20% smaller so all three fit comfortably under
-           the 675px logo without crowding. */
-        .auth-feature-title { font-weight: 600; font-size: 0.78rem; line-height: 1.2; }
-        .auth-feature-sub   { font-size: 0.6rem;  color: rgba(255,255,255,0.55); line-height: 1.2; margin-top: 2px; }
+        .auth-feature-title { font-weight: 600; font-size: 0.7rem; line-height: 1.2; }
+        .auth-feature-sub   { font-size: 0.55rem; color: rgba(255,255,255,0.55); line-height: 1.2; margin-top: 1px; }
 
         .auth-form-pane {
             flex: 1 1 50%;
@@ -114,26 +110,24 @@
             display: flex;
             flex-direction: column;
             justify-content: space-between;
-            padding: 64px 64px 28px;
-            /* A few percent lighter than the art pane so the divider line
-               between them reads, but still dark enough that the form
-               inputs and the artwork feel like the same scene. */
+            padding: 44px 44px 22px;
             background: linear-gradient(180deg, #0c1729 0%, #08111e 100%);
         }
         .auth-form-inner {
-            max-width: 440px;
+            max-width: 360px;
             width: 100%;
             margin: auto 0;
         }
         .auth-form-inner h1 {
-            font-size: 2rem;
+            font-size: 1.5rem;
             font-weight: 700;
-            margin-bottom: 6px;
+            margin-bottom: 4px;
             color: #f3f6fb;
         }
         .auth-subtitle {
             color: rgba(255, 255, 255, 0.55);
-            margin-bottom: 32px;
+            margin-bottom: 22px;
+            font-size: 0.875rem;
         }
         /* Form inputs: subtle dark surface with a soft border so they read on
            the navy background. Inherits Bootstrap structure, just retones. */
@@ -153,10 +147,10 @@
             color: #f3f6fb;
         }
         .auth-footer {
-            font-size: 0.75rem;
+            font-size: 0.7rem;
             color: rgba(255, 255, 255, 0.45);
-            padding-top: 24px;
-            max-width: 440px;
+            padding-top: 20px;
+            max-width: 360px;
             width: 100%;
         }
         .auth-footer a { color: rgba(255, 255, 255, 0.6); }

@@ -20,14 +20,14 @@
         <label for="username" class="form-label fw-semibold">Username</label>
         <div class="input-group">
             <span class="input-group-text"><i class="bi bi-person"></i></span>
-            <input type="text" class="form-control form-control-lg" id="username" name="username" required autofocus autocomplete="username">
+            <input type="text" class="form-control" id="username" name="username" required autofocus autocomplete="username">
         </div>
     </div>
     <div class="mb-2">
         <label for="password" class="form-label fw-semibold">Password</label>
         <div class="input-group">
             <span class="input-group-text"><i class="bi bi-lock"></i></span>
-            <input type="password" class="form-control form-control-lg" id="password" name="password" required autocomplete="current-password">
+            <input type="password" class="form-control" id="password" name="password" required autocomplete="current-password">
         </div>
     </div>
     <div class="d-flex justify-content-end mb-4">
