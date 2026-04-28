@@ -17,7 +17,10 @@
             margin: 0;
             min-height: 100vh;
             display: flex;
-            background: var(--bs-body-bg);
+            /* Single dark navy gradient base — both panes share it so the
+               split feels cohesive rather than light-pane-vs-dark-pane. */
+            background: linear-gradient(180deg, #07101f 0%, #050a14 100%);
+            color: #e8edf5;
         }
         .auth-art {
             flex: 1 1 50%;
@@ -26,10 +29,10 @@
             flex-direction: column;
             align-items: center;
             justify-content: center;
-            padding: 48px 40px 200px;
+            gap: 32px;
+            padding: 48px 40px;
             position: relative;
-            background: radial-gradient(ellipse at center, rgba(35, 75, 165, 0.18), transparent 60%),
-                        linear-gradient(180deg, #07101f 0%, #050a14 100%);
+            background: radial-gradient(ellipse at center, rgba(35, 75, 165, 0.22), transparent 60%);
             overflow: hidden;
         }
         /* Subtle starfield-style dot pattern in the background */
@@ -43,26 +46,26 @@
             pointer-events: none;
         }
         .auth-art-logo {
-            max-width: 460px;
-            width: 70%;
+            max-width: 450px;
+            width: 100%;
             height: auto;
             position: relative;
             z-index: 1;
             filter: drop-shadow(0 12px 40px rgba(0, 0, 0, 0.6));
         }
         .auth-features {
-            position: absolute;
-            left: 40px;
-            right: 40px;
-            bottom: 40px;
             display: flex;
             gap: 12px;
             justify-content: space-between;
+            width: 100%;
+            max-width: 560px;
             background: rgba(255, 255, 255, 0.04);
             border: 1px solid rgba(255, 255, 255, 0.08);
             border-radius: 14px;
             padding: 16px 20px;
             backdrop-filter: blur(8px);
+            position: relative;
+            z-index: 1;
         }
         .auth-feature {
             display: flex;
@@ -86,8 +89,9 @@
             display: flex;
             flex-direction: column;
             justify-content: space-between;
-            padding: 64px 56px 24px;
-            background: var(--bs-body-bg);
+            padding: 64px 64px 28px;
+            /* Inherit the body navy — no separate background — so the split
+               reads as one cohesive scene rather than two stitched halves. */
         }
         .auth-form-inner {
             max-width: 440px;
@@ -98,19 +102,37 @@
             font-size: 2rem;
             font-weight: 700;
             margin-bottom: 6px;
-            color: var(--bs-body-color);
+            color: #f3f6fb;
         }
         .auth-subtitle {
-            color: var(--bs-secondary-color);
+            color: rgba(255, 255, 255, 0.55);
             margin-bottom: 32px;
         }
-        .auth-footer {
-            text-align: center;
-            font-size: 0.75rem;
-            color: var(--bs-secondary-color);
-            padding-top: 24px;
+        /* Form inputs: subtle dark surface with a soft border so they read on
+           the navy background. Inherits Bootstrap structure, just retones. */
+        .auth-form-inner .form-label { color: rgba(255, 255, 255, 0.85); }
+        .auth-form-inner .form-control,
+        .auth-form-inner .input-group-text {
+            background-color: rgba(255, 255, 255, 0.04);
+            border-color: rgba(255, 255, 255, 0.12);
+            color: #f3f6fb;
         }
-        .auth-footer a { color: var(--bs-secondary-color); }
+        .auth-form-inner .input-group-text { color: rgba(255, 255, 255, 0.6); }
+        .auth-form-inner .form-control::placeholder { color: rgba(255, 255, 255, 0.35); }
+        .auth-form-inner .form-control:focus {
+            background-color: rgba(255, 255, 255, 0.06);
+            border-color: rgba(99, 161, 255, 0.6);
+            box-shadow: 0 0 0 0.2rem rgba(99, 161, 255, 0.15);
+            color: #f3f6fb;
+        }
+        .auth-footer {
+            font-size: 0.75rem;
+            color: rgba(255, 255, 255, 0.45);
+            padding-top: 24px;
+            max-width: 440px;
+            width: 100%;
+        }
+        .auth-footer a { color: rgba(255, 255, 255, 0.6); }
 
         @media (max-width: 991.98px) {
             body.auth-split { flex-direction: column; }
@@ -135,9 +157,9 @@
                 </div>
             </div>
             <div class="auth-feature">
-                <i class="bi bi-shield-fill-check"></i>
+                <i class="bi bi-shield-lock-fill"></i>
                 <div>
-                    <div class="auth-feature-title">Secure by Design</div>
+                    <div class="auth-feature-title">Zero Trust Security</div>
                     <div class="auth-feature-sub">Your data, your control.</div>
                 </div>
             </div>
