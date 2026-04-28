@@ -46,10 +46,9 @@
             min-width: 0;
             display: flex;
             flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            gap: 28px;
-            padding: 40px 32px;
+            align-items: stretch;
+            justify-content: flex-start;
+            padding: 0;
             position: relative;
             background: radial-gradient(ellipse at center, rgba(35, 75, 165, 0.22), transparent 60%);
             border-right: 1px solid rgba(255, 255, 255, 0.07);
@@ -66,19 +65,23 @@
             pointer-events: none;
         }
         .auth-art-logo {
-            max-width: 675px;
+            display: block;
             width: 100%;
+            max-width: 100%;
             height: auto;
             position: relative;
             z-index: 1;
-            filter: drop-shadow(0 12px 40px rgba(0, 0, 0, 0.6));
+            /* Zero margin to the surrounding pane — the artwork fills its
+               column edge-to-edge. Features ribbon below keeps its inset. */
         }
         .auth-features {
             display: flex;
             gap: 10px;
             justify-content: space-between;
-            width: 100%;
+            align-self: center;
+            width: calc(100% - 56px);
             max-width: 675px;
+            margin: 24px 28px 32px;
             background: rgba(255, 255, 255, 0.04);
             border: 1px solid rgba(255, 255, 255, 0.08);
             border-radius: 14px;
@@ -199,7 +202,7 @@
                 <i class="bi bi-shield-lock-fill"></i>
                 <div>
                     <div class="auth-feature-title">Zero Trust Security</div>
-                    <div class="auth-feature-sub">Your data, your control.</div>
+                    <div class="auth-feature-sub">Secure by design.</div>
                 </div>
             </div>
             <div class="auth-feature">

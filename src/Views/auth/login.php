@@ -33,7 +33,7 @@
     <div class="d-flex justify-content-end mb-4">
         <a href="/forgot-password" class="text-decoration-none small">Forgot password?</a>
     </div>
-    <button type="submit" class="btn btn-primary btn-lg w-100">
+    <button type="submit" class="btn btn-primary w-100 py-2 fw-semibold">
         <i class="bi bi-lock-fill me-2"></i>Sign in
     </button>
 </form>
