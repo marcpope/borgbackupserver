@@ -1444,20 +1444,54 @@ foreach ($serverJobs as $sj) {
     }
 
     $now = date('Y-m-d H:i:s');
-    $db->update('backup_jobs', [
-        'status' => $result,
-        'completed_at' => $now,
-        'duration_seconds' => max(0, strtotime($now) - strtotime($startedAt)),
-        'error_log' => $errorOutput ?: null,
-    ], 'id = ?', [$sj['id']]);
+    // Only overwrite the row if it's still 'running'. The status() endpoint
+    // (AgentApiController) can transition a 'running' server-side job to
+    // 'failed' mid-flight when the agent reports `abandoned` after a stall,
+    // and we must not clobber that terminal status with our own
+    // 'completed'/'failed'. Without this guard the dashboard ends up
+    // showing the job as a green "Recently Completed" entry even though
+    // the activity log already recorded the abandon (issue #227).
+    $finalize = $db->query(
+        "UPDATE backup_jobs
+            SET status = ?, completed_at = ?, duration_seconds = ?, error_log = ?
+          WHERE id = ? AND status = 'running'",
+        [
+            $result,
+            $now,
+            max(0, strtotime($now) - strtotime($startedAt)),
+            $errorOutput ?: null,
+            $sj['id'],
+        ]
+    );
 
-    $level = $result === 'completed' ? 'info' : 'error';
-    $db->insert('server_log', [
-        'agent_id' => $sj['agent_id'],
-        'backup_job_id' => $sj['id'],
-        'level' => $level,
-        'message' => "Server-side {$sj['task_type']} job #{$sj['id']} {$result}" . ($errorOutput ? ": $errorOutput" : ''),
-    ]);
+    if ($finalize->rowCount() === 0) {
+        // Someone else (typically the abandoned report) already terminated
+        // this job. Log a warning, force `$result` to 'failed' so the
+        // post-completion hooks below (archive deletion, repo-size refresh,
+        // S3 auto-queue) don't act as if the run succeeded, and skip the
+        // misleading "Server-side {type} job #{id} completed" log.
+        $existing = $db->fetchOne(
+            "SELECT status, error_log FROM backup_jobs WHERE id = ?",
+            [$sj['id']]
+        );
+        $existingStatus = $existing['status'] ?? 'unknown';
+        $db->insert('server_log', [
+            'agent_id' => $sj['agent_id'],
+            'backup_job_id' => $sj['id'],
+            'level' => 'warning',
+            'message' => "Server-side {$sj['task_type']} job #{$sj['id']} finished, but its status was already '{$existingStatus}' (likely an abandoned/cancelled report came in mid-flight); not overwriting.",
+        ]);
+        echo date('Y-m-d H:i:s') . " Server-side {$sj['task_type']} job #{$sj['id']}: finished but already '{$existingStatus}'; not overwriting status\n";
+        $result = 'failed';
+    } else {
+        $level = $result === 'completed' ? 'info' : 'error';
+        $db->insert('server_log', [
+            'agent_id' => $sj['agent_id'],
+            'backup_job_id' => $sj['id'],
+            'level' => $level,
+            'message' => "Server-side {$sj['task_type']} job #{$sj['id']} {$result}" . ($errorOutput ? ": $errorOutput" : ''),
+        ]);
+    }
 
     // Log borg prune/compact output for visibility
     if ($result === 'completed' && !empty($stdout)) {
