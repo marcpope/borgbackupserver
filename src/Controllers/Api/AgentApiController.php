@@ -427,9 +427,9 @@ class AgentApiController extends Controller
             ]);
 
             // Update archive count + borg version. Size is refreshed below
-            // via RepositorySizeService (du for local, SUM for remote SSH) —
-            // runs once per backup instead of a periodic scan, so idle disks
-            // stay idle.
+            // via RepositorySizeService (du locally; du-then-borg-info over
+            // SSH) — runs once per backup instead of a periodic scan, so
+            // idle disks stay idle.
             $borgVer = !empty($agent['borg_version']) ? preg_replace('/^borg\s+/', '', $agent['borg_version']) : null;
             $this->db->query("
                 UPDATE repositories SET

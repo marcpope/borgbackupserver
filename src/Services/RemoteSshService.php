@@ -326,6 +326,91 @@ class RemoteSshService
     }
 
     /**
+     * Measure a single remote borg repository directory with `du -sk`.
+     * Returns bytes used on disk, or null if the path cannot be measured
+     * (e.g. BorgBase's borg-only shell rejects shell commands).
+     */
+    public function getRepositorySizeBytes(array $config, string $repoPath): ?int
+    {
+        $remotePath = $this->remoteFilesystemPathFromRepoUrl($repoPath);
+        if ($remotePath === null || $remotePath === '' || str_contains($remotePath, "\0")) {
+            return null;
+        }
+
+        $keyFile = null;
+        try {
+            $sshKey = $this->decryptKey($config);
+            $keyFile = $this->writeTempKey($sshKey);
+
+            $port = (int) ($config['remote_port'] ?? 22);
+            $sshCmd = [
+                'ssh',
+                '-i', $keyFile,
+                '-p', (string) $port,
+                '-o', 'StrictHostKeyChecking=no',
+                '-o', 'UserKnownHostsFile=/dev/null',
+                '-o', 'BatchMode=yes',
+                '-o', 'LogLevel=ERROR',
+                '-o', 'ConnectTimeout=30',
+                "{$config['remote_user']}@{$config['remote_host']}",
+                'du -sk -- ' . escapeshellarg($remotePath),
+            ];
+
+            $proc = proc_open($sshCmd, [
+                0 => ['pipe', 'r'],
+                1 => ['pipe', 'w'],
+                2 => ['pipe', 'w'],
+            ], $pipes, null, $this->buildServerEnv());
+
+            if (!is_resource($proc)) {
+                return null;
+            }
+
+            fclose($pipes[0]);
+            $stdout = trim(stream_get_contents($pipes[1]));
+            fclose($pipes[1]);
+            fclose($pipes[2]);
+            $exitCode = proc_close($proc);
+
+            if ($exitCode !== 0 || $stdout === '') {
+                return null;
+            }
+
+            $fields = preg_split('/\s+/', $stdout);
+            $kib = isset($fields[0]) && is_numeric($fields[0]) ? (int) $fields[0] : 0;
+            return $kib > 0 ? $kib * 1024 : 0;
+        } catch (\Throwable $e) {
+            return null;
+        } finally {
+            $this->cleanupTempKey($keyFile);
+        }
+    }
+
+    /**
+     * Convert a borg SSH URL to the remote filesystem path that `du` should
+     * measure. Borg conventions: ssh://user@host/relative → relative to home,
+     * ssh://user@host//absolute → absolute.
+     */
+    private function remoteFilesystemPathFromRepoUrl(string $repoPath): ?string
+    {
+        if (!str_starts_with($repoPath, 'ssh://')) {
+            return $repoPath;
+        }
+
+        $path = parse_url($repoPath, PHP_URL_PATH);
+        if (!is_string($path) || $path === '') {
+            return null;
+        }
+
+        $path = rawurldecode($path);
+        if (str_starts_with($path, '//')) {
+            return '/' . ltrim($path, '/');
+        }
+
+        return ltrim($path, '/');
+    }
+
+    /**
      * Decrypt the SSH private key from a config record.
      */
     private function decryptKey(array $config): string

@@ -9,9 +9,15 @@ use BBS\Core\Database;
  * size: backup completion, prune, compact, and archive_delete.
  *
  * Local repos: `du` via bbs-ssh-helper.
- * Remote SSH repos: `borg info --json <repo>` and read cache.stats.unique_csize
- * (the deduplicated/compressed on-disk size); falls back to
- * SUM(archives.deduplicated_size) if borg info can't be reached.
+ *
+ * Remote SSH repos use a three-step chain so every provider gets the best
+ * answer it supports:
+ *   1. `du -sk` over SSH — most authoritative (matches what providers like
+ *      rsync.net and Hetzner actually bill for, including segment files,
+ *      indexes, FS allocation overhead, and uncompacted data).
+ *   2. `borg info --json` and read cache.stats.unique_csize — works on
+ *      borg-only shells like BorgBase where du is rejected.
+ *   3. SUM(archives.deduplicated_size) — last resort if both SSH paths fail.
  *
  * Previously a scheduler loop ran `du` on every local repo every 5 minutes,
  * which kept spinning disks awake on idle home servers. Now disks are only
@@ -26,15 +32,31 @@ class RepositorySizeService
         if (!$repo) return;
 
         if (($repo['storage_type'] ?? 'local') === 'remote_ssh') {
+            // Step 1: du -sk over SSH. Works on every backend with a real
+            // shell (rsync.net, Hetzner, generic Linux droplets, self-hosted).
+            $configId = (int) ($repo['remote_ssh_config_id'] ?? 0);
+            $config = $configId > 0
+                ? $db->fetchOne("SELECT * FROM remote_ssh_configs WHERE id = ?", [$configId])
+                : null;
+            if ($config) {
+                $duBytes = (new RemoteSshService())->getRepositorySizeBytes($config, $repo['path']);
+                if ($duBytes !== null) {
+                    $db->update('repositories', ['size_bytes' => $duBytes], 'id = ?', [$repoId]);
+                    return;
+                }
+            }
+
+            // Step 2: borg info — for borg-only shells (BorgBase) where
+            // du is rejected.
             $unique = self::fetchRepoUniqueCsize($repo);
             if ($unique !== null) {
                 $db->update('repositories', ['size_bytes' => $unique], 'id = ?', [$repoId]);
                 return;
             }
-            // Fall back to SUM of per-archive deduplicated_size when borg info
-            // can't be reached. Known to under-report (it's a sum of the
-            // *incremental* contributions of each archive at the time it was
-            // created), but it's better than a stale value.
+
+            // Step 3: SUM of per-archive deduplicated_size. Known to
+            // under-report (it's the *incremental* contribution at archive
+            // creation, not current state), but it's better than nothing.
             $db->query(
                 "UPDATE repositories SET size_bytes = COALESCE(
                     (SELECT SUM(deduplicated_size) FROM archives WHERE repository_id = ?), 0

@@ -1602,8 +1602,8 @@ foreach ($serverJobs as $sj) {
                 ]);
             }
             // Refresh archive count + size. Prune just shrank the repo,
-            // so measure actual disk usage now (local) or re-sum archives
-            // (remote SSH) — see RepositorySizeService.
+            // so measure actual disk usage now — see RepositorySizeService
+            // for the local/remote chain.
             $db->query(
                 "UPDATE repositories SET archive_count = (SELECT COUNT(*) FROM archives WHERE repository_id = ?) WHERE id = ?",
                 [$repoId, $repoId]
