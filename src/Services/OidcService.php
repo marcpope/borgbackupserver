@@ -108,16 +108,51 @@ class OidcService
         $oidc = $this->buildClient($redirectUri);
         $oidc->authenticate();
 
-        // Extract claims
-        $email = $oidc->requestUserInfo('email');
+        // Extract claims. Some providers (Keycloak with default mappings,
+        // Authentik, Microsoft Entra) put preferred_username and name in
+        // the ID token but not in the userinfo response, even when the
+        // openid + profile scopes are requested. requestUserInfo() reads
+        // only from userinfo, so those claims came back empty and new
+        // users ended up with the generic user_N fallback (#277). Look
+        // in both places — ID token first (more reliable, signed), then
+        // userinfo as fallback.
+        $email = $this->readClaim($oidc, 'email');
         if (empty($email)) {
             throw new \RuntimeException('OIDC provider did not return an email address. Ensure the "email" scope is configured.');
         }
 
-        $preferredUsername = $oidc->requestUserInfo('preferred_username');
-        $name = $oidc->requestUserInfo('name');
+        $preferredUsername = $this->readClaim($oidc, 'preferred_username');
+        $name = $this->readClaim($oidc, 'name');
 
         return $this->findOrCreateUser($email, $preferredUsername ?: $name ?: '');
+    }
+
+    /**
+     * Read a single claim, trying the verified ID token first and the
+     * userinfo endpoint second. Returns null if the claim isn't present
+     * in either source.
+     */
+    private function readClaim(OpenIDConnectClient $oidc, string $name): ?string
+    {
+        try {
+            $value = $oidc->getVerifiedClaims($name);
+            if ($value !== null && $value !== '' && $value !== false) {
+                return (string) $value;
+            }
+        } catch (\Throwable $e) {
+            // ID token may not carry every requested claim — fall through.
+        }
+
+        try {
+            $value = $oidc->requestUserInfo($name);
+            if ($value !== null && $value !== '' && $value !== false) {
+                return (string) $value;
+            }
+        } catch (\Throwable $e) {
+            // Userinfo endpoint may be unreachable or the claim absent.
+        }
+
+        return null;
     }
 
     /**
