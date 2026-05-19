@@ -2427,6 +2427,10 @@ $sizeDisplay = $totalSize > 0 ? \BBS\Services\ServerStats::formatBytes((int) $to
                                 <div class="col-auto"><div class="form-check"><input class="form-check-input" type="checkbox" name="plugin_config[abort_on_failure]" value="1" id="editCfg<?= $cfg['id'] ?>_abort" <?= ($ev['abort_on_failure'] ?? true) ? 'checked' : '' ?>><label class="form-check-label small" for="editCfg<?= $cfg['id'] ?>_abort">Abort backup on failure</label></div></div>
                                 <div class="col"><label class="form-label small fw-semibold mb-1">Timeout (seconds)</label><input type="number" class="form-control form-control-sm" name="plugin_config[timeout]" value="<?= htmlspecialchars($ev['timeout'] ?? 300) ?>"></div>
                             </div>
+                            <div class="mb-2">
+                                <div class="form-check"><input class="form-check-input" type="checkbox" name="plugin_config[expose_passphrase]" value="1" id="editCfg<?= $cfg['id'] ?>_expose" <?= !empty($ev['expose_passphrase']) ? 'checked' : '' ?>><label class="form-check-label small" for="editCfg<?= $cfg['id'] ?>_expose">Expose repository passphrase to script <span class="text-muted">(advanced)</span></label></div>
+                                <div class="form-text small">Exposes <code>BORG_PASSCOMMAND</code> and <code>BORG_REPO</code> so the script can run <code>borg create --content-from-command</code> directly. Credentials are passed via a mode-0600 temp file (not env vars), but only enable this for scripts you've reviewed — see the wiki for details.</div>
+                            </div>
                         <?php else: ?>
                             <?php foreach ($schema as $field => $def):
                                 $val = $cfgData[$field] ?? $def['default'] ?? '';
@@ -2536,6 +2540,10 @@ $sizeDisplay = $totalSize > 0 ? \BBS\Services\ServerStats::formatBytes((int) $to
                                     <div class="row g-2 mb-2">
                                         <div class="col-auto"><div class="form-check"><input class="form-check-input" type="checkbox" name="plugin_config[abort_on_failure]" value="1" id="newCfg<?= $plugin['id'] ?>_abort" checked><label class="form-check-label small" for="newCfg<?= $plugin['id'] ?>_abort">Abort backup on failure</label></div></div>
                                         <div class="col"><label class="form-label small fw-semibold mb-1">Timeout (seconds)</label><input type="number" class="form-control form-control-sm" name="plugin_config[timeout]" value="300"></div>
+                                    </div>
+                                    <div class="mb-2">
+                                        <div class="form-check"><input class="form-check-input" type="checkbox" name="plugin_config[expose_passphrase]" value="1" id="newCfg<?= $plugin['id'] ?>_expose"><label class="form-check-label small" for="newCfg<?= $plugin['id'] ?>_expose">Expose repository passphrase to script <span class="text-muted">(advanced)</span></label></div>
+                                        <div class="form-text small">Exposes <code>BORG_PASSCOMMAND</code> and <code>BORG_REPO</code> so the script can run <code>borg create --content-from-command</code> directly. Credentials are passed via a mode-0600 temp file (not env vars), but only enable this for scripts you've reviewed — see the wiki for details.</div>
                                     </div>
                                 <?php else: ?>
                                     <?php foreach ($schema as $field => $def):
