@@ -610,9 +610,12 @@ case "$ACTION" in
             exit 1
         fi
 
-        # Safety: local path must be under /var/bbs/
-        if [[ ! "$LOCAL_PATH" =~ ^/var/bbs/ ]]; then
-            echo "Error: local path must be under /var/bbs/"
+        # Safety: local path must be under /var/bbs/ or a registered storage
+        # location. Use the shared allow-list so installations with
+        # repos in non-standard paths (e.g. /opt/bbs, /mnt/...) can sync
+        # to S3 like everything else does (#270).
+        if ! is_allowed_path "$LOCAL_PATH"; then
+            echo "Error: local path must be under /var/bbs/ or a registered storage location"
             exit 1
         fi
 
@@ -666,9 +669,10 @@ case "$ACTION" in
             exit 1
         fi
 
-        # Safety: local path must be under /var/bbs/
-        if [[ ! "$LOCAL_PATH" =~ ^/var/bbs/ ]]; then
-            echo "Error: local path must be under /var/bbs/"
+        # Same allow-list as rclone-sync — repos in non-standard locations
+        # need to restore from S3 too (#270).
+        if ! is_allowed_path "$LOCAL_PATH"; then
+            echo "Error: local path must be under /var/bbs/ or a registered storage location"
             exit 1
         fi
 
