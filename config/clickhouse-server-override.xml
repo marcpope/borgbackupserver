@@ -2,13 +2,22 @@
     <!-- Reduce idle CPU: poll internal metrics every 60s instead of every 1s -->
     <asynchronous_metrics_update_period_s>60</asynchronous_metrics_update_period_s>
 
-    <!-- Limit ClickHouse's own file-based logging to prevent filling disk -->
+    <!-- Console-only logging. ClickHouse's Poco file logger has a known bug
+         where RotateBySizeStrategy::mustRotate throws on every log call once
+         the rotation state goes bad (multiple Docker users hit this in
+         #252, #266, #280; ClickHouse versions 26.1.x and 26.4.x both
+         exhibit it). Each throw cascades into a feedback loop where the
+         "cannot log" message itself fails to log, amplifying a single
+         warning into tens of thousands of stack traces.
+         By not pointing the logger at any file at all, the rotation
+         path is never entered and the loop can't form. Output goes to
+         stdout/stderr — Docker captures it through the json-file (or
+         configured) log driver, systemd captures it through journald.
+         Both handle rotation properly, and our docker-compose example
+         sets max-size/max-file as the responsible default. -->
     <logger>
         <level>warning</level>
-        <log>/var/log/clickhouse-server/clickhouse-server.log</log>
-        <errorlog>/var/log/clickhouse-server/clickhouse-server.err.log</errorlog>
-        <size>10M</size>
-        <count>2</count>
+        <console>1</console>
     </logger>
 
     <!-- Disable system log tables that generate heavy disk I/O when idle -->

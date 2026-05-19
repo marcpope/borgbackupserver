@@ -41,6 +41,16 @@ services:
       # replace the line above with a bind mount:
       # - /mnt/backups:/var/bbs
     restart: unless-stopped
+    # Docker's default json-file log driver has no size limit, which means
+    # container output (mostly ClickHouse's internal warnings) will grow
+    # unbounded over time. Cap it at ~30 MB total — plenty for recent
+    # diagnostics, nothing close to filling a disk. Adjust if you want more
+    # history; rotation is honored automatically.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
 volumes:
   bbs-data: # Remove this 'volumes' section entirely if using a bind mount above
