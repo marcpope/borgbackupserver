@@ -45,11 +45,25 @@ echo "[5/9] Checking ClickHouse..."
 if command -v clickhouse-server &>/dev/null; then
     # Ensure config override is in place
     mkdir -p /etc/clickhouse-server/config.d
+    CH_OVERRIDE_CHANGED=0
+    CH_OVERRIDE_SRC="$BBS_DIR/config/clickhouse-server-override.xml"
+    CH_OVERRIDE_DST="/etc/clickhouse-server/config.d/bbs-override.xml"
     if [ -f "$BBS_DIR/config/clickhouse-server-override.xml" ]; then
-        cp "$BBS_DIR/config/clickhouse-server-override.xml" /etc/clickhouse-server/config.d/bbs-override.xml
+        if ! cmp -s "$CH_OVERRIDE_SRC" "$CH_OVERRIDE_DST"; then
+            cp "$CH_OVERRIDE_SRC" "$CH_OVERRIDE_DST"
+            CH_OVERRIDE_CHANGED=1
+        fi
     fi
     # Ensure service is running
-    systemctl is-active --quiet clickhouse-server || systemctl start clickhouse-server 2>/dev/null || true
+    if systemctl is-active --quiet clickhouse-server; then
+        if [ "$CH_OVERRIDE_CHANGED" -eq 1 ]; then
+            systemctl restart clickhouse-server 2>/dev/null || true
+            sleep 2
+        fi
+    else
+        systemctl start clickhouse-server 2>/dev/null || true
+        sleep 2
+    fi
     # Ensure database and tables exist (idempotent)
     clickhouse-client --query "CREATE DATABASE IF NOT EXISTS bbs" 2>/dev/null || true
     clickhouse-client -d bbs --multiquery < "$BBS_DIR/schema-clickhouse.sql" 2>/dev/null || true
