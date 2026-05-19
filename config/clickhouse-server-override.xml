@@ -18,6 +18,14 @@
     <logger>
         <level>warning</level>
         <console>1</console>
+        <!-- Explicitly drop the file-logger paths the base config sets.
+             <console>1</console> alone only ADDS console output; the
+             base config's <log>/<errorlog> tags survive the merge unless
+             we use remove="remove" to delete them. Without these two
+             lines the file logger stays active and the Poco rotation
+             feedback loop still happens. -->
+        <log remove="remove"/>
+        <errorlog remove="remove"/>
     </logger>
 
     <!-- Disable system log tables that generate heavy disk I/O when idle -->
