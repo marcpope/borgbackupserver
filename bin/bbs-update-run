@@ -64,6 +64,19 @@ if command -v clickhouse-server &>/dev/null; then
         systemctl start clickhouse-server 2>/dev/null || true
         sleep 2
     fi
+    # Drop system_log tables we suppress in the override. The remove="remove"
+    # directive only prevents ClickHouse from *creating* these tables on
+    # startup — it doesn't delete pre-existing ones. Installs predating
+    # v2.53.x carry the old tables forward, and each version of ClickHouse
+    # tends to add a few new ones. Idempotent drop matches entrypoint.sh
+    # on the Docker side so bare-metal and Docker stay in sync.
+    for tbl in trace_log text_log metric_log asynchronous_metric_log part_log \
+               processors_profile_log query_log query_thread_log query_views_log \
+               query_metric_log session_log opentelemetry_span_log \
+               asynchronous_insert_log backup_log s3_queue_log blob_storage_log \
+               background_schedule_pool_log error_log; do
+        clickhouse-client --query "DROP TABLE IF EXISTS system.$tbl" 2>/dev/null || true
+    done
     # Ensure database and tables exist (idempotent)
     clickhouse-client --query "CREATE DATABASE IF NOT EXISTS bbs" 2>/dev/null || true
     clickhouse-client -d bbs --multiquery < "$BBS_DIR/schema-clickhouse.sql" 2>/dev/null || true
