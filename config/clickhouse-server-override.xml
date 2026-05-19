@@ -27,4 +27,6 @@
     <backup_log remove="remove"/>
     <s3_queue_log remove="remove"/>
     <blob_storage_log remove="remove"/>
+    <background_schedule_pool_log remove="remove"/>
+    <error_log remove="remove"/>
 </clickhouse>
