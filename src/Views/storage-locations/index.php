@@ -136,7 +136,7 @@ function escapeHtml(value) {
                         <label class="form-check-label" for="s3_sync_server_backups">
                             Sync server backups to off-site storage daily
                         </label>
-                        <div class="form-text">Uploads the 7 most recent server backups from <code>/var/bbs/backups/</code> and removes older ones from S3.</div>
+                        <div class="form-text">Uploads the server backups from <code>/var/bbs/backups/</code> and removes deleted ones from S3.</div>
                     </div>
 
                     <div class="d-flex gap-2">
