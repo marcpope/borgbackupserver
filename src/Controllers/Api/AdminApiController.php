@@ -296,6 +296,13 @@ class AdminApiController extends Controller
             $this->json(['error' => 'Repository name is required'], 400);
         }
 
+        // Hosted mode: third-party storage isn't allowed at all. Force local.
+        if (\BBS\Core\Config::isHosted() && $storageType !== 'local') {
+            error_log("BBS hosted mode: ignoring storage_type={$storageType} on createRepository, forcing local");
+            $storageType = 'local';
+            $remoteSshConfigId = null;
+        }
+
         // Route to remote SSH handler if requested
         if ($storageType === 'remote_ssh') {
             $this->createRemoteSshRepository($id, $name, $encryption, $passphrase, $remoteSshConfigId);
@@ -322,8 +329,19 @@ class AdminApiController extends Controller
             $this->json(['error' => 'Repository name must contain at least one alphanumeric character'], 400);
         }
 
-        // Resolve storage location
+        // Resolve storage location. In hosted mode the platform owns
+        // storage — silently force the default and warn if the caller
+        // sent something else, since out-of-sync platform code shouldn't
+        // accidentally provision repos against the wrong backend.
         $storageLocationId = !empty($input['storage_location_id']) ? (int) $input['storage_location_id'] : null;
+        if (\BBS\Core\Config::isHosted()) {
+            $defaultLoc = $this->db->fetchOne("SELECT id FROM storage_locations WHERE is_default = 1");
+            $defaultId = $defaultLoc['id'] ?? null;
+            if ($storageLocationId !== null && $defaultId !== null && (int) $storageLocationId !== (int) $defaultId) {
+                error_log("BBS hosted mode: ignoring storage_location_id={$storageLocationId} on createRepository, forcing default {$defaultId}");
+            }
+            $storageLocationId = $defaultId;
+        }
         $location = null;
         if ($storageLocationId) {
             $location = $this->db->fetchOne("SELECT * FROM storage_locations WHERE id = ?", [$storageLocationId]);
@@ -723,6 +741,54 @@ class AdminApiController extends Controller
     }
 
     // ── Storage Locations ────────────────────────────────
+
+    /**
+     * POST /api/v1/storage — create a local storage location.
+     * Used by hosted-platform tooling to seed the managed storage on a
+     * freshly-provisioned container; also usable by any operator
+     * scripting BBS setup. Accepts label, path, is_default (bool).
+     * Returns the created row with its id.
+     */
+    public function createStorageLocation(): void
+    {
+        $this->requireApiToken();
+        $input = $this->getJsonInput();
+
+        $label = trim($input['label'] ?? '');
+        $path = rtrim(trim($input['path'] ?? ''), '/');
+        $isDefault = !empty($input['is_default']) ? 1 : 0;
+
+        if ($label === '' || $path === '') {
+            $this->json(['error' => 'label and path are required'], 400);
+        }
+        if ($path[0] !== '/') {
+            $this->json(['error' => 'path must be absolute'], 400);
+        }
+
+        // Setting this row as default supersedes any existing default —
+        // mirrors what StorageLocationController::store does for the UI path.
+        if ($isDefault) {
+            $this->db->query("UPDATE storage_locations SET is_default = 0");
+        }
+
+        $id = $this->db->insert('storage_locations', [
+            'label' => $label,
+            'path' => $path,
+            'is_default' => $isDefault,
+        ]);
+
+        // Keep /etc/bbs/allowed-storage-paths in sync so bbs-ssh-helper's
+        // path allow-list (used by borg-cmd, rclone-sync, etc.) accepts
+        // repos created under this location.
+        (new \BBS\Controllers\StorageLocationController())->updateAllowedPaths();
+
+        $this->json([
+            'id' => (int) $id,
+            'label' => $label,
+            'path' => $path,
+            'is_default' => (bool) $isDefault,
+        ], 201);
+    }
 
     public function listStorageLocations(): void
     {

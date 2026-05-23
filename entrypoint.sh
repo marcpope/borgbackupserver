@@ -580,6 +580,36 @@ if [ "$FRESH_INSTALL" -eq 1 ]; then
     mysql -u bbs -p"$DB_PASS" bbs -e "UPDATE users SET password_hash = '$ADMIN_HASH' WHERE username = 'admin';"
 fi
 
+# Hosted-platform mode: when BBS_HOSTED is set, the managed-service platform
+# needs an API token to provision storage and clients programmatically. Generate
+# one if it doesn't exist yet (first boot under hosted mode, or after operator
+# rotation). The token's plaintext is shown only once in the docker logs — the
+# DB only keeps the SHA-256 hash, matching how regular API tokens work.
+case "${BBS_HOSTED:-0}" in 1|true|yes|TRUE|YES)
+    EXISTING=$(mysql -u bbs -p"$DB_PASS" bbs -N -e "SELECT value FROM settings WHERE \`key\` = 'hosted_platform_token_id'" 2>/dev/null || echo "")
+    if [ -z "$EXISTING" ]; then
+        PLATFORM_TOKEN="bbs_tok_$(openssl rand -hex 24)"
+        PLATFORM_HASH=$(echo -n "$PLATFORM_TOKEN" | sha256sum | awk '{print $1}')
+        ADMIN_ID=$(mysql -u bbs -p"$DB_PASS" bbs -N -e "SELECT id FROM users WHERE username = 'admin' LIMIT 1" 2>/dev/null || echo "1")
+        mysql -u bbs -p"$DB_PASS" bbs -e "INSERT INTO api_tokens (name, token_hash, user_id) VALUES ('Hosted Platform (auto)', '$PLATFORM_HASH', $ADMIN_ID);"
+        TOKEN_ID=$(mysql -u bbs -p"$DB_PASS" bbs -N -e "SELECT LAST_INSERT_ID()" 2>/dev/null)
+        mysql -u bbs -p"$DB_PASS" bbs -e "INSERT INTO settings (\`key\`, value) VALUES ('hosted_platform_token_id', '$TOKEN_ID') ON DUPLICATE KEY UPDATE value = '$TOKEN_ID';"
+        echo ""
+        echo "================================================================"
+        echo "  HOSTED PLATFORM API TOKEN — shown only once, save it now!"
+        echo "================================================================"
+        echo "  $PLATFORM_TOKEN"
+        echo "================================================================"
+        echo "  Use as: Authorization: Bearer <token>"
+        echo "  Endpoints: /api/v1/* (see AdminApiController)"
+        echo "  Regenerate by deleting the row in settings (key="
+        echo "  hosted_platform_token_id) and restarting the container."
+        echo "================================================================"
+        echo ""
+    fi
+    ;;
+esac
+
 # Run pending migrations
 if [ -d "/var/www/bbs/migrations" ]; then
     echo "Running migrations..."

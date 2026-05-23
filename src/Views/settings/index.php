@@ -61,11 +61,13 @@ $updateAvailable = $updateService->isUpdateAvailable();
             <?php endif; ?>
         </a>
     </li>
+    <?php if (!\BBS\Core\Config::isHosted()): ?>
     <li class="nav-item d-sm-none">
         <a class="nav-link" href="/storage-locations">
             <i class="bi bi-hdd-stack me-1"></i><span class="tab-label">Storage</span>
         </a>
     </li>
+    <?php endif; ?>
 </ul>
 <div class="client-tab-content border rounded-bottom p-4 mb-4 shadow-sm">
 
@@ -212,6 +214,7 @@ $updateAvailable = $updateService->isUpdateAvailable();
                 </div>
             </div>
 
+            <?php if (!\BBS\Core\Config::isHosted()): ?>
             <div class="card border-0 shadow-sm mt-4">
                 <div class="card-header fw-semibold">
                     <i class="bi bi-shield-check me-1"></i> Server Backups
@@ -258,6 +261,7 @@ $updateAvailable = $updateService->isUpdateAvailable();
                     </div>
                 </div>
             </div>
+            <?php endif; ?>
         </div>
     </div>
 

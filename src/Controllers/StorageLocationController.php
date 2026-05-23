@@ -9,6 +9,7 @@ class StorageLocationController extends Controller
 {
     public function index(): void
     {
+        $this->denyIfHosted();
         $this->requireAdmin();
 
         $locations = $this->db->fetchAll("SELECT * FROM storage_locations ORDER BY is_default DESC, label");
@@ -69,6 +70,7 @@ class StorageLocationController extends Controller
 
     public function store(): void
     {
+        $this->denyIfHosted();
         $this->requireAdmin();
         $this->verifyCsrf();
 
@@ -106,6 +108,7 @@ class StorageLocationController extends Controller
 
     public function update(int $id): void
     {
+        $this->denyIfHosted();
         $this->requireAdmin();
         $this->verifyCsrf();
 
@@ -153,6 +156,7 @@ class StorageLocationController extends Controller
 
     public function destroy(int $id): void
     {
+        $this->denyIfHosted();
         $this->requireAdmin();
         $this->verifyCsrf();
 
@@ -189,6 +193,7 @@ class StorageLocationController extends Controller
      */
     public function saveS3(): void
     {
+        $this->denyIfHosted();
         $this->requireAdmin();
         $this->verifyCsrf();
 
@@ -242,6 +247,7 @@ class StorageLocationController extends Controller
      */
     public function testS3(): void
     {
+        $this->denyIfHosted();
         $this->requireAdmin();
         $this->verifyCsrf();
 
@@ -257,6 +263,7 @@ class StorageLocationController extends Controller
      */
     public function listS3Backups(): void
     {
+        $this->denyIfHosted();
         $this->requireAdmin();
         $this->verifyCsrf();
 
@@ -311,6 +318,7 @@ class StorageLocationController extends Controller
      */
     public function restoreS3Backup(): void
     {
+        $this->denyIfHosted();
         $this->requireAdmin();
         $this->verifyCsrf();
 
@@ -408,7 +416,14 @@ class StorageLocationController extends Controller
      * Write all storage location paths to /etc/bbs/allowed-storage-paths
      * so bbs-ssh-helper can validate repo directory creation on those paths.
      */
-    private function updateAllowedPaths(): void
+    /**
+     * Rebuilds /etc/bbs/allowed-storage-paths from the current
+     * storage_locations table. Called after any insert/update/delete so
+     * bbs-ssh-helper's path allow-list stays in sync. Public so the
+     * admin API can call it after creating a storage location via
+     * POST /api/v1/storage.
+     */
+    public function updateAllowedPaths(): void
     {
         $locations = $this->db->fetchAll("SELECT path FROM storage_locations");
         $paths = array_column($locations, 'path');

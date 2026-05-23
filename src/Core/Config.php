@@ -32,4 +32,24 @@ class Config
     {
         return self::get('APP_DEBUG', 'false') === 'true';
     }
+
+    /**
+     * Hosted-mode gate. When BBS_HOSTED=1 in the environment (typically set
+     * by a docker-compose file for a managed-service deployment), the
+     * customer-facing UI hides storage-management surfaces (storage
+     * locations, remote SSH configs, S3 sync, server backups) because the
+     * hosting platform owns all infrastructure. The platform itself
+     * provisions repositories using a single managed default storage
+     * location via the API. Not user-toggleable, not stored in the
+     * settings table — only the env var controls this.
+     */
+    public static function isHosted(): bool
+    {
+        // Read directly from env without triggering full Dotenv load so
+        // this stays cheap even when called from hot paths. docker-compose
+        // and bbs-install both inject env vars at the process level, which
+        // PHP picks up via $_ENV / getenv without dotenv parsing.
+        $value = $_ENV['BBS_HOSTED'] ?? getenv('BBS_HOSTED');
+        return $value === '1' || $value === 'true' || $value === 'yes';
+    }
 }
