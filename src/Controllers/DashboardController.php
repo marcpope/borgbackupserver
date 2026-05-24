@@ -130,6 +130,14 @@ class DashboardController extends Controller
             WHERE bj.task_type = 'backup' AND bj.status = 'completed' AND {$agentWhere}
             ORDER BY bj.completed_at DESC LIMIT 1
         ", $agentParams);
+        $backups24hRow = $this->db->fetchOne("
+            SELECT COUNT(*) AS c
+            FROM backup_jobs bj
+            JOIN agents a ON a.id = bj.agent_id
+            WHERE bj.task_type = 'backup' AND bj.status = 'completed'
+              AND bj.completed_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR)
+              AND {$agentWhere}
+        ", $agentParams);
 
         // --- Server identity ---
         $bbsVersion = (new \BBS\Services\UpdateService())->getCurrentVersion();
@@ -155,6 +163,7 @@ class DashboardController extends Controller
             'totalOriginalBytes' => (int) ($origRow['orig'] ?? 0),
             'totalDiskBytes' => (int) ($diskRow['on_disk'] ?? 0),
             'lastBackup' => $lastBackup ?: null,
+            'backupsLast24h' => (int) ($backups24hRow['c'] ?? 0),
             'bbsVersion' => $bbsVersion,
             'osName' => $osName,
             'uptimeSec' => $uptimeSec,

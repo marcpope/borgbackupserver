@@ -247,6 +247,42 @@ $dfFix = function (string $s): string {
 .v2 .mini-stat .k { color: var(--bs-secondary-color); }
 .v2 .mini-stat .v { font-weight: 600; font-variant-numeric: tabular-nums; }
 
+/* Backup Summary: 3-col x 2-row grid of stat tiles with circular icons. */
+.v2 .summary-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 12px;
+}
+.v2 .summary-tile {
+    background: rgba(255,255,255,0.025);
+    border: 1px solid rgba(255,255,255,0.05);
+    border-radius: 10px;
+    padding: 14px 8px 16px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+}
+.v2 .summary-tile .stat-icon {
+    width: 44px; height: 44px;
+    border-radius: 50%;
+    display: inline-flex;
+    align-items: center; justify-content: center;
+    font-size: 1.25rem;
+    margin-bottom: 10px;
+}
+.v2 .summary-tile .icon-blue   { background: rgba(59,130,246,0.18);  color: #60a5fa; box-shadow: 0 0 0 1px rgba(59,130,246,0.25); }
+.v2 .summary-tile .icon-purple { background: rgba(168,85,247,0.18);  color: #c084fc; box-shadow: 0 0 0 1px rgba(168,85,247,0.25); }
+.v2 .summary-tile .icon-cyan   { background: rgba(6,182,212,0.18);   color: #22d3ee; box-shadow: 0 0 0 1px rgba(6,182,212,0.25); }
+.v2 .summary-tile .icon-green  { background: rgba(34,197,94,0.18);   color: #4ade80; box-shadow: 0 0 0 1px rgba(34,197,94,0.25); }
+.v2 .summary-tile .icon-orange { background: rgba(245,158,11,0.18);  color: #fbbf24; box-shadow: 0 0 0 1px rgba(245,158,11,0.25); }
+.v2 .summary-tile .stat-label  { font-size: 0.78rem; color: var(--bs-secondary-color); margin-bottom: 6px; }
+.v2 .summary-tile .stat-value  { font-size: 1.5rem; font-weight: 700; line-height: 1.1; font-variant-numeric: tabular-nums; }
+
+@media (max-width: 575px) {
+    .v2 .summary-grid { grid-template-columns: repeat(2, 1fr); }
+}
+
 .v2 .table thead th {
     font-size: 0.875rem;
     text-transform: none;
@@ -357,13 +393,38 @@ $dfFix = function (string $s): string {
                     <i class="bi bi-shield-check me-2"></i>Backup Summary
                 </div>
                 <div class="card-body">
-                    <div class="mini-stat"><span class="k"><i class="bi bi-archive me-1"></i>Recovery points</span><span class="v"><?= number_format($totalArchiveCount) ?></span></div>
-                    <div class="mini-stat"><span class="k"><i class="bi bi-files me-1"></i>Original data</span><span class="v"><?= ServerStats::formatBytes($totalOriginalBytes) ?></span></div>
-                    <div class="mini-stat"><span class="k"><i class="bi bi-hdd me-1"></i>On disk (deduped)</span><span class="v"><?= ServerStats::formatBytes($totalDiskBytes) ?></span></div>
-                    <div class="mini-stat"><span class="k"><i class="bi bi-magic me-1"></i>Dedup savings</span><span class="v text-success"><?= $dedupSavingsPct ?>%</span></div>
-                    <?php if ($lastBackup): ?>
-                    <div class="mini-stat"><span class="k"><i class="bi bi-clock-history me-1"></i>Last backup</span><span class="v"><?= TimeHelper::ago($lastBackup['completed_at']) ?></span></div>
-                    <?php endif; ?>
+                    <div class="summary-grid">
+                        <div class="summary-tile">
+                            <div class="stat-icon icon-blue"><i class="bi bi-archive"></i></div>
+                            <div class="stat-label">Recovery points</div>
+                            <div class="stat-value"><?= number_format($totalArchiveCount) ?></div>
+                        </div>
+                        <div class="summary-tile">
+                            <div class="stat-icon icon-purple"><i class="bi bi-file-earmark"></i></div>
+                            <div class="stat-label">Original data</div>
+                            <div class="stat-value"><?= ServerStats::formatBytes($totalOriginalBytes) ?></div>
+                        </div>
+                        <div class="summary-tile">
+                            <div class="stat-icon icon-cyan"><i class="bi bi-hdd"></i></div>
+                            <div class="stat-label">On disk (deduped)</div>
+                            <div class="stat-value"><?= ServerStats::formatBytes($totalDiskBytes) ?></div>
+                        </div>
+                        <div class="summary-tile">
+                            <div class="stat-icon icon-green"><i class="bi bi-stars"></i></div>
+                            <div class="stat-label">Dedup savings</div>
+                            <div class="stat-value text-success"><?= $dedupSavingsPct ?>%</div>
+                        </div>
+                        <div class="summary-tile">
+                            <div class="stat-icon icon-orange"><i class="bi bi-clock-history"></i></div>
+                            <div class="stat-label">Last backup</div>
+                            <div class="stat-value"><?= $lastBackup ? TimeHelper::ago($lastBackup['completed_at']) : '—' ?></div>
+                        </div>
+                        <div class="summary-tile">
+                            <div class="stat-icon icon-blue"><i class="bi bi-graph-up-arrow"></i></div>
+                            <div class="stat-label">Backups (Last 24h)</div>
+                            <div class="stat-value"><?= number_format($backupsLast24h ?? 0) ?></div>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
