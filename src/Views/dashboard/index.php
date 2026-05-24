@@ -264,7 +264,7 @@ $dfFix = function (string $s): string {
     background: rgba(255,255,255,0.025);
     border: 1px solid rgba(255,255,255,0.05);
     border-radius: 8px;
-    padding: 13px 4px 15px;
+    padding: 18px 4px 20px;
     display: flex;
     flex-direction: column;
     align-items: center;
