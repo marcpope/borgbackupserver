@@ -403,32 +403,32 @@ $dfFix = function (string $s): string {
                     <div class="summary-grid">
                         <div class="summary-tile">
                             <div class="stat-icon icon-blue"><i class="bi bi-archive"></i></div>
-                            <div class="stat-label">Recovery points</div>
+                            <div class="stat-label">Recovery Points</div>
                             <div class="stat-value"><?= number_format($totalArchiveCount) ?></div>
                         </div>
                         <div class="summary-tile">
                             <div class="stat-icon icon-purple"><i class="bi bi-file-earmark"></i></div>
-                            <div class="stat-label">Original data</div>
+                            <div class="stat-label">Original Data</div>
                             <div class="stat-value"><?= ServerStats::formatBytes($totalOriginalBytes) ?></div>
                         </div>
                         <div class="summary-tile">
                             <div class="stat-icon icon-cyan"><i class="bi bi-hdd"></i></div>
-                            <div class="stat-label">On disk (deduped)</div>
+                            <div class="stat-label">On Disk</div>
                             <div class="stat-value"><?= ServerStats::formatBytes($totalDiskBytes) ?></div>
                         </div>
                         <div class="summary-tile">
                             <div class="stat-icon icon-green"><i class="bi bi-stars"></i></div>
-                            <div class="stat-label">Dedup savings</div>
+                            <div class="stat-label">Dedup Savings</div>
                             <div class="stat-value text-success"><?= $dedupSavingsPct ?>%</div>
                         </div>
                         <div class="summary-tile">
                             <div class="stat-icon icon-orange"><i class="bi bi-clock-history"></i></div>
-                            <div class="stat-label">Last backup</div>
+                            <div class="stat-label">Last Backup</div>
                             <div class="stat-value"><?= $lastBackup ? TimeHelper::ago($lastBackup['completed_at']) : '—' ?></div>
                         </div>
                         <div class="summary-tile">
                             <div class="stat-icon icon-blue"><i class="bi bi-graph-up-arrow"></i></div>
-                            <div class="stat-label">Backups (Last 24h)</div>
+                            <div class="stat-label">Backups (24h)</div>
                             <div class="stat-value"><?= number_format($backupsLast24h ?? 0) ?></div>
                         </div>
                     </div>
