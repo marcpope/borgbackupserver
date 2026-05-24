@@ -483,4 +483,21 @@ class ServerStats
         }
         return round($size, $precision) . "\u{00A0}" . $units[$i];
     }
+
+    /**
+     * Render "used / total" with the unit collapsed when both sides match.
+     * Example: 2.3 GB used of 31 GB → "2.3 / 31 GB". Different units stay
+     * fully labeled.
+     */
+    public static function formatBytesPair(int $used, int $total, int $precision = 1): string
+    {
+        $u = self::formatBytes($used, $precision);
+        $t = self::formatBytes($total, $precision);
+        $uParts = explode("\u{00A0}", $u);
+        $tParts = explode("\u{00A0}", $t);
+        if (count($uParts) === 2 && count($tParts) === 2 && $uParts[1] === $tParts[1]) {
+            return $uParts[0] . ' / ' . $tParts[0] . "\u{00A0}" . $tParts[1];
+        }
+        return $u . ' / ' . $t;
+    }
 }

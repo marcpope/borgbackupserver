@@ -80,10 +80,10 @@ $dfFix = function (string $s): string {
     pointer-events: none;
 }
 /* Right column also fixed-width so the bar's right edge is consistent
-   across rows. min-width: 80 was producing dead whitespace between
-   the bar and short values like "0.48". */
+   across rows. Wide enough to fit "used / total" for memory (e.g.
+   "2.3 / 31 GB"); the progress bar (flex:1) shrinks to compensate. */
 .v2 .health-row .val {
-    flex: 0 0 60px;
+    flex: 0 0 95px;
     font-size: 0.72rem;
     font-variant-numeric: tabular-nums;
     text-align: right;
@@ -315,7 +315,7 @@ $dfFix = function (string $s): string {
                             <div class="progress-bar" id="mem-fill" style="width: <?= $memPct ?>%; background-color: <?= $memColor ?>;"></div>
                             <span class="progress-label"><?= $memPct ?>%</span>
                         </div>
-                        <span class="val" id="mem-val"><?= ServerStats::formatBytes($memory['used']) ?></span>
+                        <span class="val" id="mem-val"><?= ServerStats::formatBytesPair($memory['used'] ?? 0, $memory['total'] ?? 0) ?></span>
                     </div>
                     <?php if (!empty($partitions)): ?>
                     <div id="health-partitions">
