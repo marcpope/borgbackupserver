@@ -168,19 +168,23 @@ def _rewrite_borg_rsh_for_dropbear(rsh):
 
 
 def _lockdown_key_windows(path):
-    """Set SSH key permissions so only SYSTEM and Administrators can read it.
+    """Set SSH key permissions so only SYSTEM and Administrators can access it.
+
+    SYSTEM gets FullControl (the agent service runs as SYSTEM and must be able
+    to overwrite/delete this file on retry and cleanup). Administrators get
+    Read. OpenSSH on Windows only refuses keys when *other* users can read —
+    granting the owner Write/Delete is fine.
 
     Uses PowerShell to create a clean ACL from scratch — no leftover ACEs.
     SIDs are used instead of group names for locale independence.
     Falls back to icacls if PowerShell is unavailable.
     """
-    # PowerShell: build a fresh ACL with only SYSTEM + Administrators read access
     ps_cmd = (
         "$acl = New-Object System.Security.AccessControl.FileSecurity; "
         "$acl.SetAccessRuleProtection($true, $false); "
         "$acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule("
         "(New-Object System.Security.Principal.SecurityIdentifier 'S-1-5-18'), "
-        "[System.Security.AccessControl.FileSystemRights]::Read, "
+        "[System.Security.AccessControl.FileSystemRights]::FullControl, "
         "[System.Security.AccessControl.AccessControlType]::Allow))); "
         "$acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule("
         "(New-Object System.Security.Principal.SecurityIdentifier 'S-1-5-32-544'), "
@@ -210,9 +214,27 @@ def _lockdown_key_windows(path):
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
         )
     subprocess.run(
-        ["icacls", path, "/grant:r", "*S-1-5-18:(R)", "*S-1-5-32-544:(R)"],
+        ["icacls", path, "/grant:r", "*S-1-5-18:(F)", "*S-1-5-32-544:(R)"],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
     )
+
+
+def _clear_stale_key_windows(path):
+    """Delete a previously-locked-down key file before rewriting.
+
+    Older agents granted SYSTEM only Read, so the leftover file blocks
+    open("w"). Grant ourselves perms via icacls, then delete.
+    """
+    if not os.path.exists(path):
+        return
+    subprocess.run(
+        ["icacls", path, "/grant", "*S-1-5-18:(F)"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+    )
+    try:
+        os.unlink(path)
+    except Exception as e:
+        logger.warning("Could not remove stale remote SSH key at {}: {}".format(path, e))
 
 
 def _verify_key_readable(path):
@@ -2358,6 +2380,8 @@ def execute_restore_pg(config, task):
     if remote_ssh_key:
         try:
             normalized_key = remote_ssh_key.replace("\r\n", "\n").replace("\r", "\n").rstrip() + "\n"
+            if IS_WINDOWS:
+                _clear_stale_key_windows(remote_key_path)
             with open(remote_key_path, "w") as kf:
                 kf.write(normalized_key)
             if IS_WINDOWS:
@@ -2573,6 +2597,8 @@ def execute_restore_mysql(config, task):
     if remote_ssh_key:
         try:
             normalized_key = remote_ssh_key.replace("\r\n", "\n").replace("\r", "\n").rstrip() + "\n"
+            if IS_WINDOWS:
+                _clear_stale_key_windows(remote_key_path)
             with open(remote_key_path, "w") as kf:
                 kf.write(normalized_key)
             if IS_WINDOWS:
@@ -2801,6 +2827,8 @@ def execute_restore_mongo(config, task):
     if remote_ssh_key:
         try:
             normalized_key = remote_ssh_key.replace("\r\n", "\n").replace("\r", "\n").rstrip() + "\n"
+            if IS_WINDOWS:
+                _clear_stale_key_windows(remote_key_path)
             with open(remote_key_path, "w") as kf:
                 kf.write(normalized_key)
             if IS_WINDOWS:
@@ -3194,6 +3222,8 @@ def _execute_task_inner(config, task, job_id, task_type, command, env_vars,
         try:
             # Normalize line endings (Windows \r\n -> Unix \n) and ensure trailing newline
             normalized_key = remote_ssh_key.replace("\r\n", "\n").replace("\r", "\n").rstrip() + "\n"
+            if IS_WINDOWS:
+                _clear_stale_key_windows(remote_key_path)
             with open(remote_key_path, "w") as kf:
                 kf.write(normalized_key)
             if IS_WINDOWS:
