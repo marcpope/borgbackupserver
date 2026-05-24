@@ -108,19 +108,29 @@ $dfFix = function (string $s): string {
 .v2 .disk-pct .pct-suffix { font-size: 0.8rem; font-weight: 600; opacity: 0.75; margin-left: 1px; }
 .v2 .cpu-status { font-size: 0.7rem; margin-top: 4px; font-weight: 500; }
 
-/* Memory thermometer */
+/* Memory thermometer + stat column. Stats on the left (total / used / %),
+   thermometer on the right; the % is the prominent number. */
 .v2 .mem-wrap {
     display: flex;
     align-items: center;
     justify-content: center;
-    gap: 10px;
-    margin: 2px 0 6px;
+    gap: 14px;
+    margin: 2px 0 4px;
     flex: 1;
 }
-.v2 .mem-pct { font-size: 1.15rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+.v2 .mem-stats {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 3px;
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+}
+.v2 .mem-stat { font-size: 0.72rem; color: var(--bs-body-color); line-height: 1.2; }
+.v2 .mem-stat .lbl { color: var(--bs-secondary-color); font-weight: 400; }
+.v2 .mem-pct { font-size: 1.25rem; font-weight: 700; margin-top: 4px; line-height: 1; }
 .v2 .mem-thermo { height: 110px; width: auto; }
 .v2 .mem-thermo .fill { transition: y 0.6s ease, height 0.6s ease, fill 0.3s; }
-.v2 .mem-size { font-size: 0.75rem; color: var(--bs-secondary-color); font-variant-numeric: tabular-nums; }
 
 /* Disk strip — full width across the bottom. Horizontal: head | numbers | bar */
 .v2 .health-tile.disk {
@@ -432,7 +442,11 @@ $dfFix = function (string $s): string {
                                 <i class="bi bi-memory"></i><span>Memory Usage</span>
                             </div>
                             <div class="mem-wrap">
-                                <div class="mem-pct" id="mem-pct"><?= round($memPct, 1) ?>%</div>
+                                <div class="mem-stats">
+                                    <div class="mem-stat"><span class="lbl">Total:</span> <span id="mem-total"><?= ServerStats::formatBytes($memTotal) ?></span></div>
+                                    <div class="mem-stat"><span class="lbl">Used:</span> <span id="mem-used"><?= ServerStats::formatBytes($memUsed) ?></span></div>
+                                    <div class="mem-pct" id="mem-pct"><?= round($memPct, 1) ?>%</div>
+                                </div>
                                 <svg class="mem-thermo" viewBox="0 0 100 220" xmlns="http://www.w3.org/2000/svg">
                                     <rect x="40" y="10" width="20" height="165" rx="10" fill="rgba(255,255,255,0.04)" stroke="rgba(255,255,255,0.22)" stroke-width="2"/>
                                     <circle cx="50" cy="185" r="20" fill="<?= $memColor ?>" opacity="0.95"/>
@@ -453,7 +467,6 @@ $dfFix = function (string $s): string {
                                     </g>
                                 </svg>
                             </div>
-                            <div class="mem-size" id="mem-size"><?= ServerStats::formatBytesPair($memUsed, $memTotal) ?></div>
                         </div>
 
                         <!-- Disk (single featured partition) — full-width strip -->
@@ -986,7 +999,8 @@ document.addEventListener('DOMContentLoaded', function () {
         const cpuStatus = document.getElementById('cpu-status');
         const memFill   = document.getElementById('mem-fill');
         const memPctEl  = document.getElementById('mem-pct');
-        const memSizeEl = document.getElementById('mem-size');
+        const memUsedEl = document.getElementById('mem-used');
+        const memTotalEl= document.getElementById('mem-total');
         const diskPctEl = document.getElementById('disk-pct');
         const diskSize  = document.getElementById('disk-size');
         const diskFill  = document.getElementById('disk-fill');
@@ -1030,7 +1044,8 @@ document.addEventListener('DOMContentLoaded', function () {
                     memFill.setAttribute('height', String(h));
                     memFill.setAttribute('fill', color);
                     if (memPctEl) memPctEl.textContent = (Math.round(p * 10) / 10) + '%';
-                    if (memSizeEl) memSizeEl.textContent = d.memory.used_label;
+                    if (memUsedEl) memUsedEl.textContent = d.memory.used_label;
+                    if (memTotalEl) memTotalEl.textContent = d.memory.total_label;
                 }
 
                 if (d.disk && diskFill) {

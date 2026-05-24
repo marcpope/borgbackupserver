@@ -213,7 +213,8 @@ class DashboardController extends Controller
             ],
             'memory' => [
                 'percent' => $mem['percent'] ?? 0,
-                'used_label' => ServerStats::formatBytesPair($mem['used'] ?? 0, $mem['total'] ?? 0),
+                'used_label' => ServerStats::formatBytes($mem['used'] ?? 0),
+                'total_label' => ServerStats::formatBytes($mem['total'] ?? 0),
             ],
             'disk' => $disk ? [
                 'mount' => $disk['mount'],
