@@ -247,37 +247,38 @@ $dfFix = function (string $s): string {
 .v2 .mini-stat .k { color: var(--bs-secondary-color); }
 .v2 .mini-stat .v { font-weight: 600; font-variant-numeric: tabular-nums; }
 
-/* Backup Summary: 3-col x 2-row grid of stat tiles with circular icons. */
+/* Backup Summary: 3-col x 2-row grid of compact stat tiles. Sized to
+   match the Server Health card height alongside it. */
 .v2 .summary-grid {
     display: grid;
     grid-template-columns: repeat(3, 1fr);
-    gap: 12px;
+    gap: 6px;
 }
 .v2 .summary-tile {
     background: rgba(255,255,255,0.025);
     border: 1px solid rgba(255,255,255,0.05);
-    border-radius: 10px;
-    padding: 14px 8px 16px;
+    border-radius: 8px;
+    padding: 8px 4px 10px;
     display: flex;
     flex-direction: column;
     align-items: center;
     text-align: center;
 }
 .v2 .summary-tile .stat-icon {
-    width: 44px; height: 44px;
+    width: 30px; height: 30px;
     border-radius: 50%;
     display: inline-flex;
     align-items: center; justify-content: center;
-    font-size: 1.25rem;
-    margin-bottom: 10px;
+    font-size: 0.9rem;
+    margin-bottom: 4px;
 }
 .v2 .summary-tile .icon-blue   { background: rgba(59,130,246,0.18);  color: #60a5fa; box-shadow: 0 0 0 1px rgba(59,130,246,0.25); }
 .v2 .summary-tile .icon-purple { background: rgba(168,85,247,0.18);  color: #c084fc; box-shadow: 0 0 0 1px rgba(168,85,247,0.25); }
 .v2 .summary-tile .icon-cyan   { background: rgba(6,182,212,0.18);   color: #22d3ee; box-shadow: 0 0 0 1px rgba(6,182,212,0.25); }
 .v2 .summary-tile .icon-green  { background: rgba(34,197,94,0.18);   color: #4ade80; box-shadow: 0 0 0 1px rgba(34,197,94,0.25); }
 .v2 .summary-tile .icon-orange { background: rgba(245,158,11,0.18);  color: #fbbf24; box-shadow: 0 0 0 1px rgba(245,158,11,0.25); }
-.v2 .summary-tile .stat-label  { font-size: 0.78rem; color: var(--bs-secondary-color); margin-bottom: 6px; }
-.v2 .summary-tile .stat-value  { font-size: 1.5rem; font-weight: 700; line-height: 1.1; font-variant-numeric: tabular-nums; }
+.v2 .summary-tile .stat-label  { font-size: 0.68rem; color: var(--bs-secondary-color); margin-bottom: 3px; line-height: 1.15; }
+.v2 .summary-tile .stat-value  { font-size: 1.05rem; font-weight: 700; line-height: 1.15; font-variant-numeric: tabular-nums; }
 
 @media (max-width: 575px) {
     .v2 .summary-grid { grid-template-columns: repeat(2, 1fr); }
