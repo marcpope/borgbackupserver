@@ -38,56 +38,92 @@ $dfFix = function (string $s): string {
 ?>
 
 <style>
-.v2 .health-row {
+/* Server Health: three-tile gauges (CPU dial, memory thermometer, disk bar).
+   Single featured partition only — full disk list lives in Storage Locations. */
+.v2 .health-tiles {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 12px;
+    align-items: stretch;
+}
+.v2 .health-tile {
+    background: rgba(255,255,255,0.025);
+    border-radius: 10px;
+    padding: 14px 10px 16px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    min-height: 230px;
+}
+.v2 .health-tile .tile-head {
     display: flex;
     align-items: center;
     gap: 8px;
-    margin-bottom: 6px;
+    margin-bottom: 10px;
+    font-size: 0.85rem;
+    color: var(--bs-body-color);
+    font-weight: 500;
+    max-width: 100%;
 }
-.v2 .health-row:last-child { margin-bottom: 0; }
-.v2 .health-row .lbl {
-    /* Fixed-width label column so every progress bar starts at the same
-       x-coordinate — long mount paths and short labels like "CPU" no
-       longer push the bars to different widths between rows. Truncates
-       with ellipsis past 95px. */
-    flex: 0 0 95px;
-    font-size: 0.72rem;
-    color: var(--bs-secondary-color);
-    font-weight: 400;
-    text-align: left;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+.v2 .health-tile .tile-head .icon {
+    display: inline-flex;
+    width: 28px; height: 28px;
+    border-radius: 7px;
+    align-items: center; justify-content: center;
+    font-size: 1rem;
 }
-.v2 .health-row .progress {
-    flex: 1;
-    height: 0.95rem;
-    font-size: 0.66rem;
-    font-weight: 600;
-    position: relative;
-}
-.v2 .health-row .progress-bar { transition: width 0.4s, background-color 0.2s; }
-/* Overlay label spans the full progress container, so the % is always
-   visible and centered regardless of how narrow the filled portion is. */
-.v2 .health-row .progress-label {
-    position: absolute;
-    inset: 0;
+.v2 .health-tile.cpu  .icon { background: rgba(239,68,68,0.15);  color: #ef4444; }
+.v2 .health-tile.mem  .icon { background: rgba(13,202,240,0.15); color: #0dcaf0; }
+.v2 .health-tile.disk .icon { background: rgba(245,158,11,0.18); color: #f59e0b; }
+
+/* CPU gauge */
+.v2 .cpu-gauge { width: 100%; max-width: 170px; height: auto; display: block; }
+.v2 .cpu-gauge .arc-bg { stroke: rgba(255,255,255,0.08); }
+.v2 .cpu-gauge .arc-fg { transition: stroke-dashoffset 0.6s ease, stroke 0.3s; }
+.v2 .cpu-gauge .needle { transition: transform 0.6s ease, stroke 0.3s; transform-origin: 100px 110px; transform-box: fill-box; }
+.v2 .cpu-pct { font-size: 1.7rem; font-weight: 700; line-height: 1; margin-top: -22px; }
+.v2 .cpu-pct .pct-suffix,
+.v2 .disk-pct .pct-suffix { font-size: 0.95rem; font-weight: 600; opacity: 0.75; margin-left: 1px; }
+.v2 .cpu-status { font-size: 0.72rem; margin-top: 6px; font-weight: 500; }
+
+/* Memory thermometer */
+.v2 .mem-wrap {
     display: flex;
     align-items: center;
     justify-content: center;
-    color: #fff;
-    text-shadow: 0 2px 3px rgba(0,0,0,0.9), 0 2px 6px rgba(0,0,0,0.9);
-    pointer-events: none;
+    gap: 10px;
+    margin: 4px 0 8px;
+    flex: 1;
 }
-/* Right column also fixed-width so the bar's right edge is consistent
-   across rows. Wide enough to fit "used / total" for memory (e.g.
-   "2.3 / 31 GB"); the progress bar (flex:1) shrinks to compensate. */
-.v2 .health-row .val {
-    flex: 0 0 95px;
-    font-size: 0.72rem;
-    font-variant-numeric: tabular-nums;
-    text-align: right;
-    color: var(--bs-body-color);
+.v2 .mem-pct { font-size: 1.4rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+.v2 .mem-thermo { height: 150px; width: auto; }
+.v2 .mem-thermo .fill { transition: y 0.6s ease, height 0.6s ease, fill 0.3s; }
+.v2 .mem-size { font-size: 0.75rem; color: var(--bs-secondary-color); font-variant-numeric: tabular-nums; }
+
+/* Disk */
+.v2 .health-tile.disk { justify-content: flex-start; }
+.v2 .disk-pct { font-size: 2.3rem; font-weight: 700; line-height: 1.1; margin-top: 18px; }
+.v2 .disk-size { font-size: 0.8rem; color: var(--bs-secondary-color); margin: 6px 0 16px; }
+.v2 .disk-bar {
+    width: 90%;
+    height: 14px;
+    background: rgba(255,255,255,0.08);
+    border-radius: 7px;
+    overflow: hidden;
+    margin-top: auto;
+}
+.v2 .disk-bar-fill {
+    height: 100%;
+    border-radius: 7px;
+    transition: width 0.6s ease, background-color 0.3s;
+}
+
+/* Stack tiles on narrow screens — three side-by-side gauges get cramped
+   under ~520px of card width. */
+@media (max-width: 575px) {
+    .v2 .health-tiles { grid-template-columns: 1fr; }
+    .v2 .health-tile { min-height: auto; }
 }
 
 /* File Catalog card — stats table with hairline separators (no striped bg).
@@ -296,45 +332,110 @@ $dfFix = function (string $s): string {
                 </div>
                 <div class="card-body">
                     <?php
-                        $cpuPct = $cpuLoad['percent'] ?? 0;
-                        $memPct = $memory['percent'] ?? 0;
-                        $cpuColor = $cpuPct > 80 ? '#dc3545' : ($cpuPct > 50 ? '#ffc107' : '#198754');
-                        $memColor = $memPct > 85 ? '#dc3545' : ($memPct > 60 ? '#ffc107' : '#0dcaf0');
+                        $cpuPct = (float) ($cpuLoad['percent'] ?? 0);
+                        $memPct = (float) ($memory['percent'] ?? 0);
+                        $memUsed = (int) ($memory['used'] ?? 0);
+                        $memTotal = (int) ($memory['total'] ?? 0);
+                        $cpuColor = $cpuPct > 80 ? '#ef4444' : ($cpuPct > 50 ? '#f59e0b' : '#22c55e');
+                        $cpuStatus = $cpuPct > 80 ? 'High Usage' : ($cpuPct > 50 ? 'Moderate' : 'Healthy');
+                        $memColor = $memPct > 85 ? '#ef4444' : ($memPct > 60 ? '#f59e0b' : '#0dcaf0');
+
+                        // Featured partition: /var/bbs preferred (where backups live),
+                        // fall back to / so this card never goes blank on odd layouts.
+                        $diskPart = null;
+                        foreach (($partitions ?? []) as $p) {
+                            if (($p['mount'] ?? '') === '/var/bbs') { $diskPart = $p; break; }
+                        }
+                        if (!$diskPart) {
+                            foreach (($partitions ?? []) as $p) {
+                                if (($p['mount'] ?? '') === '/') { $diskPart = $p; break; }
+                            }
+                        }
+                        $diskMount = $diskPart['mount'] ?? '/';
+                        $diskPct  = (float) ($diskPart['percent'] ?? 0);
+                        $diskSize = $dfFix($diskPart['size'] ?? '0');
+                        $diskColor = $diskPct >= 90 ? '#ef4444' : ($diskPct >= 75 ? '#f59e0b' : '#0dcaf0');
+
+                        $arcLen    = 251.33;                              // π × radius 80, semicircle
+                        $cpuOffset = $arcLen * (1 - $cpuPct / 100);
+                        $cpuAngle  = -90 + ($cpuPct * 1.8);               // -90°…+90° (0%…100%)
+                        $memFillH  = 155 * ($memPct / 100);               // tube interior is 155 tall
+                        $memFillY  = 170 - $memFillH;
                     ?>
-                    <div class="health-row">
-                        <span class="lbl">CPU</span>
-                        <div class="progress" role="progressbar" aria-label="CPU usage" aria-valuenow="<?= $cpuPct ?>" aria-valuemin="0" aria-valuemax="100">
-                            <div class="progress-bar" id="cpu-fill" style="width: <?= $cpuPct ?>%; background-color: <?= $cpuColor ?>;"></div>
-                            <span class="progress-label"><?= $cpuPct ?>%</span>
+                    <div class="health-tiles">
+                        <!-- CPU gauge -->
+                        <div class="health-tile cpu">
+                            <div class="tile-head">
+                                <span class="icon"><i class="bi bi-cpu"></i></span>
+                                <span>CPU</span>
+                            </div>
+                            <svg class="cpu-gauge" viewBox="0 0 200 130" xmlns="http://www.w3.org/2000/svg">
+                                <path class="arc-bg" d="M 20 110 A 80 80 0 0 1 180 110" fill="none" stroke-width="14" stroke-linecap="round"/>
+                                <path id="cpu-arc" class="arc-fg" d="M 20 110 A 80 80 0 0 1 180 110" fill="none" stroke="<?= $cpuColor ?>"
+                                      stroke-width="14" stroke-linecap="round"
+                                      stroke-dasharray="<?= $arcLen ?>" stroke-dashoffset="<?= round($cpuOffset, 2) ?>"/>
+                                <g stroke="rgba(255,255,255,0.22)" stroke-width="1.5">
+                                    <?php for ($a = -180; $a <= 0; $a += 18):
+                                        $rad = deg2rad($a);
+                                        $x1 = 100 + 62 * cos($rad); $y1 = 110 + 62 * sin($rad);
+                                        $x2 = 100 + 70 * cos($rad); $y2 = 110 + 70 * sin($rad);
+                                    ?>
+                                    <line x1="<?= round($x1, 2) ?>" y1="<?= round($y1, 2) ?>" x2="<?= round($x2, 2) ?>" y2="<?= round($y2, 2) ?>"/>
+                                    <?php endfor; ?>
+                                </g>
+                                <line id="cpu-needle" class="needle" x1="100" y1="110" x2="100" y2="50"
+                                      stroke="<?= $cpuColor ?>" stroke-width="3" stroke-linecap="round"
+                                      transform="rotate(<?= round($cpuAngle, 2) ?> 100 110)"/>
+                                <circle id="cpu-pivot" cx="100" cy="110" r="5" fill="<?= $cpuColor ?>"/>
+                            </svg>
+                            <div class="cpu-pct"><span id="cpu-pct-num"><?= round($cpuPct, 1) ?></span><span class="pct-suffix">%</span></div>
+                            <div class="cpu-status" id="cpu-status" style="color: <?= $cpuColor ?>"><?= $cpuStatus ?></div>
                         </div>
-                        <span class="val" id="cpu-val"><?= $cpuLoad['1min'] ?></span>
-                    </div>
-                    <div class="health-row">
-                        <span class="lbl">Memory</span>
-                        <div class="progress" role="progressbar" aria-label="Memory usage" aria-valuenow="<?= $memPct ?>" aria-valuemin="0" aria-valuemax="100">
-                            <div class="progress-bar" id="mem-fill" style="width: <?= $memPct ?>%; background-color: <?= $memColor ?>;"></div>
-                            <span class="progress-label"><?= $memPct ?>%</span>
+
+                        <!-- Memory thermometer -->
+                        <div class="health-tile mem">
+                            <div class="tile-head">
+                                <span class="icon"><i class="bi bi-memory"></i></span>
+                                <span>Memory</span>
+                            </div>
+                            <div class="mem-wrap">
+                                <div class="mem-pct" id="mem-pct"><?= round($memPct, 1) ?>%</div>
+                                <svg class="mem-thermo" viewBox="0 0 100 220" xmlns="http://www.w3.org/2000/svg">
+                                    <rect x="40" y="10" width="20" height="165" rx="10" fill="rgba(255,255,255,0.04)" stroke="rgba(255,255,255,0.22)" stroke-width="2"/>
+                                    <circle cx="50" cy="185" r="20" fill="<?= $memColor ?>" opacity="0.95"/>
+                                    <rect x="44" y="170" width="12" height="15" fill="<?= $memColor ?>"/>
+                                    <rect id="mem-fill" class="fill" x="44" y="<?= round($memFillY, 2) ?>" width="12" height="<?= round($memFillH, 2) ?>" fill="<?= $memColor ?>"/>
+                                    <g stroke="rgba(255,255,255,0.3)" stroke-width="1">
+                                        <?php for ($i = 0; $i <= 10; $i++):
+                                            $ty = 15 + ($i * 15.5);
+                                            $w = ($i % 5 === 0) ? 8 : 4;
+                                        ?>
+                                        <line x1="62" y1="<?= $ty ?>" x2="<?= 62 + $w ?>" y2="<?= $ty ?>"/>
+                                        <?php endfor; ?>
+                                    </g>
+                                    <g fill="rgba(255,255,255,0.55)" font-size="10" font-family="inherit">
+                                        <text x="75" y="18">100%</text>
+                                        <text x="75" y="96">50%</text>
+                                        <text x="75" y="174">0%</text>
+                                    </g>
+                                </svg>
+                            </div>
+                            <div class="mem-size" id="mem-size"><?= ServerStats::formatBytesPair($memUsed, $memTotal) ?></div>
                         </div>
-                        <span class="val" id="mem-val"><?= ServerStats::formatBytesPair($memory['used'] ?? 0, $memory['total'] ?? 0) ?></span>
-                    </div>
-                    <?php if (!empty($partitions)): ?>
-                    <div id="health-partitions">
-                    <?php foreach ($partitions as $part): ?>
-                        <?php
-                            $pPct = $part['percent'] ?? 0;
-                            $pColor = $pPct > 90 ? '#dc3545' : ($pPct > 70 ? '#ffc107' : '#6c757d');
-                        ?>
-                    <div class="health-row" data-mount="<?= htmlspecialchars($part['mount']) ?>">
-                        <span class="lbl text-truncate" title="<?= htmlspecialchars($part['mount']) ?>"><?= htmlspecialchars($part['mount']) ?></span>
-                        <div class="progress" role="progressbar" aria-label="<?= htmlspecialchars($part['mount']) ?> usage" aria-valuenow="<?= $pPct ?>" aria-valuemin="0" aria-valuemax="100">
-                            <div class="progress-bar part-fill" style="width: <?= $pPct ?>%; background-color: <?= $pColor ?>;"></div>
-                            <span class="progress-label"><?= $pPct ?>%</span>
+
+                        <!-- Disk (single featured partition) -->
+                        <div class="health-tile disk" data-mount="<?= htmlspecialchars($diskMount) ?>">
+                            <div class="tile-head">
+                                <span class="icon"><i class="bi bi-hdd"></i></span>
+                                <span class="text-truncate" title="<?= htmlspecialchars($diskMount) ?>"><?= htmlspecialchars($diskMount) ?></span>
+                            </div>
+                            <div class="disk-pct"><span id="disk-pct"><?= round($diskPct) ?></span><span class="pct-suffix">%</span></div>
+                            <div class="disk-size" id="disk-size"><?= $diskSize ?></div>
+                            <div class="disk-bar">
+                                <div id="disk-fill" class="disk-bar-fill" style="width: <?= $diskPct ?>%; background-color: <?= $diskColor ?>;"></div>
+                            </div>
                         </div>
-                        <span class="val part-val"><?= $dfFix($part['size']) ?></span>
                     </div>
-                    <?php endforeach; ?>
-                    </div>
-                    <?php endif; ?>
                 </div>
             </div>
         </div>
@@ -843,53 +944,67 @@ document.addEventListener('DOMContentLoaded', function () {
     // --- Server Health: live refresh every 15s ---------------------------
     <?php if ($isAdmin): ?>
     (function () {
-        const cpuFill = document.getElementById('cpu-fill');
-        const cpuVal = document.getElementById('cpu-val');
-        const memFill = document.getElementById('mem-fill');
-        const memVal = document.getElementById('mem-val');
-        const partsEl = document.getElementById('health-partitions');
-        if (!cpuFill && !memFill && !partsEl) return;
+        const cpuArc    = document.getElementById('cpu-arc');
+        const cpuNeedle = document.getElementById('cpu-needle');
+        const cpuPivot  = document.getElementById('cpu-pivot');
+        const cpuPctNum = document.getElementById('cpu-pct-num');
+        const cpuStatus = document.getElementById('cpu-status');
+        const memFill   = document.getElementById('mem-fill');
+        const memPctEl  = document.getElementById('mem-pct');
+        const memSizeEl = document.getElementById('mem-size');
+        const diskPctEl = document.getElementById('disk-pct');
+        const diskSize  = document.getElementById('disk-size');
+        const diskFill  = document.getElementById('disk-fill');
+        if (!cpuArc && !memFill && !diskFill) return;
 
-        function color(pct, high, mid, low) {
-            return pct > high ? '#dc3545' : (pct > mid ? '#ffc107' : low);
+        const ARC_LEN = 251.33;
+
+        function cpuPalette(p) {
+            return p > 80 ? ['#ef4444', 'High Usage']
+                 : p > 50 ? ['#f59e0b', 'Moderate']
+                 :          ['#22c55e', 'Healthy'];
         }
+        function memPalette(p) { return p > 85 ? '#ef4444' : (p > 60 ? '#f59e0b' : '#0dcaf0'); }
+        function diskPalette(p) { return p >= 90 ? '#ef4444' : (p >= 75 ? '#f59e0b' : '#0dcaf0'); }
 
         async function poll() {
             try {
                 const resp = await fetch('/dashboard/health-json', { credentials: 'same-origin' });
                 if (!resp.ok) return;
                 const d = await resp.json();
-                function paintBar(fillEl, pct, bg) {
-                    if (!fillEl) return;
-                    fillEl.style.width = pct + '%';
-                    fillEl.style.backgroundColor = bg;
-                    const parent = fillEl.parentElement;
-                    if (parent) {
-                        parent.setAttribute('aria-valuenow', pct);
-                        const label = parent.querySelector('.progress-label');
-                        if (label) label.textContent = pct + '%';
-                    }
-                }
-                if (d.cpu && cpuFill && cpuVal) {
+
+                if (d.cpu && cpuArc) {
                     const p = Number(d.cpu.percent) || 0;
-                    paintBar(cpuFill, p, color(p, 80, 50, '#198754'));
-                    cpuVal.textContent = d.cpu['1min'];
+                    const [color, status] = cpuPalette(p);
+                    cpuArc.style.strokeDashoffset = String(ARC_LEN * (1 - p / 100));
+                    cpuArc.setAttribute('stroke', color);
+                    if (cpuNeedle) {
+                        cpuNeedle.setAttribute('transform', 'rotate(' + (-90 + p * 1.8) + ' 100 110)');
+                        cpuNeedle.setAttribute('stroke', color);
+                    }
+                    if (cpuPivot) cpuPivot.setAttribute('fill', color);
+                    if (cpuPctNum) cpuPctNum.textContent = (Math.round(p * 10) / 10).toString();
+                    if (cpuStatus) { cpuStatus.textContent = status; cpuStatus.style.color = color; }
                 }
-                if (d.memory && memFill && memVal) {
+
+                if (d.memory && memFill) {
                     const p = Number(d.memory.percent) || 0;
-                    paintBar(memFill, p, color(p, 85, 60, '#0dcaf0'));
-                    memVal.textContent = d.memory.used_label;
+                    const color = memPalette(p);
+                    const h = 155 * (p / 100);
+                    memFill.setAttribute('y', String(170 - h));
+                    memFill.setAttribute('height', String(h));
+                    memFill.setAttribute('fill', color);
+                    if (memPctEl) memPctEl.textContent = (Math.round(p * 10) / 10) + '%';
+                    if (memSizeEl) memSizeEl.textContent = d.memory.used_label;
                 }
-                if (d.partitions && partsEl) {
-                    d.partitions.forEach(p => {
-                        const row = partsEl.querySelector('[data-mount="' + CSS.escape(p.mount) + '"]');
-                        if (!row) return;
-                        const fill = row.querySelector('.part-fill');
-                        const val = row.querySelector('.part-val');
-                        const pct = Number(p.percent) || 0;
-                        paintBar(fill, pct, color(pct, 90, 70, '#6c757d'));
-                        if (val) val.textContent = p.size_label;
-                    });
+
+                if (d.disk && diskFill) {
+                    const p = Number(d.disk.percent) || 0;
+                    const color = diskPalette(p);
+                    if (diskPctEl) diskPctEl.textContent = Math.round(p).toString();
+                    if (diskSize) diskSize.textContent = d.disk.size_label;
+                    diskFill.style.width = p + '%';
+                    diskFill.style.backgroundColor = color;
                 }
             } catch (e) { /* silent */ }
         }

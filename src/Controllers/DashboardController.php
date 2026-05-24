@@ -193,13 +193,16 @@ class DashboardController extends Controller
             return $s;
         };
 
-        $parts = [];
+        // Featured partition for the health card: /var/bbs preferred, fall
+        // back to /. Full partition list lives in the Storage Locations card.
+        $disk = null;
         foreach ($partitions as $p) {
-            $parts[] = [
-                'mount' => $p['mount'],
-                'percent' => $p['percent'] ?? 0,
-                'size_label' => $dfFix($p['size'] ?? ''),
-            ];
+            if (($p['mount'] ?? '') === '/var/bbs') { $disk = $p; break; }
+        }
+        if (!$disk) {
+            foreach ($partitions as $p) {
+                if (($p['mount'] ?? '') === '/') { $disk = $p; break; }
+            }
         }
 
         $this->json([
@@ -212,7 +215,11 @@ class DashboardController extends Controller
                 'percent' => $mem['percent'] ?? 0,
                 'used_label' => ServerStats::formatBytesPair($mem['used'] ?? 0, $mem['total'] ?? 0),
             ],
-            'partitions' => $parts,
+            'disk' => $disk ? [
+                'mount' => $disk['mount'],
+                'percent' => $disk['percent'] ?? 0,
+                'size_label' => $dfFix($disk['size'] ?? ''),
+            ] : null,
         ]);
     }
 
