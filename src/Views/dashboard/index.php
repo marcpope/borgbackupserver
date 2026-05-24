@@ -38,29 +38,30 @@ $dfFix = function (string $s): string {
 ?>
 
 <style>
-/* Server Health: three-tile gauges (CPU dial, memory thermometer, disk bar).
-   Single featured partition only — full disk list lives in Storage Locations. */
+/* Server Health: CPU dial + memory thermometer on top row, disk strip
+   below spanning the full width. Single featured partition only — full
+   disk list lives in Storage Locations. */
 .v2 .health-tiles {
     display: grid;
-    grid-template-columns: 1fr 1fr 1fr;
+    grid-template-columns: 1fr 1fr;
     gap: 12px;
     align-items: stretch;
 }
 .v2 .health-tile {
     background: rgba(255,255,255,0.025);
     border-radius: 10px;
-    padding: 14px 10px 16px;
+    padding: 12px 10px 14px;
     display: flex;
     flex-direction: column;
     align-items: center;
     text-align: center;
-    min-height: 230px;
+    min-height: 180px;
 }
 .v2 .health-tile .tile-head {
     display: flex;
     align-items: center;
     gap: 8px;
-    margin-bottom: 10px;
+    margin-bottom: 8px;
     font-size: 0.85rem;
     color: var(--bs-body-color);
     font-weight: 500;
@@ -78,14 +79,14 @@ $dfFix = function (string $s): string {
 .v2 .health-tile.disk .icon { background: rgba(245,158,11,0.18); color: #f59e0b; }
 
 /* CPU gauge */
-.v2 .cpu-gauge { width: 100%; max-width: 170px; height: auto; display: block; }
+.v2 .cpu-gauge { width: 100%; max-width: 150px; height: auto; display: block; }
 .v2 .cpu-gauge .arc-bg { stroke: rgba(255,255,255,0.08); }
 .v2 .cpu-gauge .arc-fg { transition: stroke-dashoffset 0.6s ease, stroke 0.3s; }
 .v2 .cpu-gauge .needle { transition: transform 0.6s ease, stroke 0.3s; transform-origin: 100px 110px; transform-box: fill-box; }
-.v2 .cpu-pct { font-size: 1.7rem; font-weight: 700; line-height: 1; margin-top: -22px; }
+.v2 .cpu-pct { font-size: 1.3rem; font-weight: 700; line-height: 1; margin-top: -18px; }
 .v2 .cpu-pct .pct-suffix,
-.v2 .disk-pct .pct-suffix { font-size: 0.95rem; font-weight: 600; opacity: 0.75; margin-left: 1px; }
-.v2 .cpu-status { font-size: 0.72rem; margin-top: 6px; font-weight: 500; }
+.v2 .disk-pct .pct-suffix { font-size: 0.8rem; font-weight: 600; opacity: 0.75; margin-left: 1px; }
+.v2 .cpu-status { font-size: 0.7rem; margin-top: 4px; font-weight: 500; }
 
 /* Memory thermometer */
 .v2 .mem-wrap {
@@ -93,25 +94,38 @@ $dfFix = function (string $s): string {
     align-items: center;
     justify-content: center;
     gap: 10px;
-    margin: 4px 0 8px;
+    margin: 2px 0 6px;
     flex: 1;
 }
-.v2 .mem-pct { font-size: 1.4rem; font-weight: 700; font-variant-numeric: tabular-nums; }
-.v2 .mem-thermo { height: 150px; width: auto; }
+.v2 .mem-pct { font-size: 1.15rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+.v2 .mem-thermo { height: 110px; width: auto; }
 .v2 .mem-thermo .fill { transition: y 0.6s ease, height 0.6s ease, fill 0.3s; }
 .v2 .mem-size { font-size: 0.75rem; color: var(--bs-secondary-color); font-variant-numeric: tabular-nums; }
 
-/* Disk */
-.v2 .health-tile.disk { justify-content: flex-start; }
-.v2 .disk-pct { font-size: 2.3rem; font-weight: 700; line-height: 1.1; margin-top: 18px; }
-.v2 .disk-size { font-size: 0.8rem; color: var(--bs-secondary-color); margin: 6px 0 16px; }
+/* Disk strip — full width across the bottom. Horizontal: head | numbers | bar */
+.v2 .health-tile.disk {
+    grid-column: 1 / -1;
+    flex-direction: row;
+    align-items: center;
+    text-align: left;
+    min-height: 0;
+    padding: 12px 16px;
+    gap: 16px;
+}
+.v2 .health-tile.disk .tile-head { margin-bottom: 0; flex-shrink: 0; }
+.v2 .disk-readout {
+    display: flex; align-items: baseline; gap: 8px;
+    flex-shrink: 0;
+}
+.v2 .disk-pct { font-size: 1.4rem; font-weight: 700; line-height: 1; }
+.v2 .disk-size { font-size: 0.8rem; color: var(--bs-secondary-color); }
 .v2 .disk-bar {
-    width: 90%;
+    flex: 1;
     height: 14px;
     background: rgba(255,255,255,0.08);
     border-radius: 7px;
     overflow: hidden;
-    margin-top: auto;
+    min-width: 80px;
 }
 .v2 .disk-bar-fill {
     height: 100%;
@@ -119,11 +133,12 @@ $dfFix = function (string $s): string {
     transition: width 0.6s ease, background-color 0.3s;
 }
 
-/* Stack tiles on narrow screens — three side-by-side gauges get cramped
-   under ~520px of card width. */
+/* Stack everything on narrow screens. */
 @media (max-width: 575px) {
     .v2 .health-tiles { grid-template-columns: 1fr; }
     .v2 .health-tile { min-height: auto; }
+    .v2 .health-tile.disk { flex-direction: column; align-items: stretch; text-align: center; }
+    .v2 .health-tile.disk .disk-bar { width: 100%; }
 }
 
 /* File Catalog card — stats table with hairline separators (no striped bg).
@@ -423,14 +438,16 @@ $dfFix = function (string $s): string {
                             <div class="mem-size" id="mem-size"><?= ServerStats::formatBytesPair($memUsed, $memTotal) ?></div>
                         </div>
 
-                        <!-- Disk (single featured partition) -->
+                        <!-- Disk (single featured partition) — full-width strip -->
                         <div class="health-tile disk" data-mount="<?= htmlspecialchars($diskMount) ?>">
                             <div class="tile-head">
                                 <span class="icon"><i class="bi bi-hdd"></i></span>
                                 <span class="text-truncate" title="<?= htmlspecialchars($diskMount) ?>"><?= htmlspecialchars($diskMount) ?></span>
                             </div>
-                            <div class="disk-pct"><span id="disk-pct"><?= round($diskPct) ?></span><span class="pct-suffix">%</span></div>
-                            <div class="disk-size" id="disk-size"><?= $diskSize ?></div>
+                            <div class="disk-readout">
+                                <div class="disk-pct"><span id="disk-pct"><?= round($diskPct) ?></span><span class="pct-suffix">%</span></div>
+                                <div class="disk-size" id="disk-size"><?= $diskSize ?></div>
+                            </div>
                             <div class="disk-bar">
                                 <div id="disk-fill" class="disk-bar-fill" style="width: <?= $diskPct ?>%; background-color: <?= $diskColor ?>;"></div>
                             </div>
