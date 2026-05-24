@@ -103,10 +103,10 @@ $dfFix = function (string $s): string {
 .v2 .cpu-gauge .arc-bg { stroke: rgba(255,255,255,0.08); }
 .v2 .cpu-gauge .arc-fg { transition: stroke-dashoffset 0.6s ease, stroke 0.3s; }
 .v2 .cpu-gauge .needle { transition: transform 0.6s ease, stroke 0.3s; transform-origin: 100px 110px; transform-box: fill-box; }
-.v2 .cpu-pct { font-size: 1.3rem; font-weight: 700; line-height: 1; margin-top: -18px; }
+.v2 .cpu-pct { font-size: 1.3rem; font-weight: 700; line-height: 1; margin-top: -68px; }
 .v2 .cpu-pct .pct-suffix,
 .v2 .disk-pct .pct-suffix { font-size: 0.8rem; font-weight: 600; opacity: 0.75; margin-left: 1px; }
-.v2 .cpu-status { font-size: 0.7rem; margin-top: 4px; font-weight: 500; }
+.v2 .cpu-status { font-size: 0.7rem; margin-top: -16px; font-weight: 500; }
 
 /* Memory thermometer + stat column. Stats on the left (total / used / %),
    thermometer on the right; the % is the prominent number. */
