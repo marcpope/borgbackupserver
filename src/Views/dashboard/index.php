@@ -57,21 +57,27 @@ $dfFix = function (string $s): string {
     text-align: center;
     overflow: hidden;
 }
-/* Tiny header strip flush to the top of the tile, slightly darker bg.
-   Used for CPU and Memory gauges; disk strip uses .tile-head instead. */
+/* Header strip flush to the top of the tile. Matches the parent card
+   header (.card-head-gradient) so each gauge feels like its own card. */
 .v2 .health-tile .tile-header-bar {
     display: flex;
     align-items: center;
-    justify-content: center;
+    justify-content: flex-start;
     gap: 6px;
     width: calc(100% + 20px);
     margin: 0 -10px 8px;
-    padding: 4px 10px;
-    background: rgba(0,0,0,0.25);
+    padding: 5px 12px;
+    background: #f1f3f5;
+    border-bottom: 1px solid rgba(0,0,0,0.08);
     font-size: 0.72rem;
-    font-weight: 500;
+    font-weight: 600;
     color: var(--bs-body-color);
     letter-spacing: 0.02em;
+}
+[data-bs-theme="dark"] .v2 .health-tile .tile-header-bar {
+    background: #202b3f;
+    border-bottom-color: rgb(24 24 25);
+    color: #fff;
 }
 .v2 .health-tile .tile-header-bar i { font-size: 0.9rem; line-height: 1; }
 .v2 .health-tile.cpu .tile-header-bar i { color: #ef4444; }
@@ -258,7 +264,7 @@ $dfFix = function (string $s): string {
     background: rgba(255,255,255,0.025);
     border: 1px solid rgba(255,255,255,0.05);
     border-radius: 8px;
-    padding: 8px 4px 10px;
+    padding: 13px 4px 15px;
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -472,7 +478,7 @@ $dfFix = function (string $s): string {
                         <!-- CPU gauge -->
                         <div class="health-tile cpu">
                             <div class="tile-header-bar">
-                                <i class="bi bi-cpu"></i><span>CPU Usage</span>
+                                <i class="bi bi-cpu"></i><span>CPU</span>
                             </div>
                             <svg class="cpu-gauge" viewBox="0 0 200 130" xmlns="http://www.w3.org/2000/svg">
                                 <path class="arc-bg" d="M 20 110 A 80 80 0 0 1 180 110" fill="none" stroke-width="14" stroke-linecap="round"/>
@@ -499,7 +505,7 @@ $dfFix = function (string $s): string {
                         <!-- Memory thermometer -->
                         <div class="health-tile mem">
                             <div class="tile-header-bar">
-                                <i class="bi bi-memory"></i><span>Memory Usage</span>
+                                <i class="bi bi-memory"></i><span>Memory</span>
                             </div>
                             <div class="mem-wrap">
                                 <div class="mem-stats">
