@@ -430,7 +430,6 @@ $dfFix = function (string $s): string {
                                 <line id="cpu-needle" class="needle" x1="100" y1="110" x2="100" y2="50"
                                       stroke="<?= $cpuColor ?>" stroke-width="3" stroke-linecap="round"
                                       transform="rotate(<?= round($cpuAngle, 2) ?> 100 110)"/>
-                                <circle id="cpu-pivot" cx="100" cy="110" r="5" fill="<?= $cpuColor ?>"/>
                             </svg>
                             <div class="cpu-pct"><span id="cpu-pct-num"><?= round($cpuPct, 1) ?></span><span class="pct-suffix">%</span></div>
                             <div class="cpu-status" id="cpu-status" style="color: <?= $cpuColor ?>"><?= $cpuStatus ?></div>
@@ -994,7 +993,6 @@ document.addEventListener('DOMContentLoaded', function () {
     (function () {
         const cpuArc    = document.getElementById('cpu-arc');
         const cpuNeedle = document.getElementById('cpu-needle');
-        const cpuPivot  = document.getElementById('cpu-pivot');
         const cpuPctNum = document.getElementById('cpu-pct-num');
         const cpuStatus = document.getElementById('cpu-status');
         const memFill   = document.getElementById('mem-fill');
@@ -1031,7 +1029,6 @@ document.addEventListener('DOMContentLoaded', function () {
                         cpuNeedle.setAttribute('transform', 'rotate(' + (-90 + p * 1.8) + ' 100 110)');
                         cpuNeedle.setAttribute('stroke', color);
                     }
-                    if (cpuPivot) cpuPivot.setAttribute('fill', color);
                     if (cpuPctNum) cpuPctNum.textContent = (Math.round(p * 10) / 10).toString();
                     if (cpuStatus) { cpuStatus.textContent = status; cpuStatus.style.color = color; }
                 }
