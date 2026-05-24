@@ -50,12 +50,11 @@ $dfFix = function (string $s): string {
 .v2 .health-tile {
     background: rgba(255,255,255,0.025);
     border-radius: 10px;
-    padding: 0 10px 12px;
+    padding: 0 10px 5px;
     display: flex;
     flex-direction: column;
     align-items: center;
     text-align: center;
-    min-height: 150px;
     overflow: hidden;
 }
 /* Tiny header strip flush to the top of the tile, slightly darker bg.
