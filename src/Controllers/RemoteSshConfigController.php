@@ -13,7 +13,6 @@ class RemoteSshConfigController extends Controller
      */
     public function store(): void
     {
-        $this->denyIfHosted();
         $this->requireAuth();
         $this->requireAdmin();
         $this->verifyCsrf();
@@ -91,7 +90,6 @@ class RemoteSshConfigController extends Controller
      */
     public function update(int $id): void
     {
-        $this->denyIfHosted();
         $this->requireAuth();
         $this->requireAdmin();
         $this->verifyCsrf();
@@ -188,7 +186,6 @@ class RemoteSshConfigController extends Controller
      */
     public function delete(int $id): void
     {
-        $this->denyIfHosted();
         $this->requireAuth();
         $this->requireAdmin();
         $this->verifyCsrf();
@@ -222,7 +219,6 @@ class RemoteSshConfigController extends Controller
      */
     public function test(int $id): void
     {
-        $this->denyIfHosted();
         $this->requireAuth();
         $this->requireAdmin();
         $this->verifyCsrf();
@@ -248,7 +244,6 @@ class RemoteSshConfigController extends Controller
      */
     public function testNew(): void
     {
-        $this->denyIfHosted();
         $this->requireAuth();
         $this->requireAdmin();
         $this->verifyCsrf();
@@ -289,7 +284,6 @@ class RemoteSshConfigController extends Controller
      */
     public function testBorgBaseApi(): void
     {
-        $this->denyIfHosted();
         $this->requireAuth();
         $this->requireAdmin();
         $this->verifyCsrf();

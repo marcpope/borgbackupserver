@@ -105,21 +105,6 @@ class Controller
     }
 
     /**
-     * Send 404 if BBS_HOSTED is set. Used by storage-management and
-     * remote-SSH controllers — those surfaces are intentionally invisible
-     * to customers of a managed-service deployment. 404 (not 403) so a
-     * curious customer can't even confirm the surface exists.
-     */
-    protected function denyIfHosted(): void
-    {
-        if (\BBS\Core\Config::isHosted()) {
-            http_response_code(404);
-            echo 'Not found';
-            exit;
-        }
-    }
-
-    /**
      * Authenticate via Bearer token for admin API endpoints.
      * Returns the user record associated with the token.
      */

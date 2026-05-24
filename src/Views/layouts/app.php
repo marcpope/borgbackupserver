@@ -176,14 +176,12 @@
                     </a>
                 </li>
                 <?php if (($_SESSION['user_role'] ?? '') === 'admin'): ?>
-                <?php if (!\BBS\Core\Config::isHosted()): ?>
                 <li class="nav-item">
                     <a href="/storage-locations" class="nav-link sidebar-link <?= ($pageTitle ?? '') === 'Storage' ? 'active' : '' ?>">
                         <i class="bi bi-hdd-stack d-block mb-1 fs-4"></i>
                         <span class="small">Storage</span>
                     </a>
                 </li>
-                <?php endif; ?>
                 <li class="nav-item">
                     <a href="/settings" class="nav-link sidebar-link <?= ($pageTitle ?? '') === 'Settings' ? 'active' : '' ?>">
                         <i class="bi bi-gear d-block mb-1 fs-4"></i>
@@ -280,11 +278,9 @@
                 <a href="/users" class="list-group-item list-group-item-action d-flex align-items-center <?= str_contains($pt, 'User') ? 'active' : '' ?>">
                     <i class="bi bi-people fs-5 me-3"></i>Users
                 </a>
-                <?php if (!\BBS\Core\Config::isHosted()): ?>
                 <a href="/storage-locations" class="list-group-item list-group-item-action d-flex align-items-center <?= $pt === 'Storage' ? 'active' : '' ?>">
                     <i class="bi bi-hdd-stack fs-5 me-3"></i>Storage
                 </a>
-                <?php endif; ?>
                 <?php endif; ?>
                 <a href="/logout" class="list-group-item list-group-item-action d-flex align-items-center text-danger">
                     <i class="bi bi-box-arrow-right fs-5 me-3"></i>Logout

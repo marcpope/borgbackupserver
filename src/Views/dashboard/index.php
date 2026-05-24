@@ -341,9 +341,8 @@ $dfFix = function (string $s): string {
         <?php endif; ?>
     </div>
 
-    <!-- Row 3: Storage Locations — admin only, infra detail. Hidden in hosted
-         mode because the platform owns and manages storage. -->
-    <?php if ($isAdmin && !empty($storageLocations) && !\BBS\Core\Config::isHosted()): ?>
+    <!-- Row 3: Storage Locations — admin only, infra detail -->
+    <?php if ($isAdmin && !empty($storageLocations)): ?>
     <?php
         $formatStorageWidgetBytes = function (int $bytes, array $loc): string {
             $isBorgBaseApi = ($loc['kind'] ?? '') === 'remote'

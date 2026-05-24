@@ -35,12 +35,6 @@ services:
       # - CH_PGID=${CH_PGID:-999}
       # Admin password — only used on first run. Omit to auto-generate (shown in logs).
       # - ADMIN_PASS=${ADMIN_PASS}
-      # Hosted-platform deployment mode. Set to 1 when this container is
-      # provisioned by a managed-service platform that owns infrastructure
-      # — hides storage management, remote SSH configs, S3 sync, and
-      # server-backup UI from the customer. Storage is provisioned by
-      # the platform via the API. Most users should leave this unset.
-      # - BBS_HOSTED=${BBS_HOSTED:-0}
     volumes:
       - bbs-data:/var/bbs
       # To store backups on a specific disk or path instead of Docker's internal storage,

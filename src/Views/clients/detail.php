@@ -874,25 +874,6 @@ $sizeDisplay = $totalSize > 0 ? \BBS\Services\ServerStats::formatBytes((int) $to
                     <div class="col-md-3 form-text pt-2">Descriptive name for the repo. (Max 20 characters)</div>
                 </div>
 
-                <?php if (\BBS\Core\Config::isHosted()): ?>
-                <?php
-                // Hosted mode: customer has no storage choices. Submit the
-                // platform's managed default as a hidden field so the form
-                // POSTs identically to the multi-location case, but the
-                // customer never sees a selector.
-                $hostedDefault = null;
-                foreach (($storageLocations ?? []) as $sl) {
-                    if (!empty($sl['is_default'])) { $hostedDefault = $sl; break; }
-                }
-                if (!$hostedDefault && !empty($storageLocations)) {
-                    $hostedDefault = $storageLocations[0];
-                }
-                ?>
-                <input type="hidden" name="storage_type" value="local">
-                <?php if ($hostedDefault): ?>
-                <input type="hidden" name="storage_location_id" value="<?= (int) $hostedDefault['id'] ?>">
-                <?php endif; ?>
-                <?php else: ?>
                 <div class="row mb-3">
                     <label class="col-md-3 col-form-label fw-semibold">Storage</label>
                     <div class="col-md-6">
@@ -922,7 +903,6 @@ $sizeDisplay = $totalSize > 0 ? \BBS\Services\ServerStats::formatBytes((int) $to
                         <a href="/storage-locations">Manage locations</a>
                     </div>
                 </div>
-                <?php endif; ?>
                 <?php endif; ?>
 
                 <div class="row mb-3" id="remoteSshConfigRow" style="display:none;">
