@@ -344,7 +344,7 @@ $dfFix = function (string $s): string {
                     <i class="bi bi-bar-chart me-2"></i>Jobs (Last 24h)
                 </div>
                 <div class="card-body py-2">
-                    <div style="position: relative; height: 160px;">
+                    <div style="position: relative; min-height: 155px; height: 100%;">
                         <canvas id="jobsChart"></canvas>
                     </div>
                 </div>
