@@ -500,4 +500,24 @@ class ServerStats
         }
         return $u . ' / ' . $t;
     }
+
+    /**
+     * Same idea for df-style sizes ("3.5T", "4.9T") — fix the unit suffix
+     * to "GB"/"TB" and collapse when both sides share a unit.
+     */
+    public static function dfPairLabel(string $used, string $total): string
+    {
+        $fix = function (string $s): string {
+            if (preg_match('/^([\d.]+)([TGMK])$/', $s, $m)) return $m[1] . "\u{00A0}" . $m[2] . 'B';
+            return $s;
+        };
+        $u = $fix($used);
+        $t = $fix($total);
+        $uParts = explode("\u{00A0}", $u);
+        $tParts = explode("\u{00A0}", $t);
+        if (count($uParts) === 2 && count($tParts) === 2 && $uParts[1] === $tParts[1]) {
+            return $uParts[0] . ' / ' . $tParts[0] . "\u{00A0}" . $tParts[1];
+        }
+        return $u . ' / ' . $t;
+    }
 }

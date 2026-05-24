@@ -148,24 +148,35 @@ $dfFix = function (string $s): string {
     gap: 16px;
 }
 .v2 .health-tile.disk .tile-head { margin-bottom: 0; flex-shrink: 0; }
-.v2 .disk-readout {
-    display: flex; align-items: baseline; gap: 8px;
-    flex-shrink: 0;
-}
-.v2 .disk-pct { font-size: 1.4rem; font-weight: 700; line-height: 1; }
-.v2 .disk-size { font-size: 0.8rem; color: var(--bs-secondary-color); }
+.v2 .disk-size { font-size: 0.85rem; font-weight: 600; color: var(--bs-body-color); font-variant-numeric: tabular-nums; flex-shrink: 0; }
 .v2 .disk-bar {
     flex: 1;
-    height: 14px;
+    height: 18px;
     background: rgba(255,255,255,0.08);
-    border-radius: 7px;
-    overflow: hidden;
+    border-radius: 9px;
+    position: relative;
     min-width: 80px;
 }
 .v2 .disk-bar-fill {
     height: 100%;
-    border-radius: 7px;
+    border-radius: 9px;
     transition: width 0.6s ease, background-color 0.3s;
+}
+/* Percentage label overlaid on the bar, centered and reverse-styled
+   (white with a heavy shadow) so it stays readable regardless of how
+   much of the bar is filled. */
+.v2 .disk-bar-label {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+    font-size: 0.78rem;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    text-shadow: 0 1px 2px rgba(0,0,0,0.85), 0 1px 4px rgba(0,0,0,0.85);
+    pointer-events: none;
 }
 
 /* Stack everything on narrow screens. */
@@ -465,7 +476,7 @@ $dfFix = function (string $s): string {
                         }
                         $diskMount = $diskPart['mount'] ?? '/';
                         $diskPct  = (float) ($diskPart['percent'] ?? 0);
-                        $diskSize = $dfFix($diskPart['size'] ?? '0');
+                        $diskSize = ServerStats::dfPairLabel($diskPart['used'] ?? '0', $diskPart['size'] ?? '0');
                         $diskColor = $diskPct >= 90 ? '#ef4444' : ($diskPct >= 75 ? '#f59e0b' : '#0dcaf0');
 
                         $arcLen    = 251.33;                              // π × radius 80, semicircle
@@ -541,13 +552,11 @@ $dfFix = function (string $s): string {
                                 <span class="icon"><i class="bi bi-hdd"></i></span>
                                 <span class="text-truncate" title="<?= htmlspecialchars($diskMount) ?>"><?= htmlspecialchars($diskMount) ?></span>
                             </div>
-                            <div class="disk-readout">
-                                <div class="disk-pct"><span id="disk-pct"><?= round($diskPct) ?></span><span class="pct-suffix">%</span></div>
-                                <div class="disk-size" id="disk-size"><?= $diskSize ?></div>
-                            </div>
                             <div class="disk-bar">
                                 <div id="disk-fill" class="disk-bar-fill" style="width: <?= $diskPct ?>%; background-color: <?= $diskColor ?>;"></div>
+                                <span class="disk-bar-label"><span id="disk-pct"><?= round($diskPct) ?></span>%</span>
                             </div>
+                            <div class="disk-size" id="disk-size"><?= $diskSize ?></div>
                         </div>
                     </div>
                 </div>

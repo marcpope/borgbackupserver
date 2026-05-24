@@ -228,7 +228,7 @@ class DashboardController extends Controller
             'disk' => $disk ? [
                 'mount' => $disk['mount'],
                 'percent' => $disk['percent'] ?? 0,
-                'size_label' => $dfFix($disk['size'] ?? ''),
+                'size_label' => ServerStats::dfPairLabel($disk['used'] ?? '0', $disk['size'] ?? '0'),
             ] : null,
         ]);
     }
