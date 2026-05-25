@@ -874,20 +874,50 @@ $sizeDisplay = $totalSize > 0 ? \BBS\Services\ServerStats::formatBytes((int) $to
                     <div class="col-md-3 form-text pt-2">Descriptive name for the repo. (Max 20 characters)</div>
                 </div>
 
+                <?php
+                    $isHostedMode = \BBS\Core\Config::isHosted();
+                    $defaultLocation = null;
+                    if ($isHostedMode) {
+                        foreach (($storageLocations ?? []) as $sl) {
+                            if (!empty($sl['is_default'])) { $defaultLocation = $sl; break; }
+                        }
+                    }
+                ?>
+
                 <div class="row mb-3">
                     <label class="col-md-3 col-form-label fw-semibold">Storage</label>
                     <div class="col-md-6">
+                        <?php if ($isHostedMode): ?>
+                        <select class="form-select" name="storage_type" id="storageTypeSelect" disabled>
+                            <option value="local" selected>Local (this server)</option>
+                        </select>
+                        <input type="hidden" name="storage_type" value="local">
+                        <?php else: ?>
                         <select class="form-select" name="storage_type" id="storageTypeSelect" onchange="toggleRemoteSshConfig()">
                             <option value="local">Local (this server)</option>
                             <?php if (!empty($remoteSshConfigs)): ?>
                             <option value="remote_ssh">Remote SSH</option>
                             <?php endif; ?>
                         </select>
+                        <?php endif; ?>
                     </div>
                     <div class="col-md-3 form-text pt-2">Where to store backup data.</div>
                 </div>
 
-                <?php if (!empty($storageLocations) && count($storageLocations) > 1): ?>
+                <?php if ($isHostedMode && $defaultLocation): ?>
+                <div class="row mb-3" id="storageLocationRow">
+                    <label class="col-md-3 col-form-label fw-semibold">Location</label>
+                    <div class="col-md-6">
+                        <select class="form-select" name="storage_location_id" id="storageLocationSelect" disabled>
+                            <option value="<?= $defaultLocation['id'] ?>" selected>
+                                <?= htmlspecialchars($defaultLocation['label']) ?>
+                            </option>
+                        </select>
+                        <input type="hidden" name="storage_location_id" value="<?= $defaultLocation['id'] ?>">
+                    </div>
+                    <div class="col-md-3 form-text pt-2">Platform-managed storage.</div>
+                </div>
+                <?php elseif (!empty($storageLocations) && count($storageLocations) > 1): ?>
                 <div class="row mb-3" id="storageLocationRow">
                     <label class="col-md-3 col-form-label fw-semibold">Location</label>
                     <div class="col-md-6">
@@ -905,6 +935,7 @@ $sizeDisplay = $totalSize > 0 ? \BBS\Services\ServerStats::formatBytes((int) $to
                 </div>
                 <?php endif; ?>
 
+                <?php if (!$isHostedMode): ?>
                 <div class="row mb-3" id="remoteSshConfigRow" style="display:none;">
                     <label class="col-md-3 col-form-label fw-semibold">Remote Host</label>
                     <div class="col-md-6">
@@ -923,6 +954,7 @@ $sizeDisplay = $totalSize > 0 ? \BBS\Services\ServerStats::formatBytes((int) $to
                         <?php endif; ?>
                     </div>
                 </div>
+                <?php endif; ?>
 
                 <div class="row mb-3">
                     <label class="col-md-3 col-form-label fw-semibold">Encryption</label>

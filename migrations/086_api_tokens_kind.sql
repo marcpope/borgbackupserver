@@ -1,0 +1,2 @@
+ALTER TABLE api_tokens
+    ADD COLUMN kind VARCHAR(16) NOT NULL DEFAULT 'user' AFTER name;

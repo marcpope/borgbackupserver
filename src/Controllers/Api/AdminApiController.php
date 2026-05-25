@@ -2,7 +2,9 @@
 
 namespace BBS\Controllers\Api;
 
+use BBS\Core\Config;
 use BBS\Core\Controller;
+use BBS\Controllers\StorageLocationController;
 use BBS\Services\BorgCommandBuilder;
 use BBS\Services\Encryption;
 use BBS\Services\SshKeyManager;
@@ -269,9 +271,17 @@ class AdminApiController extends Controller
         }
 
         $repos = $this->db->fetchAll(
-            "SELECT id, name, path, encryption, storage_type, size_bytes, archive_count, created_at
-             FROM repositories WHERE agent_id = ? ORDER BY name", [$id]
+            "SELECT r.id, r.name, r.path, r.encryption, r.storage_type, r.size_bytes, r.archive_count, r.created_at,
+                    COALESCE(rsc.enabled, 0) AS s3_sync_enabled,
+                    rsc.last_sync_at AS s3_last_sync_at
+             FROM repositories r
+             LEFT JOIN repository_s3_configs rsc ON rsc.repository_id = r.id
+             WHERE r.agent_id = ? ORDER BY r.name", [$id]
         );
+        foreach ($repos as &$r) {
+            $r['s3_sync_enabled'] = (bool) $r['s3_sync_enabled'];
+        }
+        unset($r);
 
         $this->json(['repositories' => $repos]);
     }
@@ -294,6 +304,23 @@ class AdminApiController extends Controller
 
         if (empty($name)) {
             $this->json(['error' => 'Repository name is required'], 400);
+        }
+
+        // Hosted mode: storage choices are locked to the platform-provided
+        // default location. Reject any attempt to use remote SSH or to pin
+        // a non-default storage_location_id. The customer UI doesn't expose
+        // these options, so this guard exists for API callers.
+        if (Config::isHosted()) {
+            if ($storageType !== 'local') {
+                $this->json(['error' => 'Storage type is locked to local in hosted mode.'], 422);
+            }
+            $requestedLocId = !empty($input['storage_location_id']) ? (int) $input['storage_location_id'] : null;
+            if ($requestedLocId !== null) {
+                $default = $this->db->fetchOne("SELECT id FROM storage_locations WHERE is_default = 1");
+                if (!$default || (int) $default['id'] !== $requestedLocId) {
+                    $this->json(['error' => 'Only the default storage location may be used in hosted mode.'], 422);
+                }
+            }
         }
 
         // Route to remote SSH handler if requested
@@ -1338,5 +1365,220 @@ class AdminApiController extends Controller
         $slug = preg_replace('/-{2,}/', '-', $slug);
         $slug = trim($slug, '-');
         return $slug ?: 'repo';
+    }
+
+    // ── Storage management API (hosted-platform provisioning) ───────
+
+    /**
+     * POST /api/v1/storage
+     * Create a local storage location. In hosted mode, this is the
+     * mechanism by which the platform seeds the managed storage on
+     * first boot — `is_default` is forced to true so the resulting
+     * row is the one the customer's repos are pinned to.
+     */
+    public function createStorageLocation(): void
+    {
+        $this->requireApiToken();
+        $input = $this->getJsonInput();
+
+        $label = trim((string) ($input['label'] ?? ''));
+        $path  = trim((string) ($input['path'] ?? ''));
+        $isDefault = !empty($input['is_default']);
+
+        if ($label === '' || $path === '') {
+            $this->json(['error' => 'label and path are required'], 400);
+        }
+        if ($path[0] !== '/') {
+            $this->json(['error' => 'path must be absolute'], 400);
+        }
+        if ($this->db->fetchOne("SELECT id FROM storage_locations WHERE path = ?", [$path])) {
+            $this->json(['error' => 'A storage location already exists at that path.'], 409);
+        }
+
+        // Hosted mode: the API is how the platform seeds storage, and the
+        // customer-facing repo create form is locked to the default. Force
+        // is_default true so the platform never has to track a separate flag.
+        if (Config::isHosted()) {
+            $isDefault = true;
+        }
+
+        if ($isDefault) {
+            $this->db->query("UPDATE storage_locations SET is_default = 0 WHERE is_default = 1");
+        }
+
+        $newId = $this->db->insert('storage_locations', [
+            'label' => $label,
+            'path' => $path,
+            'is_default' => $isDefault ? 1 : 0,
+        ]);
+
+        // Refresh /etc/bbs/allowed-storage-paths so bbs-ssh-helper accepts
+        // repo operations under the new path.
+        (new StorageLocationController())->updateAllowedPaths();
+
+        $row = $this->db->fetchOne("SELECT id, label, path, is_default FROM storage_locations WHERE id = ?", [$newId]);
+        $row['is_default'] = (bool) $row['is_default'];
+        $this->json($row, 201);
+    }
+
+    /**
+     * GET /api/v1/storage/capacity
+     * Provisioned / used / free bytes for the default storage location.
+     * Useful for any admin dashboard, and the data source for the hosted
+     * mode "Storage" customer-visible card.
+     */
+    public function getStorageCapacity(): void
+    {
+        $this->requireApiToken();
+
+        $loc = $this->db->fetchOne("SELECT path FROM storage_locations WHERE is_default = 1");
+        if (!$loc) {
+            $this->json(['error' => 'No default storage location configured'], 404);
+        }
+        $disk = \BBS\Services\ServerStats::getDiskUsage($loc['path']);
+        if (!$disk) {
+            $this->json(['error' => 'Could not read disk usage for default storage'], 500);
+        }
+        $this->json([
+            'provisioned_bytes' => (int) $disk['total'],
+            'used_bytes' => (int) $disk['used'],
+            'free_bytes' => (int) $disk['free'],
+        ]);
+    }
+
+    // ── S3 credentials API (platform-only) ──────────────────────────
+
+    /**
+     * POST /api/v1/s3-credentials
+     * Set the global S3 sync credentials. Platform-only because in hosted
+     * mode the customer never sees the access key/secret.
+     */
+    public function setS3Credentials(): void
+    {
+        $this->requirePlatformApiToken();
+        $input = $this->getJsonInput();
+
+        $fields = ['s3_endpoint', 's3_region', 's3_bucket', 's3_access_key', 's3_secret_key', 's3_path_prefix'];
+        $map = [
+            's3_endpoint'    => $input['endpoint']    ?? null,
+            's3_region'      => $input['region']      ?? null,
+            's3_bucket'      => $input['bucket']      ?? null,
+            's3_access_key'  => $input['access_key']  ?? null,
+            's3_secret_key'  => $input['secret_key']  ?? null,
+            's3_path_prefix' => $input['path_prefix'] ?? '',
+        ];
+
+        foreach (['s3_endpoint', 's3_region', 's3_bucket', 's3_access_key', 's3_secret_key'] as $required) {
+            if ($map[$required] === null || $map[$required] === '') {
+                $this->json(['error' => "Missing required field: " . str_replace('s3_', '', $required)], 400);
+            }
+        }
+
+        foreach ($map as $key => $value) {
+            $existing = $this->db->fetchOne("SELECT `key` FROM settings WHERE `key` = ?", [$key]);
+            if ($existing) {
+                $this->db->update('settings', ['value' => (string) $value], '`key` = ?', [$key]);
+            } else {
+                $this->db->insert('settings', ['key' => $key, 'value' => (string) $value]);
+            }
+        }
+
+        $this->json(['status' => 'ok', 'fields' => array_keys($map)]);
+    }
+
+    /**
+     * DELETE /api/v1/s3-credentials
+     * Clear the global S3 credentials AND disable per-repo S3 sync on
+     * every repository. The platform calls this when a tenant downgrades
+     * off the S3 add-on tier — the customer's repos stop syncing and the
+     * platform separately deletes the bucket on its side.
+     */
+    public function clearS3Credentials(): void
+    {
+        $this->requirePlatformApiToken();
+
+        $keys = ['s3_endpoint', 's3_region', 's3_bucket', 's3_access_key', 's3_secret_key', 's3_path_prefix'];
+        foreach ($keys as $key) {
+            $this->db->delete('settings', '`key` = ?', [$key]);
+        }
+        $disabled = $this->db->query(
+            "UPDATE repository_s3_configs SET enabled = 0 WHERE enabled = 1"
+        );
+
+        $this->json(['status' => 'ok', 'disabled_repositories' => $disabled ?? 0]);
+    }
+
+    // ── Platform token rotation ─────────────────────────────────────
+
+    /**
+     * POST /api/v1/platform/rotate-token
+     * Mint a new platform token, invalidate the old one. Returns the new
+     * plaintext token — caller must save it. The old token (the one used
+     * to authenticate this request) is removed *after* the new row is
+     * inserted, so a partial failure can't leave the install without a
+     * platform token.
+     */
+    public function rotatePlatformToken(): void
+    {
+        $ctx = $this->requirePlatformApiToken();
+
+        $oldRow = $this->db->fetchOne("SELECT id, user_id, name FROM api_tokens WHERE id = ?", [$ctx['token_id']]);
+        if (!$oldRow) {
+            $this->json(['error' => 'Current token row not found'], 500);
+        }
+
+        $plain = 'bbs_tok_' . bin2hex(random_bytes(24));
+        $hash  = hash('sha256', $plain);
+
+        $this->db->insert('api_tokens', [
+            'name'       => $oldRow['name'],
+            'kind'       => 'platform',
+            'token_hash' => $hash,
+            'user_id'    => $oldRow['user_id'],
+        ]);
+
+        $this->db->delete('api_tokens', 'id = ?', [$oldRow['id']]);
+
+        $this->json(['token' => $plain]);
+    }
+
+    // ── Per-repo S3 sync toggle ─────────────────────────────────────
+
+    /**
+     * PUT /api/v1/repositories/{repoId}/s3-sync
+     * Toggle per-repository S3 sync. Body: {"enabled": true|false}.
+     * Customer UI on the repo detail page hits the same code path via
+     * a session-authed route.
+     */
+    public function setRepositoryS3Sync(int $repoId): void
+    {
+        $this->requireApiToken();
+        $input = $this->getJsonInput();
+
+        if (!array_key_exists('enabled', $input)) {
+            $this->json(['error' => 'enabled is required (boolean)'], 400);
+        }
+        $enabled = (bool) $input['enabled'];
+
+        $repo = $this->db->fetchOne("SELECT id, name FROM repositories WHERE id = ?", [$repoId]);
+        if (!$repo) {
+            $this->json(['error' => 'Repository not found'], 404);
+        }
+
+        $existing = $this->db->fetchOne("SELECT id FROM repository_s3_configs WHERE repository_id = ?", [$repoId]);
+        if ($existing) {
+            $this->db->update('repository_s3_configs', ['enabled' => $enabled ? 1 : 0], 'repository_id = ?', [$repoId]);
+        } else {
+            $this->db->insert('repository_s3_configs', [
+                'repository_id' => $repoId,
+                'enabled' => $enabled ? 1 : 0,
+            ]);
+        }
+
+        $this->json([
+            'id' => $repo['id'],
+            'name' => $repo['name'],
+            's3_sync_enabled' => $enabled,
+        ]);
     }
 }

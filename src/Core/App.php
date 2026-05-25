@@ -288,6 +288,12 @@ class App
         $this->router->map('GET', '/api/v1/clients/[i:id]/plugin-configs', 'Api\\AdminApiController@listPluginConfigs');
         $this->router->map('POST', '/api/v1/clients/[i:id]/plugin-configs', 'Api\\AdminApiController@createPluginConfig');
         $this->router->map('GET', '/api/v1/storage', 'Api\\AdminApiController@listStorageLocations');
+        $this->router->map('POST', '/api/v1/storage', 'Api\\AdminApiController@createStorageLocation');
+        $this->router->map('GET', '/api/v1/storage/capacity', 'Api\\AdminApiController@getStorageCapacity');
+        $this->router->map('POST', '/api/v1/s3-credentials', 'Api\\AdminApiController@setS3Credentials');
+        $this->router->map('DELETE', '/api/v1/s3-credentials', 'Api\\AdminApiController@clearS3Credentials');
+        $this->router->map('POST', '/api/v1/platform/rotate-token', 'Api\\AdminApiController@rotatePlatformToken');
+        $this->router->map('PUT', '/api/v1/repositories/[i:repoId]/s3-sync', 'Api\\AdminApiController@setRepositoryS3Sync');
 
         // Catalog & Restore (client-facing)
         $this->router->map('GET', '/clients/[i:id]/catalog/[i:archive_id]', 'ClientController@catalog');

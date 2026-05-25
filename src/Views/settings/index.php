@@ -212,6 +212,7 @@ $updateAvailable = $updateService->isUpdateAvailable();
                 </div>
             </div>
 
+            <?php if (!\BBS\Core\Config::isHosted()): ?>
             <div class="card border-0 shadow-sm mt-4">
                 <div class="card-header fw-semibold">
                     <i class="bi bi-shield-check me-1"></i> Server Backups
@@ -258,6 +259,7 @@ $updateAvailable = $updateService->isUpdateAvailable();
                     </div>
                 </div>
             </div>
+            <?php endif; ?>
         </div>
     </div>
 

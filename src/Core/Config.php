@@ -32,4 +32,18 @@ class Config
     {
         return self::get('APP_DEBUG', 'false') === 'true';
     }
+
+    /**
+     * Hosted-mode flag — driven entirely by the HOSTED env var on the
+     * container. NOT persisted to the DB on purpose: the same image
+     * running anywhere else (debug, recovery, dev) should NOT silently
+     * inherit hosted behavior from a stale DB row.
+     *
+     * Accepts: 1, true, yes (case-insensitive).
+     */
+    public static function isHosted(): bool
+    {
+        $value = $_ENV['HOSTED'] ?? getenv('HOSTED') ?: '';
+        return in_array(strtolower((string) $value), ['1', 'true', 'yes'], true);
+    }
 }

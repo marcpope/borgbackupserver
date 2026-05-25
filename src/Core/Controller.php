@@ -105,8 +105,24 @@ class Controller
     }
 
     /**
+     * Send 404 if hosted mode is active. Used by storage-management and
+     * remote-SSH controllers — those surfaces are intentionally invisible
+     * to customers of a managed-service deployment. 404 (not 403) so a
+     * curious customer can't even confirm the surface exists.
+     */
+    protected function denyIfHosted(): void
+    {
+        if (\BBS\Core\Config::isHosted()) {
+            http_response_code(404);
+            echo 'Not found';
+            exit;
+        }
+    }
+
+    /**
      * Authenticate via Bearer token for admin API endpoints.
-     * Returns the user record associated with the token.
+     * Returns the user record associated with the token, including
+     * the token's `kind` (user|platform) so endpoints can scope access.
      */
     protected function requireApiToken(): array
     {
@@ -146,7 +162,23 @@ class Controller
             'id' => $apiToken['user_id'],
             'token_id' => $apiToken['id'],
             'token_name' => $apiToken['name'],
+            'token_kind' => $apiToken['kind'] ?? 'user',
         ];
+    }
+
+    /**
+     * Like requireApiToken(), but additionally enforces that the token
+     * is the hosted-platform token (kind='platform'). Used to gate
+     * endpoints that should NEVER be callable by a customer-minted
+     * admin token (e.g. S3 credentials, platform-token rotation).
+     */
+    protected function requirePlatformApiToken(): array
+    {
+        $ctx = $this->requireApiToken();
+        if (($ctx['token_kind'] ?? 'user') !== 'platform') {
+            $this->json(['error' => 'This endpoint requires the platform token.'], 403);
+        }
+        return $ctx;
     }
 
     protected function currentUser(): ?array

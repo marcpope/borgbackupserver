@@ -20,10 +20,13 @@ class SettingsController extends Controller
 
         $oidcUsers = $this->db->fetchAll("SELECT id, username, email, role FROM users ORDER BY username");
 
+        // Exclude platform-kind tokens — those belong to the hosted platform,
+        // not the customer, and must not appear on the user-facing list.
         $apiTokens = $this->db->fetchAll("
             SELECT t.id, t.name, t.created_at, t.last_used_at, u.username
             FROM api_tokens t
             JOIN users u ON u.id = t.user_id
+            WHERE t.kind = 'user'
             ORDER BY t.created_at
         ");
 
@@ -341,6 +344,17 @@ class SettingsController extends Controller
     {
         $this->requireAdmin();
         $this->verifyCsrf();
+
+        // Defense in depth: the platform token must not be deletable from
+        // the customer-facing tokens UI. The list view hides it, but a
+        // crafted POST against /settings/api/tokens/{id}/revoke could still
+        // target the row by guessed id.
+        $row = $this->db->fetchOne("SELECT kind FROM api_tokens WHERE id = ?", [$id]);
+        if ($row && ($row['kind'] ?? 'user') === 'platform') {
+            $this->flash('danger', 'This token is managed by the hosted platform and cannot be revoked here.');
+            $this->redirect('/settings?tab=api');
+            return;
+        }
 
         $this->db->delete('api_tokens', 'id = ?', [$id]);
         $this->flash('success', 'API token revoked.');

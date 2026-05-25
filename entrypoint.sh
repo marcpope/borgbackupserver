@@ -590,6 +590,42 @@ if [ -d "/var/www/bbs/migrations" ]; then
     done
 fi
 
+# --- Hosted-mode platform token bootstrap ---
+# Idempotent: only mints a token if none with kind='platform' exists yet.
+# Honors PLATFORM_TOKEN if supplied (platform-generated, preferred). Falls
+# back to generating one and printing it once to stdout.
+case "$(echo "${HOSTED:-}" | tr '[:upper:]' '[:lower:]')" in
+    1|true|yes)
+        EXISTING_PLATFORM=$(mysql -u bbs -p"$DB_PASS" bbs -N -e "SELECT COUNT(*) FROM api_tokens WHERE kind = 'platform'" 2>/dev/null || echo "0")
+        if [ "$EXISTING_PLATFORM" = "0" ]; then
+            if [ -z "${PLATFORM_TOKEN:-}" ]; then
+                PLATFORM_TOKEN="bbs_tok_$(openssl rand -hex 24)"
+                GENERATED_TOKEN=1
+            else
+                GENERATED_TOKEN=0
+            fi
+            PLATFORM_HASH=$(printf '%s' "$PLATFORM_TOKEN" | sha256sum | awk '{print $1}')
+            ADMIN_USER_ID=$(mysql -u bbs -p"$DB_PASS" bbs -N -e "SELECT id FROM users WHERE username = 'admin' LIMIT 1" 2>/dev/null)
+            if [ -n "$ADMIN_USER_ID" ]; then
+                mysql -u bbs -p"$DB_PASS" bbs -e "INSERT INTO api_tokens (name, kind, token_hash, user_id) VALUES ('Hosted Platform', 'platform', '$PLATFORM_HASH', $ADMIN_USER_ID);"
+                if [ "$GENERATED_TOKEN" = "1" ]; then
+                    echo ""
+                    echo "================================================================"
+                    echo "  HOSTED PLATFORM API TOKEN — shown only once, save it now!"
+                    echo "================================================================"
+                    echo "  $PLATFORM_TOKEN"
+                    echo "================================================================"
+                    echo "  Use as: Authorization: Bearer <token>"
+                    echo "================================================================"
+                    echo ""
+                else
+                    echo "Hosted platform token registered from env."
+                fi
+            fi
+        fi
+        ;;
+esac
+
 # Sync borg versions from GitHub on fresh install or if table is empty
 BORG_COUNT=$(mysql -u bbs -p"$DB_PASS" bbs -N -e "SELECT COUNT(*) FROM borg_versions" 2>/dev/null || echo "0")
 if [ "$BORG_COUNT" -eq 0 ]; then
@@ -743,5 +779,21 @@ chmod 644 /etc/cron.d/bbs-scheduler
 cron
 
 echo "=== BBS Container Ready ==="
+
+# --- Hosted-mode ready callback ---
+# Best-effort POST so the hosted platform learns the container has
+# finished booting. Failures are logged but don't block startup.
+case "$(echo "${HOSTED:-}" | tr '[:upper:]' '[:lower:]')" in
+    1|true|yes)
+        if [ -n "${PLATFORM_CALLBACK:-}" ]; then
+            BBS_VER=$(cat /var/www/bbs/VERSION 2>/dev/null | tr -d '[:space:]')
+            curl -fsS --max-time 5 -X POST -H 'Content-Type: application/json' \
+                -d "{\"event\":\"bbs_ready\",\"bbs_version\":\"$BBS_VER\",\"admin_pass_set\":true,\"platform_token_set\":true}" \
+                "$PLATFORM_CALLBACK" >/dev/null 2>&1 \
+                && echo "Posted bbs_ready to platform callback." \
+                || echo "Warning: platform callback POST to $PLATFORM_CALLBACK failed (non-fatal)."
+        fi
+        ;;
+esac
 
 exec apache2-foreground
