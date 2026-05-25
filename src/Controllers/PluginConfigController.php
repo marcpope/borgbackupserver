@@ -18,6 +18,34 @@ class PluginConfigController extends Controller
     }
 
     /**
+     * In hosted mode, storage-class plugin configs (s3_sync) are managed
+     * by the platform — customers can toggle per-repo sync but must not
+     * be able to create, edit, delete, or test the configs themselves
+     * (which would expose / let them write credentials). The plugins tab
+     * already hides them in the UI; this guard handles direct POSTs.
+     */
+    private function denyIfHostedStoragePluginById(int $pluginId): void
+    {
+        if (!\BBS\Core\Config::isHosted()) return;
+        $row = $this->db->fetchOne("SELECT slug FROM plugins WHERE id = ?", [$pluginId]);
+        if ($row && in_array($row['slug'] ?? '', ['s3_sync'], true)) {
+            $this->json(['error' => 'Storage plugin configuration is managed by the platform.'], 403);
+        }
+    }
+
+    private function denyIfHostedStoragePluginByConfig(int $configId): void
+    {
+        if (!\BBS\Core\Config::isHosted()) return;
+        $row = $this->db->fetchOne(
+            "SELECT p.slug FROM plugin_configs pc JOIN plugins p ON p.id = pc.plugin_id WHERE pc.id = ?",
+            [$configId]
+        );
+        if ($row && in_array($row['slug'] ?? '', ['s3_sync'], true)) {
+            $this->json(['error' => 'Storage plugin configuration is managed by the platform.'], 403);
+        }
+    }
+
+    /**
      * Create a named plugin config.
      * POST /clients/{id}/plugin-configs
      */
@@ -39,6 +67,8 @@ class PluginConfigController extends Controller
             $this->flash('danger', 'Name and plugin are required.');
             $this->redirect("/clients/{$id}?tab=plugins");
         }
+
+        $this->denyIfHostedStoragePluginById($pluginId);
 
         $pluginManager = new PluginManager();
         $pluginManager->savePluginConfig($id, $pluginId, $name, $config);
@@ -71,6 +101,8 @@ class PluginConfigController extends Controller
             $this->redirect('/clients');
         }
 
+        $this->denyIfHostedStoragePluginByConfig($configId);
+
         $name = trim($_POST['name'] ?? '');
         $config = $_POST['plugin_config'] ?? [];
 
@@ -99,6 +131,8 @@ class PluginConfigController extends Controller
             $this->flash('danger', 'Access denied.');
             $this->redirect('/clients');
         }
+
+        $this->denyIfHostedStoragePluginByConfig($configId);
 
         // Check if this S3 config is in use by any repository
         $inUse = $this->db->fetchOne("
@@ -134,6 +168,8 @@ class PluginConfigController extends Controller
         if (!$this->getAgent($id)) {
             $this->json(['error' => 'Access denied'], 403);
         }
+
+        $this->denyIfHostedStoragePluginByConfig($configId);
 
         // Check if this is an S3 plugin config — test runs server-side (rclone is on the server)
         $pluginSlug = $this->db->fetchOne("

@@ -2319,7 +2319,14 @@ $sizeDisplay = $totalSize > 0 ? \BBS\Services\ServerStats::formatBytes((int) $to
     ];
     $randomPass = substr(str_shuffle('abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789'), 0, 20);
 
+    // Storage-class plugins are hidden in hosted mode — credentials and
+    // sync targets are platform-managed. The customer-facing per-repo S3
+    // toggle on the Repositories tab is unaffected.
+    $hostedStoragePlugins = ['s3_sync'];
     foreach ($allPlugins as $plugin):
+        if (\BBS\Core\Config::isHosted() && in_array($plugin['slug'] ?? '', $hostedStoragePlugins, true)) {
+            continue;
+        }
         $isEnabled = false;
         foreach ($agentPlugins as $ap) { if ($ap['id'] == $plugin['id'] && $ap['agent_enabled']) { $isEnabled = true; break; } }
         $logo = $pluginLogos[$plugin['slug']] ?? null;

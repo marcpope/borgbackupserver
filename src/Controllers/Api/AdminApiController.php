@@ -1391,6 +1391,9 @@ class AdminApiController extends Controller
         if ($path[0] !== '/') {
             $this->json(['error' => 'path must be absolute'], 400);
         }
+        if (!is_dir($path)) {
+            $this->json(['error' => "Path does not exist or is not a directory: {$path}"], 400);
+        }
         if ($this->db->fetchOne("SELECT id FROM storage_locations WHERE path = ?", [$path])) {
             $this->json(['error' => 'A storage location already exists at that path.'], 409);
         }
