@@ -1396,18 +1396,27 @@ $sizeDisplay = $totalSize > 0 ? \BBS\Services\ServerStats::formatBytes((int) $to
                     <div class="row mb-3 schedule-daily-row <?= $editFreq !== 'daily' ? 'd-none' : '' ?>">
                         <label class="col-md-3 col-form-label fw-semibold"><i class="bi bi-grid-3x3 me-1"></i> Run Hours</label>
                         <div class="col-md-9">
+                            <?php $is24h = \BBS\Core\TimeHelper::is24h(); ?>
                             <div class="mb-2 d-flex align-items-center hour-picker-row">
-                                <span class="text-muted fw-semibold me-2" style="display:inline-block;width:30px;">AM</span>
+                                <span class="text-muted fw-semibold me-2" style="display:inline-block;width:30px;"><?= $is24h ? '' : 'AM' ?></span>
                                 <div class="btn-group btn-group-sm">
-                                    <?php for ($h = 0; $h < 12; $h++): $label = $h === 0 ? '12' : str_pad($h, 2, '0', STR_PAD_LEFT); ?>
+                                    <?php for ($h = 0; $h < 12; $h++):
+                                        $label = $is24h
+                                            ? str_pad((string)$h, 2, '0', STR_PAD_LEFT)
+                                            : ($h === 0 ? '12' : str_pad((string)$h, 2, '0', STR_PAD_LEFT));
+                                    ?>
                                     <button type="button" class="btn <?= in_array($h, $editSelectedHours) ? 'btn-success active' : 'btn-outline-success' ?> hour-btn" data-hour="<?= $h ?>"><?= $label ?></button>
                                     <?php endfor; ?>
                                 </div>
                             </div>
                             <div class="mb-2 d-flex align-items-center hour-picker-row">
-                                <span class="text-muted fw-semibold me-2" style="display:inline-block;width:30px;">PM</span>
+                                <span class="text-muted fw-semibold me-2" style="display:inline-block;width:30px;"><?= $is24h ? '' : 'PM' ?></span>
                                 <div class="btn-group btn-group-sm">
-                                    <?php for ($h = 12; $h < 24; $h++): $label = $h === 12 ? '12' : str_pad($h - 12, 2, '0', STR_PAD_LEFT); ?>
+                                    <?php for ($h = 12; $h < 24; $h++):
+                                        $label = $is24h
+                                            ? str_pad((string)$h, 2, '0', STR_PAD_LEFT)
+                                            : ($h === 12 ? '12' : str_pad((string)($h - 12), 2, '0', STR_PAD_LEFT));
+                                    ?>
                                     <button type="button" class="btn <?= in_array($h, $editSelectedHours) ? 'btn-success active' : 'btn-outline-success' ?> hour-btn" data-hour="<?= $h ?>"><?= $label ?></button>
                                     <?php endfor; ?>
                                 </div>
@@ -1699,18 +1708,27 @@ $sizeDisplay = $totalSize > 0 ? \BBS\Services\ServerStats::formatBytes((int) $to
                 <div class="row mb-3 schedule-daily-row">
                     <label class="col-md-3 col-form-label fw-semibold"><i class="bi bi-grid-3x3 me-1"></i> Run Hours</label>
                     <div class="col-md-9">
+                        <?php $is24h = \BBS\Core\TimeHelper::is24h(); ?>
                         <div class="mb-2 d-flex align-items-center hour-picker-row">
-                            <span class="text-muted fw-semibold me-2" style="display:inline-block;width:30px;">AM</span>
+                            <span class="text-muted fw-semibold me-2" style="display:inline-block;width:30px;"><?= $is24h ? '' : 'AM' ?></span>
                             <div class="btn-group btn-group-sm">
-                                <?php for ($h = 0; $h < 12; $h++): $label = $h === 0 ? '12' : str_pad($h, 2, '0', STR_PAD_LEFT); ?>
+                                <?php for ($h = 0; $h < 12; $h++):
+                                    $label = $is24h
+                                        ? str_pad((string)$h, 2, '0', STR_PAD_LEFT)
+                                        : ($h === 0 ? '12' : str_pad((string)$h, 2, '0', STR_PAD_LEFT));
+                                ?>
                                 <button type="button" class="btn <?= $h === 1 ? 'btn-success active' : 'btn-outline-success' ?> hour-btn" data-hour="<?= $h ?>"><?= $label ?></button>
                                 <?php endfor; ?>
                             </div>
                         </div>
                         <div class="mb-2 d-flex align-items-center hour-picker-row">
-                            <span class="text-muted fw-semibold me-2" style="display:inline-block;width:30px;">PM</span>
+                            <span class="text-muted fw-semibold me-2" style="display:inline-block;width:30px;"><?= $is24h ? '' : 'PM' ?></span>
                             <div class="btn-group btn-group-sm">
-                                <?php for ($h = 12; $h < 24; $h++): $label = $h === 12 ? '12' : str_pad($h - 12, 2, '0', STR_PAD_LEFT); ?>
+                                <?php for ($h = 12; $h < 24; $h++):
+                                    $label = $is24h
+                                        ? str_pad((string)$h, 2, '0', STR_PAD_LEFT)
+                                        : ($h === 12 ? '12' : str_pad((string)($h - 12), 2, '0', STR_PAD_LEFT));
+                                ?>
                                 <button type="button" class="btn btn-outline-success hour-btn" data-hour="<?= $h ?>"><?= $label ?></button>
                                 <?php endfor; ?>
                             </div>
