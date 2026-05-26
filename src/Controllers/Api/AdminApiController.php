@@ -1452,6 +1452,37 @@ class AdminApiController extends Controller
     // ── S3 credentials API (platform-only) ──────────────────────────
 
     /**
+     * GET /api/v1/s3-credentials
+     * Return the current global S3 sync settings. Platform-only — these
+     * fields include the secret key so this MUST NOT be reachable by a
+     * customer-minted admin token. Returns null fields when unset.
+     */
+    public function getS3Credentials(): void
+    {
+        $this->requirePlatformApiToken();
+
+        $keys = [
+            's3_endpoint'    => 'endpoint',
+            's3_region'      => 'region',
+            's3_bucket'      => 'bucket',
+            's3_access_key'  => 'access_key',
+            's3_secret_key'  => 'secret_key',
+            's3_path_prefix' => 'path_prefix',
+        ];
+
+        $out = [];
+        foreach ($keys as $settingKey => $responseKey) {
+            $row = $this->db->fetchOne("SELECT `value` FROM settings WHERE `key` = ?", [$settingKey]);
+            $out[$responseKey] = $row['value'] ?? null;
+        }
+        // Boolean shortcut so callers can check "is it configured" without
+        // matching on the secret value.
+        $out['configured'] = !empty($out['endpoint']) && !empty($out['bucket']) && !empty($out['access_key']);
+
+        $this->json($out);
+    }
+
+    /**
      * POST /api/v1/s3-credentials
      * Set the global S3 sync credentials. Platform-only because in hosted
      * mode the customer never sees the access key/secret.
@@ -1543,6 +1574,45 @@ class AdminApiController extends Controller
         $this->db->delete('api_tokens', 'id = ?', [$oldRow['id']]);
 
         $this->json(['token' => $plain]);
+    }
+
+    // ── Maintenance mode ────────────────────────────────────────────
+
+    /**
+     * GET /api/v1/maintenance
+     * Read the current maintenance-mode flag.
+     */
+    public function getMaintenance(): void
+    {
+        $this->requireApiToken();
+        $row = $this->db->fetchOne("SELECT `value` FROM settings WHERE `key` = 'maintenance_mode'");
+        $this->json(['enabled' => ($row['value'] ?? '0') === '1']);
+    }
+
+    /**
+     * POST /api/v1/maintenance
+     * Toggle maintenance mode. Body: {"enabled": true|false}.
+     * When enabled, the scheduler stops creating new jobs and the queue
+     * skips agent dispatch (server-side promotions still run).
+     */
+    public function setMaintenance(): void
+    {
+        $this->requireApiToken();
+        $input = $this->getJsonInput();
+
+        if (!array_key_exists('enabled', $input)) {
+            $this->json(['error' => 'enabled is required (boolean)'], 400);
+        }
+        $value = ((bool) $input['enabled']) ? '1' : '0';
+
+        $existing = $this->db->fetchOne("SELECT `key` FROM settings WHERE `key` = 'maintenance_mode'");
+        if ($existing) {
+            $this->db->update('settings', ['value' => $value], '`key` = ?', ['maintenance_mode']);
+        } else {
+            $this->db->insert('settings', ['key' => 'maintenance_mode', 'value' => $value]);
+        }
+
+        $this->json(['enabled' => $value === '1']);
     }
 
     // ── Per-repo S3 sync toggle ─────────────────────────────────────
