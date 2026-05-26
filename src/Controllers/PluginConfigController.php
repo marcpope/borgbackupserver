@@ -18,31 +18,39 @@ class PluginConfigController extends Controller
     }
 
     /**
-     * In hosted mode, storage-class plugin configs (s3_sync) are managed
-     * by the platform — customers can toggle per-repo sync but must not
-     * be able to create, edit, delete, or test the configs themselves
-     * (which would expose / let them write credentials). The plugins tab
-     * already hides them in the UI; this guard handles direct POSTs.
+     * In hosted mode, S3 sync plugin configs must use the platform's
+     * managed credentials — customers can still create / edit / attach
+     * configs (needed to toggle per-repo sync), but the credentials
+     * source is locked to 'global' and any custom endpoint/region/
+     * bucket/access_key/secret_key fields they POST are stripped.
+     * Path prefix and bandwidth limit are legitimate per-config knobs
+     * and pass through.
+     *
+     * Returns the sanitized config array. For non-S3 plugins, returns
+     * the input unchanged. For non-hosted deployments, also unchanged.
      */
-    private function denyIfHostedStoragePluginById(int $pluginId): void
+    private function sanitizeHostedConfig(int $pluginId, array $config): array
     {
-        if (!\BBS\Core\Config::isHosted()) return;
+        if (!\BBS\Core\Config::isHosted()) return $config;
         $row = $this->db->fetchOne("SELECT slug FROM plugins WHERE id = ?", [$pluginId]);
-        if ($row && in_array($row['slug'] ?? '', ['s3_sync'], true)) {
-            $this->json(['error' => 'Storage plugin configuration is managed by the platform.'], 403);
+        if (!$row || ($row['slug'] ?? '') !== 's3_sync') return $config;
+
+        $config['credential_source'] = 'global';
+        foreach (['endpoint', 'region', 'bucket', 'access_key', 'secret_key'] as $field) {
+            unset($config[$field]);
         }
+        return $config;
     }
 
-    private function denyIfHostedStoragePluginByConfig(int $configId): void
+    private function sanitizeHostedConfigByConfigId(int $configId, array $config): array
     {
-        if (!\BBS\Core\Config::isHosted()) return;
+        if (!\BBS\Core\Config::isHosted()) return $config;
         $row = $this->db->fetchOne(
-            "SELECT p.slug FROM plugin_configs pc JOIN plugins p ON p.id = pc.plugin_id WHERE pc.id = ?",
+            "SELECT p.id AS plugin_id FROM plugin_configs pc JOIN plugins p ON p.id = pc.plugin_id WHERE pc.id = ?",
             [$configId]
         );
-        if ($row && in_array($row['slug'] ?? '', ['s3_sync'], true)) {
-            $this->json(['error' => 'Storage plugin configuration is managed by the platform.'], 403);
-        }
+        if (!$row) return $config;
+        return $this->sanitizeHostedConfig((int) $row['plugin_id'], $config);
     }
 
     /**
@@ -68,7 +76,7 @@ class PluginConfigController extends Controller
             $this->redirect("/clients/{$id}?tab=plugins");
         }
 
-        $this->denyIfHostedStoragePluginById($pluginId);
+        $config = $this->sanitizeHostedConfig($pluginId, $config);
 
         $pluginManager = new PluginManager();
         $pluginManager->savePluginConfig($id, $pluginId, $name, $config);
@@ -101,8 +109,6 @@ class PluginConfigController extends Controller
             $this->redirect('/clients');
         }
 
-        $this->denyIfHostedStoragePluginByConfig($configId);
-
         $name = trim($_POST['name'] ?? '');
         $config = $_POST['plugin_config'] ?? [];
 
@@ -110,6 +116,8 @@ class PluginConfigController extends Controller
             $this->flash('danger', 'Name is required.');
             $this->redirect("/clients/{$id}?tab=plugins");
         }
+
+        $config = $this->sanitizeHostedConfigByConfigId($configId, $config);
 
         $pluginManager = new PluginManager();
         $pluginManager->updatePluginConfig($configId, $name, $config);
@@ -131,8 +139,6 @@ class PluginConfigController extends Controller
             $this->flash('danger', 'Access denied.');
             $this->redirect('/clients');
         }
-
-        $this->denyIfHostedStoragePluginByConfig($configId);
 
         // Check if this S3 config is in use by any repository
         $inUse = $this->db->fetchOne("
@@ -168,8 +174,6 @@ class PluginConfigController extends Controller
         if (!$this->getAgent($id)) {
             $this->json(['error' => 'Access denied'], 403);
         }
-
-        $this->denyIfHostedStoragePluginByConfig($configId);
 
         // Check if this is an S3 plugin config — test runs server-side (rclone is on the server)
         $pluginSlug = $this->db->fetchOne("

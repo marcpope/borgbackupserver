@@ -2337,14 +2337,13 @@ $sizeDisplay = $totalSize > 0 ? \BBS\Services\ServerStats::formatBytes((int) $to
     ];
     $randomPass = substr(str_shuffle('abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789'), 0, 20);
 
-    // Storage-class plugins are hidden in hosted mode — credentials and
-    // sync targets are platform-managed. The customer-facing per-repo S3
-    // toggle on the Repositories tab is unaffected.
-    $hostedStoragePlugins = ['s3_sync'];
+    // In hosted mode the S3 plugin stays visible — the agent-level enable
+    // toggle and the per-config attachment to plans both run through here.
+    // What's locked down is the credentials surface: only "Use Global S3
+    // Settings" is permitted, so customers can't point sync at a third-
+    // party bucket. The form rendering below hides the Custom Credentials
+    // radio + fields; the controller enforces the same constraint on POST.
     foreach ($allPlugins as $plugin):
-        if (\BBS\Core\Config::isHosted() && in_array($plugin['slug'] ?? '', $hostedStoragePlugins, true)) {
-            continue;
-        }
         $isEnabled = false;
         foreach ($agentPlugins as $ap) { if ($ap['id'] == $plugin['id'] && $ap['agent_enabled']) { $isEnabled = true; break; } }
         $logo = $pluginLogos[$plugin['slug']] ?? null;
@@ -2455,6 +2454,10 @@ $sizeDisplay = $totalSize > 0 ? \BBS\Services\ServerStats::formatBytes((int) $to
                             </div>
                         <?php elseif ($plugin['slug'] === 's3_sync'): ?>
                             <?php $ev = $cfgData; $credSrc = $ev['credential_source'] ?? 'global'; ?>
+                            <?php if (\BBS\Core\Config::isHosted()): ?>
+                            <input type="hidden" name="plugin_config[credential_source]" value="global">
+                            <div class="alert alert-info py-2 small mb-2"><i class="bi bi-info-circle me-1"></i>S3 destination is managed by the platform.</div>
+                            <?php else: ?>
                             <div class="mb-2">
                                 <div class="form-check form-check-inline"><input class="form-check-input s3-cred-radio" type="radio" name="plugin_config[credential_source]" value="global" id="editS3Global<?= $cfg['id'] ?>" <?= $credSrc === 'global' ? 'checked' : '' ?> data-target="editS3Custom<?= $cfg['id'] ?>"><label class="form-check-label small" for="editS3Global<?= $cfg['id'] ?>">Use Global S3 Settings</label></div>
                                 <div class="form-check form-check-inline"><input class="form-check-input s3-cred-radio" type="radio" name="plugin_config[credential_source]" value="custom" id="editS3CustomRadio<?= $cfg['id'] ?>" <?= $credSrc === 'custom' ? 'checked' : '' ?> data-target="editS3Custom<?= $cfg['id'] ?>"><label class="form-check-label small" for="editS3CustomRadio<?= $cfg['id'] ?>">Custom Credentials</label></div>
@@ -2470,6 +2473,7 @@ $sizeDisplay = $totalSize > 0 ? \BBS\Services\ServerStats::formatBytes((int) $to
                                     <div class="col-6"><label class="form-label small fw-semibold mb-1">Secret Key</label><input type="text" class="form-control form-control-sm" name="plugin_config[secret_key]" placeholder="(unchanged if empty)"></div>
                                 </div>
                             </div>
+                            <?php endif; ?>
                             <div class="row g-2 mb-2">
                                 <div class="col-6"><label class="form-label small fw-semibold mb-1">Path Prefix</label><input type="text" class="form-control form-control-sm" name="plugin_config[path_prefix]" value="<?= htmlspecialchars($ev['path_prefix'] ?? '') ?>"><div class="form-text small">Optional subfolder in bucket</div></div>
                                 <div class="col-6"><label class="form-label small fw-semibold mb-1">Bandwidth Limit</label><input type="text" class="form-control form-control-sm" name="plugin_config[bandwidth_limit]" value="<?= htmlspecialchars($ev['bandwidth_limit'] ?? '') ?>"><div class="form-text small">e.g. 50M</div></div>
@@ -2570,6 +2574,10 @@ $sizeDisplay = $totalSize > 0 ? \BBS\Services\ServerStats::formatBytes((int) $to
                                         <div class="col"><label class="form-label small fw-semibold mb-1">Extra Options</label><input type="text" class="form-control form-control-sm" name="plugin_config[extra_options]" value="<?= $plugin['slug'] === 'pg_dump' ? '--no-owner --no-privileges' : '--single-transaction --quick --routines --triggers --events' ?>"></div>
                                     </div>
                                 <?php elseif ($plugin['slug'] === 's3_sync'): ?>
+                                    <?php if (\BBS\Core\Config::isHosted()): ?>
+                                    <input type="hidden" name="plugin_config[credential_source]" value="global">
+                                    <div class="alert alert-info py-2 small mb-2"><i class="bi bi-info-circle me-1"></i>S3 destination is managed by the platform.</div>
+                                    <?php else: ?>
                                     <div class="mb-2">
                                         <div class="form-check form-check-inline"><input class="form-check-input s3-cred-radio" type="radio" name="plugin_config[credential_source]" value="global" id="newS3Global<?= $plugin['id'] ?>" checked data-target="newS3Custom<?= $plugin['id'] ?>"><label class="form-check-label small" for="newS3Global<?= $plugin['id'] ?>">Use Global S3 Settings</label></div>
                                         <div class="form-check form-check-inline"><input class="form-check-input s3-cred-radio" type="radio" name="plugin_config[credential_source]" value="custom" id="newS3CustomRadio<?= $plugin['id'] ?>" data-target="newS3Custom<?= $plugin['id'] ?>"><label class="form-check-label small" for="newS3CustomRadio<?= $plugin['id'] ?>">Custom Credentials</label></div>
@@ -2585,6 +2593,7 @@ $sizeDisplay = $totalSize > 0 ? \BBS\Services\ServerStats::formatBytes((int) $to
                                             <div class="col-6"><label class="form-label small fw-semibold mb-1">Secret Key</label><input type="text" class="form-control form-control-sm" name="plugin_config[secret_key]"></div>
                                         </div>
                                     </div>
+                                    <?php endif; ?>
                                     <div class="row g-2 mb-2">
                                         <div class="col-6"><label class="form-label small fw-semibold mb-1">Path Prefix</label><input type="text" class="form-control form-control-sm" name="plugin_config[path_prefix]"><div class="form-text small">Optional subfolder in bucket</div></div>
                                         <div class="col-6"><label class="form-label small fw-semibold mb-1">Bandwidth Limit</label><input type="text" class="form-control form-control-sm" name="plugin_config[bandwidth_limit]"><div class="form-text small">e.g. 50M</div></div>
