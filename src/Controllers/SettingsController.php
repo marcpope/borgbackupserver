@@ -10,6 +10,19 @@ class SettingsController extends Controller
     {
         $this->requireAdmin();
 
+        // Backwards-compat: old tab names ('remote', 'offsite', 'storage')
+        // pointed at the storage-management UI. That lives at
+        // /storage-locations now — redirect before any output starts. (The
+        // redirect used to live inside the view, but by the time the view
+        // runs the layout has already flushed headers, so header() errors.)
+        $activeTab = $_GET['tab'] ?? 'general';
+        if (in_array($activeTab, ['remote', 'offsite', 'storage'], true)
+            && !\BBS\Core\Config::isHosted()) {
+            $section = $_GET['section'] ?? '';
+            if ($activeTab === 'offsite') $section = 's3';
+            $this->redirect('/storage-locations' . ($section === 's3' ? '?section=s3' : ''));
+        }
+
         $settings = [];
         $rows = $this->db->fetchAll("SELECT `key`, `value` FROM settings");
         foreach ($rows as $row) {

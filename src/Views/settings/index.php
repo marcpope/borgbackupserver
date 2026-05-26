@@ -1,13 +1,8 @@
 <?php
+// The 'remote' / 'offsite' / 'storage' tab redirect to /storage-locations
+// is handled in SettingsController::index() before any output starts.
+// Anything reaching this view falls through to a normal settings tab.
 $activeTab = $_GET['tab'] ?? 'general';
-// Backwards compat: map old tab names to new consolidated tabs
-if (in_array($activeTab, ['remote', 'offsite', 'storage'])) {
-    // Storage moved to /storage-locations
-    $section = $_GET['section'] ?? '';
-    if ($activeTab === 'offsite') $section = 's3';
-    header('Location: /storage-locations' . ($section === 's3' ? '?section=s3' : ''));
-    exit;
-}
 if ($activeTab === 'borg') { $activeTab = 'updates'; $updatesSection = 'borg'; }
 if ($activeTab === 'updates') { $updatesSection = $updatesSection ?? ($_GET['section'] ?? 'software'); }
 ?>
@@ -212,7 +207,6 @@ $updateAvailable = $updateService->isUpdateAvailable();
                 </div>
             </div>
 
-            <?php if (!\BBS\Core\Config::isHosted()): ?>
             <div class="card border-0 shadow-sm mt-4">
                 <div class="card-header fw-semibold">
                     <i class="bi bi-shield-check me-1"></i> Server Backups
@@ -254,12 +248,15 @@ $updateAvailable = $updateService->isUpdateAvailable();
                     </div>
                     <div class="alert alert-info mb-0 small">
                         <i class="bi bi-info-circle me-1"></i>
+                        <?php if (\BBS\Core\Config::isHosted()): ?>
+                        To back up your server settings off-site, make sure you've added S3 Storage in your Hosted Account.
+                        <?php else: ?>
                         Server backups include the database, configuration, and SSH host keys &mdash; <strong>not repository data</strong>.
                         To protect your backup repositories, configure <a href="/settings?tab=offsite" class="alert-link">S3 Offsite Sync</a>.
+                        <?php endif; ?>
                     </div>
                 </div>
             </div>
-            <?php endif; ?>
         </div>
     </div>
 
