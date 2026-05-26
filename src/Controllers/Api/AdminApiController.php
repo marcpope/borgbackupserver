@@ -1453,13 +1453,19 @@ class AdminApiController extends Controller
 
     /**
      * GET /api/v1/s3-credentials
-     * Return the current global S3 sync settings. Platform-only — these
-     * fields include the secret key so this MUST NOT be reachable by a
-     * customer-minted admin token. Returns null fields when unset.
+     * Return the current global S3 sync settings. Any admin token works
+     * in a normal deployment — the same data is visible in the Settings
+     * UI. In hosted mode, credentials are platform-owned, so this is
+     * gated to the platform token to prevent a customer-minted admin
+     * token from reading the secret key. Returns null fields when unset.
      */
     public function getS3Credentials(): void
     {
-        $this->requirePlatformApiToken();
+        if (\BBS\Core\Config::isHosted()) {
+            $this->requirePlatformApiToken();
+        } else {
+            $this->requireApiToken();
+        }
 
         $keys = [
             's3_endpoint'    => 'endpoint',
