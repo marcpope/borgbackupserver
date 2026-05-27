@@ -114,7 +114,7 @@ class QueueManager
         // they don't care about the agent's connection state.
         $agentBoundTypes = [
             'backup', 'restore', 'restore_mysql', 'restore_pg', 'restore_mongo',
-            'update_borg', 'update_agent', 'plugin_test', 'list_dir',
+            'update_borg', 'update_agent', 'plugin_test',
         ];
 
         $promoted = [];
@@ -304,21 +304,6 @@ class QueueManager
                     'task' => 'plugin_test',
                     'job_id' => $job['id'],
                     'plugin' => $testPayload,
-                ];
-            } elseif ($job['task_type'] === 'list_dir') {
-                // Browse-filesystem requests from the plan-create modal.
-                // Params (path / depth / show_hidden / show_all / follow_symlinks)
-                // were stashed in status_message as JSON at queue time.
-                $params = json_decode($job['status_message'] ?? '{}', true) ?: [];
-                $taskPayload = [
-                    'task' => 'list_dir',
-                    'job_id' => $job['id'],
-                    'path' => $params['path'] ?? '/',
-                    'depth' => (int) ($params['depth'] ?? 2),
-                    'show_hidden' => !empty($params['show_hidden']),
-                    'show_all' => !empty($params['show_all']),
-                    'follow_symlinks' => !empty($params['follow_symlinks']),
-                    'max_entries' => (int) ($params['max_entries'] ?? 5000),
                 ];
             }
 

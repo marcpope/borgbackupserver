@@ -488,24 +488,14 @@ class AgentApiController extends Controller
             'message' => $message,
         ]);
 
-        // Log output from tasks like update_borg. Exception: list_dir
-        // reports its tree as a JSON-encoded output_log; stash it in the
-        // cache for the browse modal's poll endpoint instead of spamming
-        // server_log with a multi-KB JSON blob.
+        // Log output from tasks like update_borg
         if (!empty($input['output_log'])) {
-            if (($job['task_type'] ?? '') === 'list_dir' && $result === 'completed') {
-                $tree = json_decode($input['output_log'], true);
-                if (is_array($tree)) {
-                    \BBS\Services\Cache::getInstance()->set("browse_result:{$jobId}", $tree, 900);
-                }
-            } else {
-                $this->db->insert('server_log', [
-                    'agent_id' => $agent['id'],
-                    'backup_job_id' => $jobId,
-                    'level' => 'info',
-                    'message' => "{$taskLabel} output: " . substr($input['output_log'], 0, 2000),
-                ]);
-            }
+            $this->db->insert('server_log', [
+                'agent_id' => $agent['id'],
+                'backup_job_id' => $jobId,
+                'level' => 'info',
+                'message' => "{$taskLabel} output: " . substr($input['output_log'], 0, 2000),
+            ]);
         }
 
         // Notification system: task-based notifications

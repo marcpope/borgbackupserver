@@ -106,8 +106,6 @@ class App
         $this->router->map('POST', '/clients/[i:id]/delete', 'ClientController@delete');
         $this->router->map('POST', '/clients/[i:id]/update-borg', 'ClientController@updateBorg');
         $this->router->map('POST', '/clients/[i:id]/update-agent', 'ClientController@updateAgent');
-        $this->router->map('POST', '/clients/[i:id]/browse', 'ClientController@browse');
-        $this->router->map('GET', '/clients/[i:id]/browse/[i:taskId]', 'ClientController@browsePoll');
 
         // Plugins
         $this->router->map('POST', '/clients/[i:id]/plugins', 'PluginController@updateAgentPlugins');
