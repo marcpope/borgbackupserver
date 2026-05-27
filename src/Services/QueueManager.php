@@ -96,7 +96,8 @@ class QueueManager
                    rsc.remote_host, rsc.remote_port, rsc.remote_user, rsc.remote_base_path,
                    rsc.ssh_private_key_encrypted as remote_ssh_key_encrypted,
                    rsc.borg_remote_path,
-                   a.name as agent_name
+                   a.name as agent_name,
+                   a.status as agent_status
             FROM backup_jobs bj
             LEFT JOIN backup_plans bp ON bp.id = bj.backup_plan_id
             LEFT JOIN repositories r ON r.id = bj.repository_id
@@ -107,6 +108,14 @@ class QueueManager
                 CASE WHEN bj.task_type IN ('catalog_rebuild', 'catalog_rebuild_full') THEN 1 ELSE 0 END,
                 bj.queued_at ASC
         ");
+
+        // Task types that require the agent to be online to run. Server-side
+        // tasks (prune/compact/catalog/etc.) run by the scheduler itself —
+        // they don't care about the agent's connection state.
+        $agentBoundTypes = [
+            'backup', 'restore', 'restore_mysql', 'restore_pg', 'restore_mongo',
+            'update_borg', 'update_agent', 'plugin_test',
+        ];
 
         $promoted = [];
         $promotedCount = 0;
@@ -138,6 +147,17 @@ class QueueManager
 
             // In maintenance mode, only promote server-side jobs (not backups/restores)
             if ($maintenanceMode && !in_array($job['task_type'], $serverSideTypes) && !$isManagement) {
+                continue;
+            }
+
+            // Don't promote agent-bound jobs (backup, restore, plugin_test, etc.)
+            // when the agent is offline — promoting to 'sent' would just cause
+            // the scheduler's offline sweep to fail-and-retry on every tick,
+            // burning through the retry budget while the client is unreachable
+            // (#281). Wait for the agent to come back online; it'll be picked
+            // up on the next scheduler pass once the heartbeat resumes.
+            if (in_array($job['task_type'], $agentBoundTypes)
+                && ($job['agent_status'] ?? 'online') !== 'online') {
                 continue;
             }
 
