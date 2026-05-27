@@ -1904,6 +1904,15 @@ document.getElementById('appIconFileInput').addEventListener('change', function(
                 <tr><td><span class="badge bg-primary">POST</span></td><td><code>/api/v1/clients/{id}/plugin-configs</code></td><td>Create a plugin config</td></tr>
                 <tr><td colspan="3" class="text-muted small fw-semibold pt-2">Storage</td></tr>
                 <tr><td><span class="badge bg-success">GET</span></td><td><code>/api/v1/storage</code></td><td>List local &amp; remote SSH storage locations</td></tr>
+                <tr><td><span class="badge bg-success">GET</span></td><td><code>/api/v1/storage/capacity</code></td><td>Provisioned / used / free bytes for the default storage location</td></tr>
+                <tr><td colspan="3" class="text-muted small fw-semibold pt-2">Repositories (cross-client)</td></tr>
+                <tr><td><span class="badge bg-success">GET</span></td><td><code>/api/v1/repositories</code></td><td>List every repository across every client. Add <code>?include_secrets=1</code> to also return the decrypted passphrase (requires Display Secrets token).</td></tr>
+                <tr><td><span class="badge bg-warning text-dark">PUT</span></td><td><code>/api/v1/repositories/{repo_id}/s3-sync</code></td><td>Toggle per-repository S3 off-site sync: <code>{"enabled": true|false}</code></td></tr>
+                <tr><td colspan="3" class="text-muted small fw-semibold pt-2">S3 Off-site Sync</td></tr>
+                <tr><td><span class="badge bg-success">GET</span></td><td><code>/api/v1/s3-credentials</code></td><td>Read the global S3 configuration (endpoint / region / bucket / path_prefix / configured). Add <code>?include_secrets=1</code> to also return <code>access_key</code> + <code>secret_key</code> (requires Display Secrets token).</td></tr>
+                <tr><td colspan="3" class="text-muted small fw-semibold pt-2">Maintenance</td></tr>
+                <tr><td><span class="badge bg-success">GET</span></td><td><code>/api/v1/maintenance</code></td><td>Read the maintenance-mode flag</td></tr>
+                <tr><td><span class="badge bg-primary">POST</span></td><td><code>/api/v1/maintenance</code></td><td>Toggle maintenance mode: <code>{"enabled": true|false}</code> (pauses agent dispatch)</td></tr>
             </tbody>
         </table>
 
