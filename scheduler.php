@@ -756,8 +756,22 @@ foreach ($serverJobs as $sj) {
 
             $archives = $csData['archives'] ?? [];
 
-            // Clear existing archives for this repo and rebuild
-            $db->delete('archives', 'repository_id = ?', [$csRepo['id']]);
+            // Snapshot existing archive rows BEFORE we touch anything. The
+            // catalog sync used to DELETE the whole repo's archives and
+            // re-INSERT from the borg listing — that wiped agent-reported
+            // metadata (databases_backed_up, backup_job_id) which can't be
+            // reconstructed from borg alone (#294). The new flow updates
+            // existing rows in place and inserts only genuinely new ones,
+            // leaving the agent-side columns untouched.
+            $existingRows = $db->fetchAll(
+                "SELECT id, archive_name FROM archives WHERE repository_id = ?",
+                [$csRepo['id']]
+            );
+            $existingByName = [];
+            foreach ($existingRows as $existingRow) {
+                $existingByName[$existingRow['archive_name']] = $existingRow;
+            }
+            $borgArchiveNamesSet = array_flip(array_filter(array_column($archives, 'name')));
 
             // Set progress bar for archive processing
             $totalArchiveCount = count($archives);
@@ -835,14 +849,25 @@ foreach ($serverJobs as $sj) {
                     }
                 }
 
-                $db->insert('archives', [
-                    'repository_id' => $csRepo['id'],
-                    'archive_name' => $archiveName,
-                    'created_at' => $createdAt,
-                    'file_count' => $fileCount,
-                    'original_size' => $originalSize,
-                    'deduplicated_size' => $deduplicatedSize,
-                ]);
+                // Refresh existing row in place (preserving agent-reported
+                // databases_backed_up + backup_job_id) or insert new.
+                if (isset($existingByName[$archiveName])) {
+                    $db->update('archives', [
+                        'created_at' => $createdAt,
+                        'file_count' => $fileCount,
+                        'original_size' => $originalSize,
+                        'deduplicated_size' => $deduplicatedSize,
+                    ], 'id = ?', [$existingByName[$archiveName]['id']]);
+                } else {
+                    $db->insert('archives', [
+                        'repository_id' => $csRepo['id'],
+                        'archive_name' => $archiveName,
+                        'created_at' => $createdAt,
+                        'file_count' => $fileCount,
+                        'original_size' => $originalSize,
+                        'deduplicated_size' => $deduplicatedSize,
+                    ]);
+                }
                 $archiveCount++;
                 $totalSize += $deduplicatedSize;
 
@@ -853,6 +878,20 @@ foreach ($serverJobs as $sj) {
                 ], 'id = ?', [$sj['id']]);
 
                 echo date('Y-m-d H:i:s') . "   Catalog sync {$archiveCount}/{$totalArchiveCount}: {$archiveName}\n";
+            }
+
+            // Drop stale rows: archives that existed in our DB but aren't in
+            // the borg listing anymore (pruned upstream). Per-row delete so
+            // the ON DELETE CASCADE on backup_jobs/etc. fires properly.
+            $stalePruned = 0;
+            foreach ($existingByName as $staleName => $staleRow) {
+                if (!isset($borgArchiveNamesSet[$staleName])) {
+                    $db->delete('archives', 'id = ?', [$staleRow['id']]);
+                    $stalePruned++;
+                }
+            }
+            if ($stalePruned > 0) {
+                echo date('Y-m-d H:i:s') . " Catalog sync job #{$sj['id']}: dropped {$stalePruned} archive(s) no longer in borg\n";
             }
 
             // Repo size: prefer borg's own dedup-aware unique_csize over the
@@ -1346,6 +1385,125 @@ foreach ($serverJobs as $sj) {
         if (empty($errors)) {
             // Update cached catalog total for dashboard
             \BBS\Services\CatalogImporter::updateCachedTotal($db);
+
+            // Heal: any archive row whose databases_backed_up is NULL gets
+            // its database list reconstructed from the freshly-populated
+            // file_catalog. Recovers archives whose agent-reported metadata
+            // was wiped by a pre-fix catalog_sync (#294). Covers all three
+            // DB plugins: mysql_dump / pg_dump (one .sql{,.gz} per database
+            // at the top level of dump_dir) and mongo_dump (one subdir per
+            // database under dump_dir).
+            $healCount = 0;
+            $needHeal = $db->fetchAll(
+                "SELECT id FROM archives WHERE repository_id = ? AND databases_backed_up IS NULL",
+                [$crRepo['id']]
+            );
+            if (!empty($needHeal)) {
+                $dbPluginConfigs = $db->fetchAll(
+                    "SELECT pc.config, p.slug FROM plugin_configs pc
+                     JOIN plugins p ON p.id = pc.plugin_id
+                     WHERE pc.agent_id = ? AND p.slug IN ('mysql_dump', 'pg_dump', 'mongo_dump')",
+                    [$agentId]
+                );
+                $configsBySlug = [];
+                $defaultDumpDirs = [
+                    'mysql_dump' => '/home/bbs/mysql',
+                    'pg_dump'    => '/home/bbs/pgdump',
+                    'mongo_dump' => '/home/bbs/mongodump',
+                ];
+                foreach ($dbPluginConfigs as $pcRow) {
+                    if (isset($configsBySlug[$pcRow['slug']])) continue; // first one wins
+                    $cfg = json_decode($pcRow['config'], true) ?: [];
+                    $dumpDir = rtrim($cfg['dump_dir'] ?? '', '/');
+                    if ($dumpDir === '') {
+                        $dumpDir = $defaultDumpDirs[$pcRow['slug']] ?? '';
+                    }
+                    if ($dumpDir !== '') {
+                        $configsBySlug[$pcRow['slug']] = $dumpDir;
+                    }
+                }
+
+                if (!empty($configsBySlug)) {
+                    foreach ($needHeal as $ahRow) {
+                        $archiveIdInt = (int) $ahRow['id'];
+                        $reconstructed = null;
+
+                        foreach ($configsBySlug as $slug => $dumpDir) {
+                            if ($slug === 'mongo_dump') {
+                                $rows = $ch->fetchAll(
+                                    "SELECT DISTINCT parent_dir FROM file_catalog
+                                     WHERE agent_id = ? AND archive_id = ?
+                                       AND startsWith(parent_dir, ?)",
+                                    [$agentId, $archiveIdInt, $dumpDir . '/']
+                                );
+                                $dbs = [];
+                                foreach ($rows as $r) {
+                                    $rel = ltrim(substr($r['parent_dir'], strlen($dumpDir)), '/');
+                                    $first = explode('/', $rel)[0] ?? '';
+                                    if ($first !== '' && !in_array($first, $dbs, true)) {
+                                        $dbs[] = $first;
+                                    }
+                                }
+                                if ($dbs) {
+                                    $reconstructed = [
+                                        'databases'    => $dbs,
+                                        'per_database' => count($dbs) > 1,
+                                        'compress'     => false,
+                                    ];
+                                    break;
+                                }
+                            } else {
+                                // mysql_dump / pg_dump
+                                $rows = $ch->fetchAll(
+                                    "SELECT file_name FROM file_catalog
+                                     WHERE agent_id = ? AND archive_id = ?
+                                       AND parent_dir = ?
+                                       AND (endsWith(file_name, '.sql') OR endsWith(file_name, '.sql.gz'))",
+                                    [$agentId, $archiveIdInt, $dumpDir]
+                                );
+                                $dbs = [];
+                                $anyCompressed = false;
+                                foreach ($rows as $r) {
+                                    $fn = $r['file_name'];
+                                    if (str_ends_with($fn, '.sql.gz')) {
+                                        $anyCompressed = true;
+                                        $dbName = substr($fn, 0, -7);
+                                    } else {
+                                        $dbName = substr($fn, 0, -4);
+                                    }
+                                    if ($dbName !== '' && !in_array($dbName, $dbs, true)) {
+                                        $dbs[] = $dbName;
+                                    }
+                                }
+                                if ($dbs) {
+                                    $reconstructed = [
+                                        'databases'    => $dbs,
+                                        'per_database' => count($dbs) > 1,
+                                        'compress'     => $anyCompressed,
+                                    ];
+                                    break;
+                                }
+                            }
+                        }
+
+                        if ($reconstructed !== null) {
+                            $db->update('archives', [
+                                'databases_backed_up' => json_encode($reconstructed),
+                            ], 'id = ?', [$ahRow['id']]);
+                            $healCount++;
+                        }
+                    }
+                }
+            }
+            if ($healCount > 0) {
+                $db->insert('server_log', [
+                    'agent_id' => $agentId,
+                    'backup_job_id' => $sj['id'],
+                    'level' => 'info',
+                    'message' => "Reconstructed database list for {$healCount} archive(s) from dump files in the catalog",
+                ]);
+                echo date('Y-m-d H:i:s') . "   Healed databases_backed_up for {$healCount} archive(s)\n";
+            }
 
             $db->update('backup_jobs', [
                 'status' => 'completed',
