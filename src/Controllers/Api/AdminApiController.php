@@ -1461,10 +1461,18 @@ class AdminApiController extends Controller
      */
     public function getS3Credentials(): void
     {
+        // Hosted mode keeps the tighter platform-token-only gate (the
+        // customer admin shouldn't be able to read the platform's S3
+        // creds). In a normal deployment, any admin token gets through
+        // the door — but the response includes the secret_key, so the
+        // token also needs the Display Secrets capability.
         if (\BBS\Core\Config::isHosted()) {
             $this->requirePlatformApiToken();
         } else {
-            $this->requireApiToken();
+            $ctx = $this->requireApiToken();
+            if (!$this->tokenCanReadSecrets($ctx)) {
+                $this->json(['error' => 'This token is not permitted to read secrets. Create a token with the "Display Secrets" capability and try again.'], 403);
+            }
         }
 
         $keys = [
@@ -1674,6 +1682,9 @@ class AdminApiController extends Controller
     {
         $ctx = $this->requireApiToken();
         $includeSecrets = !empty($_GET['include_secrets']) && $_GET['include_secrets'] !== '0';
+        if ($includeSecrets && !$this->tokenCanReadSecrets($ctx)) {
+            $this->json(['error' => 'This token is not permitted to read secrets. Create a token with the "Display Secrets" capability and try again.'], 403);
+        }
 
         $rows = $this->db->fetchAll(
             "SELECT r.id, r.agent_id, a.name AS agent_name,

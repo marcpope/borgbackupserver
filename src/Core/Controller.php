@@ -163,7 +163,23 @@ class Controller
             'token_id' => $apiToken['id'],
             'token_name' => $apiToken['name'],
             'token_kind' => $apiToken['kind'] ?? 'user',
+            'can_read_secrets' => !empty($apiToken['can_read_secrets']),
         ];
+    }
+
+    /**
+     * True if this token may return secret material in API responses.
+     * Platform tokens (hosted-managed master key) always qualify;
+     * regular user tokens need the `can_read_secrets` flag set explicitly
+     * at create time. Use this to gate any endpoint that returns
+     * passphrases, S3 credentials, encryption keys, etc.
+     */
+    protected function tokenCanReadSecrets(array $ctx): bool
+    {
+        if (($ctx['token_kind'] ?? 'user') === 'platform') {
+            return true;
+        }
+        return !empty($ctx['can_read_secrets']);
     }
 
     /**

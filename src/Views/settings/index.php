@@ -1817,7 +1817,12 @@ document.getElementById('appIconFileInput').addEventListener('change', function(
                 <tbody>
                     <?php foreach ($apiTokens as $token): ?>
                     <tr>
-                        <td class="fw-semibold"><i class="bi bi-key me-1 text-muted"></i><?= htmlspecialchars($token['name']) ?></td>
+                        <td class="fw-semibold">
+                            <i class="bi bi-key me-1 text-muted"></i><?= htmlspecialchars($token['name']) ?>
+                            <?php if (!empty($token['can_read_secrets'])): ?>
+                            <span class="badge bg-warning text-dark ms-2" title="This token can read repository passphrases and S3 credentials"><i class="bi bi-eye me-1"></i>secrets</span>
+                            <?php endif; ?>
+                        </td>
                         <td class="small text-muted"><?= htmlspecialchars($token['username']) ?></td>
                         <td class="small text-muted"><?= \BBS\Core\TimeHelper::format($token['created_at'], 'M j, Y') ?></td>
                         <td class="small text-muted"><?= $token['last_used_at'] ? \BBS\Core\TimeHelper::format($token['last_used_at'], 'M j, Y g:i A') : '<span class="text-muted">never</span>' ?></td>
@@ -1841,6 +1846,13 @@ document.getElementById('appIconFileInput').addEventListener('change', function(
                 <div class="col-md-4">
                     <label class="form-label fw-semibold">Token Name</label>
                     <input type="text" class="form-control" name="name" required placeholder="e.g. ansible-provisioner">
+                </div>
+                <div class="col-md-6">
+                    <div class="form-check mb-2">
+                        <input class="form-check-input" type="checkbox" name="can_read_secrets" value="1" id="canReadSecrets">
+                        <label class="form-check-label fw-semibold" for="canReadSecrets">Display Secrets</label>
+                    </div>
+                    <div class="form-text small">Allows this token to return repository passphrases and S3 credentials in API responses (e.g. <code>?include_secrets=1</code> on <code>GET&nbsp;/api/v1/repositories</code>). Leave unchecked unless you specifically need an escrow / disaster-recovery export.</div>
                 </div>
                 <div class="col-md-2">
                     <button type="submit" class="btn btn-success w-100"><i class="bi bi-plus-circle me-1"></i>Create Token</button>

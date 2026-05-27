@@ -36,7 +36,7 @@ class SettingsController extends Controller
         // Exclude platform-kind tokens — those belong to the hosted platform,
         // not the customer, and must not appear on the user-facing list.
         $apiTokens = $this->db->fetchAll("
-            SELECT t.id, t.name, t.created_at, t.last_used_at, u.username
+            SELECT t.id, t.name, t.created_at, t.last_used_at, t.can_read_secrets, u.username
             FROM api_tokens t
             JOIN users u ON u.id = t.user_id
             WHERE t.kind = 'user'
@@ -341,11 +341,13 @@ class SettingsController extends Controller
 
         $token = 'bbs_tok_' . bin2hex(random_bytes(24));
         $hash = hash('sha256', $token);
+        $canReadSecrets = !empty($_POST['can_read_secrets']) ? 1 : 0;
 
         $this->db->insert('api_tokens', [
             'name' => $name,
             'token_hash' => $hash,
             'user_id' => $_SESSION['user_id'],
+            'can_read_secrets' => $canReadSecrets,
         ]);
 
         $_SESSION['new_api_token'] = $token;
