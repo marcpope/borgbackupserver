@@ -492,6 +492,21 @@ class QueueManager
                     'job_id' => $job['id'],
                     'plugin' => $testPayload,
                 ];
+            } elseif ($job['task_type'] === 'list_dir') {
+                // Browse-filesystem request from the plan-create modal.
+                // Params (path / depth / show_hidden / show_all) were
+                // serialized to status_message at queue time.
+                $params = json_decode($job['status_message'] ?? '{}', true) ?: [];
+                $tasks[] = [
+                    'task' => 'list_dir',
+                    'job_id' => $job['id'],
+                    'path' => $params['path'] ?? '/',
+                    'depth' => (int) ($params['depth'] ?? 2),
+                    'show_hidden' => !empty($params['show_hidden']),
+                    'show_all' => !empty($params['show_all']),
+                    'follow_symlinks' => !empty($params['follow_symlinks']),
+                    'max_entries' => (int) ($params['max_entries'] ?? 5000),
+                ];
             }
         }
 
