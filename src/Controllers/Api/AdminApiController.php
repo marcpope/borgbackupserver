@@ -1461,37 +1461,59 @@ class AdminApiController extends Controller
      */
     public function getS3Credentials(): void
     {
-        // Hosted mode keeps the tighter platform-token-only gate (the
-        // customer admin shouldn't be able to read the platform's S3
-        // creds). In a normal deployment, any admin token gets through
-        // the door — but the response includes the secret_key, so the
-        // token also needs the Display Secrets capability.
-        if (\BBS\Core\Config::isHosted()) {
-            $this->requirePlatformApiToken();
-        } else {
-            $ctx = $this->requireApiToken();
-            if (!$this->tokenCanReadSecrets($ctx)) {
-                $this->json(['error' => 'This token is not permitted to read secrets. Create a token with the "Display Secrets" capability and try again.'], 403);
-            }
+        // Hosted mode: platform-token only for the whole endpoint (even
+        // the non-secret bucket/region fields could reveal where customer
+        // data lives). Non-hosted: any admin token can see the
+        // non-secret fields; the access_key + secret_key only come back
+        // when ?include_secrets=1 is set, and only for tokens with the
+        // Display Secrets capability.
+        $ctx = \BBS\Core\Config::isHosted()
+            ? $this->requirePlatformApiToken()
+            : $this->requireApiToken();
+
+        $includeSecrets = !empty($_GET['include_secrets']) && $_GET['include_secrets'] !== '0';
+        if ($includeSecrets && !$this->tokenCanReadSecrets($ctx)) {
+            $this->json(['error' => 'This token is not permitted to read secrets. Create a token with the "Display Secrets" capability and try again.'], 403);
         }
 
-        $keys = [
+        $publicKeys = [
             's3_endpoint'    => 'endpoint',
             's3_region'      => 'region',
             's3_bucket'      => 'bucket',
+            's3_path_prefix' => 'path_prefix',
+        ];
+        $secretKeys = [
             's3_access_key'  => 'access_key',
             's3_secret_key'  => 'secret_key',
-            's3_path_prefix' => 'path_prefix',
         ];
 
         $out = [];
-        foreach ($keys as $settingKey => $responseKey) {
+        foreach ($publicKeys as $settingKey => $responseKey) {
             $row = $this->db->fetchOne("SELECT `value` FROM settings WHERE `key` = ?", [$settingKey]);
             $out[$responseKey] = $row['value'] ?? null;
         }
-        // Boolean shortcut so callers can check "is it configured" without
-        // matching on the secret value.
-        $out['configured'] = !empty($out['endpoint']) && !empty($out['bucket']) && !empty($out['access_key']);
+        if ($includeSecrets) {
+            foreach ($secretKeys as $settingKey => $responseKey) {
+                $row = $this->db->fetchOne("SELECT `value` FROM settings WHERE `key` = ?", [$settingKey]);
+                $out[$responseKey] = $row['value'] ?? null;
+            }
+        }
+
+        // 'configured' has to look at the secret-side fields too, but it
+        // doesn't reveal their value — just yes/no.
+        $accessKeyRow = $this->db->fetchOne("SELECT `value` FROM settings WHERE `key` = 's3_access_key'");
+        $out['configured'] = !empty($out['endpoint'])
+            && !empty($out['bucket'])
+            && !empty($accessKeyRow['value'] ?? '');
+
+        if ($includeSecrets) {
+            $ip = $_SERVER['REMOTE_ADDR'] ?? 'unknown';
+            $tokenName = $ctx['token_name'] ?? 'unknown';
+            $this->db->insert('server_log', [
+                'level'   => 'warning',
+                'message' => "S3 credentials exported via API (token=\"{$tokenName}\", ip={$ip})",
+            ]);
+        }
 
         $this->json($out);
     }
