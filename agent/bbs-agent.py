@@ -46,7 +46,7 @@ if not hasattr(subprocess, "run"):
     subprocess.run = _subprocess_run
     subprocess.CompletedProcess = _CompletedProcess
 
-AGENT_VERSION = "2.55.5"
+AGENT_VERSION = "2.55.6"
 BORG_PATH = None  # Resolved in get_system_info()
 IS_WINDOWS = sys.platform == "win32"
 
@@ -3051,9 +3051,137 @@ def execute_task(config, task):
         _allow_sleep(sleep_state)
 
 
+# Pseudo-filesystems we hide from the BBS file browser by default. Borg
+# can't / shouldn't back these up anyway and listing them just buries
+# the real filesystem under noise. Users can override via show_all=true.
+_BROWSE_SKIP_ROOTS = frozenset([
+    "/proc", "/sys", "/dev", "/run", "/snap", "/tmp", "/var/run", "/var/lock",
+])
+
+
+def _build_list_dir_tree(task):
+    """Walk the filesystem starting at task['path'] up to task['depth']
+    levels deep. Returns a tree dict the BBS UI can render directly.
+    Bounded by max_entries (default 5000) — when the cap is hit, the
+    current node is marked truncated and remaining siblings/children
+    aren't visited.
+    """
+    path = task.get("path", "/") or "/"
+    if not isinstance(path, str) or not path.startswith("/"):
+        # Windows: accept any absolute-looking path; normalize separators
+        if os.name == "nt" and len(path) >= 2 and path[1] == ":":
+            pass
+        else:
+            raise ValueError("path must be absolute")
+    depth = max(0, min(int(task.get("depth", 2)), 5))
+    max_entries = max(50, min(int(task.get("max_entries", 5000)), 20000))
+    show_hidden = bool(task.get("show_hidden", False))
+    show_all_fs = bool(task.get("show_all", False))
+    follow_symlinks = bool(task.get("follow_symlinks", False))
+
+    counter = {"n": 0, "stop": False}
+
+    def _entry_kind(de):
+        try:
+            if de.is_symlink():
+                return "symlink"
+            if de.is_dir(follow_symlinks=follow_symlinks):
+                return "directory"
+            return "file"
+        except OSError:
+            return "other"
+
+    def _walk(node_path, remaining_depth):
+        if counter["stop"]:
+            return None
+        node = {
+            "name": os.path.basename(node_path.rstrip("/")) or node_path,
+            "path": node_path,
+            "type": "directory",
+            "size": None,
+            "entry_count": 0,
+            "children": [],
+            "truncated": False,
+        }
+        try:
+            entries = []
+            with os.scandir(node_path) as it:
+                for de in it:
+                    if counter["stop"]:
+                        node["truncated"] = True
+                        break
+                    if not show_hidden and de.name.startswith("."):
+                        continue
+                    full = os.path.join(node_path, de.name)
+                    if not show_all_fs and full in _BROWSE_SKIP_ROOTS:
+                        continue
+                    counter["n"] += 1
+                    if counter["n"] > max_entries:
+                        node["truncated"] = True
+                        counter["stop"] = True
+                        break
+                    kind = _entry_kind(de)
+                    try:
+                        st = de.stat(follow_symlinks=False)
+                        size = int(st.st_size) if kind == "file" else None
+                        mtime = int(st.st_mtime)
+                    except OSError:
+                        size, mtime = None, None
+                    entries.append({
+                        "name": de.name,
+                        "path": full,
+                        "type": kind,
+                        "size": size,
+                        "mtime": mtime,
+                    })
+            entries.sort(key=lambda e: (0 if e["type"] == "directory" else 1, e["name"].lower()))
+            node["entry_count"] = len(entries)
+            if remaining_depth <= 0:
+                # Surface children but don't recurse; UI shows them as
+                # expandable but unloaded.
+                node["children"] = entries
+            else:
+                for child in entries:
+                    if child["type"] == "directory":
+                        sub = _walk(child["path"], remaining_depth - 1)
+                        if sub is None:
+                            sub = {**child, "children": [], "truncated": True}
+                        else:
+                            sub["size"] = None  # directories: no size
+                        node["children"].append(sub)
+                    else:
+                        node["children"].append(child)
+        except PermissionError:
+            node["error"] = "permission denied"
+        except OSError as e:
+            node["error"] = str(e)
+        return node
+
+    return _walk(path.rstrip("/") or "/", depth)
+
+
 def _execute_task_inner(config, task, job_id, task_type, command, env_vars,
                         archive_name, directories, plugins, cwd):
     """Inner task execution logic, wrapped by execute_task for sleep inhibition."""
+    # Handle filesystem browse — returns a JSON tree under output_log so
+    # the BBS UI's "Browse..." modal can populate a directory picker
+    # when building backup plans. Bounded by max_entries to keep the
+    # response size sane on busy filesystems.
+    if task_type == "list_dir":
+        try:
+            result_tree = _build_list_dir_tree(task)
+            report_status(config, {
+                "job_id": job_id,
+                "result": "completed",
+                "output_log": json.dumps(result_tree),
+            })
+        except Exception as e:
+            report_status(config, {
+                "job_id": job_id, "result": "failed",
+                "error_log": "list_dir error: {}".format(e),
+            })
+        return
+
     # Handle plugin test
     if task_type == "plugin_test":
         plugin_data = task.get("plugin", {})
