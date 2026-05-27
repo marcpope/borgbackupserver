@@ -1660,4 +1660,78 @@ class AdminApiController extends Controller
             's3_sync_enabled' => $enabled,
         ]);
     }
+
+    /**
+     * GET /api/v1/repositories
+     * List every repository across every client. Pass ?include_secrets=1
+     * to also return the decrypted passphrase per repo — meant for
+     * operator escrow ("save my repo passwords somewhere safe in case the
+     * BBS server itself burns down"). The flag is opt-in so casual reads
+     * don't ever leak secrets, and every secret-bearing call is written
+     * to server_log for audit.
+     */
+    public function listAllRepositories(): void
+    {
+        $ctx = $this->requireApiToken();
+        $includeSecrets = !empty($_GET['include_secrets']) && $_GET['include_secrets'] !== '0';
+
+        $rows = $this->db->fetchAll(
+            "SELECT r.id, r.agent_id, a.name AS agent_name,
+                    r.name, r.path, r.encryption, r.storage_type,
+                    r.size_bytes, r.archive_count, r.created_at,
+                    r.passphrase_encrypted,
+                    COALESCE(rsc.enabled, 0) AS s3_sync_enabled,
+                    rsc.last_sync_at AS s3_last_sync_at
+             FROM repositories r
+             LEFT JOIN agents a ON a.id = r.agent_id
+             LEFT JOIN repository_s3_configs rsc ON rsc.repository_id = r.id
+             ORDER BY a.name, r.name"
+        );
+
+        $out = [];
+        foreach ($rows as $r) {
+            $repo = [
+                'id'              => (int) $r['id'],
+                'agent_id'        => (int) $r['agent_id'],
+                'agent_name'      => $r['agent_name'],
+                'name'            => $r['name'],
+                'path'            => $r['path'],
+                'encryption'      => $r['encryption'],
+                'storage_type'    => $r['storage_type'],
+                'size_bytes'      => (int) $r['size_bytes'],
+                'archive_count'   => (int) $r['archive_count'],
+                'created_at'      => $r['created_at'],
+                's3_sync_enabled' => (bool) $r['s3_sync_enabled'],
+                's3_last_sync_at' => $r['s3_last_sync_at'],
+            ];
+            if ($includeSecrets) {
+                $repo['passphrase'] = null;
+                if (!empty($r['passphrase_encrypted'])) {
+                    try {
+                        $repo['passphrase'] = Encryption::decrypt($r['passphrase_encrypted']);
+                    } catch (\Exception $e) {
+                        $repo['passphrase'] = null;
+                    }
+                }
+            }
+            $out[] = $repo;
+        }
+
+        if ($includeSecrets) {
+            // Audit trail: secrets-bearing read is sensitive enough to log
+            // by token name and source IP so an admin can see who pulled
+            // the master passphrase list and when.
+            $ip = $_SERVER['REMOTE_ADDR'] ?? 'unknown';
+            $tokenName = $ctx['token_name'] ?? 'unknown';
+            $this->db->insert('server_log', [
+                'level'   => 'warning',
+                'message' => "Repository passphrases exported via API (token=\"{$tokenName}\", ip={$ip}, count=" . count($out) . ")",
+            ]);
+        }
+
+        $this->json([
+            'repositories'    => $out,
+            'include_secrets' => $includeSecrets,
+        ]);
+    }
 }

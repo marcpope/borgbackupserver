@@ -297,6 +297,7 @@ class App
         $this->router->map('POST', '/api/v1/maintenance', 'Api\\AdminApiController@setMaintenance');
         $this->router->map('POST', '/api/v1/platform/rotate-token', 'Api\\AdminApiController@rotatePlatformToken');
         $this->router->map('PUT', '/api/v1/repositories/[i:repoId]/s3-sync', 'Api\\AdminApiController@setRepositoryS3Sync');
+        $this->router->map('GET', '/api/v1/repositories', 'Api\\AdminApiController@listAllRepositories');
 
         // Catalog & Restore (client-facing)
         $this->router->map('GET', '/clients/[i:id]/catalog/[i:archive_id]', 'ClientController@catalog');
