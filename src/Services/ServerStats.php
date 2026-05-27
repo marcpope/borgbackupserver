@@ -210,7 +210,7 @@ class ServerStats
         return $partitions;
     }
 
-    private static function formatDfSize(float $bytes): string
+    public static function formatDfSize(float $bytes): string
     {
         $nbsp = "\u{00A0}";
         if ($bytes >= 1099511627776) return round($bytes / 1099511627776, 1) . $nbsp . 'TB';

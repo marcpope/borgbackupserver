@@ -202,11 +202,35 @@ class DashboardController extends Controller
             return $s;
         };
 
-        // Featured partition for the health card: /var/bbs preferred, fall
-        // back to /. Full partition list lives in the Storage Locations card.
+        // Featured partition for the health card. Hosted mode: track the
+        // default storage_locations row (the platform-managed mount, usually
+        // /mnt/repos). Non-hosted: /var/bbs, falling back to /. The full
+        // partition list lives in the Storage Locations card.
         $disk = null;
-        foreach ($partitions as $p) {
-            if (($p['mount'] ?? '') === '/var/bbs') { $disk = $p; break; }
+        if (\BBS\Core\Config::isHosted()) {
+            $defaultRow = $this->db->fetchOne("SELECT path FROM storage_locations WHERE is_default = 1");
+            if ($defaultRow && !empty($defaultRow['path'])) {
+                $defaultPath = rtrim($defaultRow['path'], '/') ?: '/';
+                foreach ($partitions as $p) {
+                    if (($p['mount'] ?? '') === $defaultPath) { $disk = $p; break; }
+                }
+                if (!$disk) {
+                    $du = ServerStats::getDiskUsage($defaultPath);
+                    if ($du) {
+                        $disk = [
+                            'mount'   => $defaultPath,
+                            'size'    => ServerStats::formatDfSize($du['total']),
+                            'used'    => ServerStats::formatDfSize($du['used']),
+                            'percent' => $du['percent'],
+                        ];
+                    }
+                }
+            }
+        }
+        if (!$disk) {
+            foreach ($partitions as $p) {
+                if (($p['mount'] ?? '') === '/var/bbs') { $disk = $p; break; }
+            }
         }
         if (!$disk) {
             foreach ($partitions as $p) {

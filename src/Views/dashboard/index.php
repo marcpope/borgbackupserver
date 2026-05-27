@@ -473,11 +473,37 @@ $dfFix = function (string $s): string {
                         $cpuStatus = $cpuPct > 80 ? 'High Usage' : ($cpuPct > 50 ? 'Moderate' : 'Healthy');
                         $memColor = $memPct > 85 ? '#ef4444' : ($memPct > 60 ? '#f59e0b' : '#0dcaf0');
 
-                        // Featured partition: /var/bbs preferred (where backups live),
-                        // fall back to / so this card never goes blank on odd layouts.
+                        // Featured partition. In hosted mode the platform-managed
+                        // mount is the only one customers care about, so we
+                        // resolve the default storage_locations.path and use
+                        // df on it (it might be a bind-mount under a different
+                        // device that df doesn't show as its own row).
+                        // Non-hosted: /var/bbs preferred, fall back to /.
                         $diskPart = null;
-                        foreach (($partitions ?? []) as $p) {
-                            if (($p['mount'] ?? '') === '/var/bbs') { $diskPart = $p; break; }
+                        $hostedDefault = \BBS\Core\Config::isHosted()
+                            ? $this->db->fetchOne("SELECT path FROM storage_locations WHERE is_default = 1")
+                            : null;
+                        if ($hostedDefault && !empty($hostedDefault['path'])) {
+                            $defaultPath = rtrim($hostedDefault['path'], '/') ?: '/';
+                            foreach (($partitions ?? []) as $p) {
+                                if (($p['mount'] ?? '') === $defaultPath) { $diskPart = $p; break; }
+                            }
+                            if (!$diskPart) {
+                                $du = ServerStats::getDiskUsage($defaultPath);
+                                if ($du) {
+                                    $diskPart = [
+                                        'mount'   => $defaultPath,
+                                        'size'    => ServerStats::formatDfSize($du['total']),
+                                        'used'    => ServerStats::formatDfSize($du['used']),
+                                        'percent' => $du['percent'],
+                                    ];
+                                }
+                            }
+                        }
+                        if (!$diskPart) {
+                            foreach (($partitions ?? []) as $p) {
+                                if (($p['mount'] ?? '') === '/var/bbs') { $diskPart = $p; break; }
+                            }
                         }
                         if (!$diskPart) {
                             foreach (($partitions ?? []) as $p) {
