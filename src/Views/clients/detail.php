@@ -3556,6 +3556,13 @@ const csrfToken = '<?= $this->csrfToken() ?>';
     // We rely on data-bs-toggle/target to *open* the modal and only
     // touch the bootstrap.Modal API for programmatic close.
     function hideModal() {
+        // Bootstrap sets aria-hidden="true" on the modal as it closes, but
+        // if a button inside the modal still has focus the assistive-tech
+        // warning fires ("focused element under aria-hidden ancestor").
+        // Drop focus to the body before hiding to silence it.
+        if (document.activeElement && modalEl.contains(document.activeElement)) {
+            document.activeElement.blur();
+        }
         if (window.bootstrap?.Modal) {
             bootstrap.Modal.getOrCreateInstance(modalEl).hide();
         } else {
@@ -3563,6 +3570,13 @@ const csrfToken = '<?= $this->csrfToken() ?>';
             modalEl.style.display = 'none';
         }
     }
+    // Same protection on Bootstrap's own dismiss path (× button, ESC,
+    // backdrop click) — hook into the modal's pre-hide event.
+    modalEl.addEventListener('hide.bs.modal', () => {
+        if (document.activeElement && modalEl.contains(document.activeElement)) {
+            document.activeElement.blur();
+        }
+    });
 
     document.getElementById('dirBrowseAgentName').textContent = document.title.split(' · ')[0] || 'client';
     const rootPath = isWindows ? 'C:\\' : '/';
@@ -3676,7 +3690,11 @@ const csrfToken = '<?= $this->csrfToken() ?>';
             return;
         }
         if (li.dataset.loaded !== '1' || wrap.children.length === 0) {
-            // Lazy-load this directory at depth 3
+            // Show an inline spinner so the click feels responsive while
+            // the agent's depth-3 fetch is in flight.
+            wrap.innerHTML = '<div class="text-muted small py-1 ps-4"><span class="spinner-border spinner-border-sm me-1"></span>Loading directory…</div>';
+            wrap.style.display = '';
+            expand.textContent = '▽';
             await fetchTree(node.path, 3, true, li);
         }
         wrap.style.display = '';
