@@ -369,7 +369,7 @@ $dfFix = function (string $s): string {
                         <div>
                             <div class="text-muted small">Recovery Points</div>
                             <div class="fs-4 fw-bold"><?= $compact($totalArchiveCount) ?></div>
-                            <div class="text-muted small"><?= ServerStats::formatBytes($totalOriginalBytes) ?> protected · <?= ServerStats::formatBytes($totalDiskBytes) ?> on disk</div>
+                            <div class="text-muted small"><?= ServerStats::formatBytes($totalDiskBytes) ?> on disk</div>
                         </div>
                     </div>
                 </div>
