@@ -1822,7 +1822,7 @@ class ClientController extends Controller
         }
 
         $job = $this->db->fetchOne(
-            "SELECT id, status, status_message, error_log FROM backup_jobs WHERE id = ? AND agent_id = ? AND task_type = 'list_dir'",
+            "SELECT id, status, status_message, error_log, task_result FROM backup_jobs WHERE id = ? AND agent_id = ? AND task_type = 'list_dir'",
             [$taskId, $id]
         );
         if (!$job) {
@@ -1838,12 +1838,26 @@ class ClientController extends Controller
             return;
         }
 
+        // Primary source: the task_result column on the job row (always
+        // available regardless of cache state). Fall back to the cache
+        // for older rows that completed before the DB persistence was
+        // added.
         $cache = \BBS\Services\Cache::getInstance();
-        $tree = $cache->get("browse_result:{$taskId}");
+        $tree = null;
+        if (!empty($job['task_result'])) {
+            $decoded = json_decode($job['task_result'], true);
+            if (is_array($decoded)) $tree = $decoded;
+        }
+        if ($tree === null) {
+            $tree = $cache->get("browse_result:{$taskId}");
+        }
         if (!is_array($tree)) {
             $this->json(['status' => 'failed', 'error' => 'Result not available (may have expired)']);
             return;
         }
+
+        // Populate the per-params cache so repeat browses with the same
+        // params short-circuit. No-op if memcached isn't available.
         $params = json_decode($job['status_message'] ?? '{}', true) ?: [];
         if (!empty($params['cache_key'])) {
             $cache->set($params['cache_key'], $tree, 900);

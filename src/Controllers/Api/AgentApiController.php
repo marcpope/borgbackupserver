@@ -489,11 +489,16 @@ class AgentApiController extends Controller
         ]);
 
         // Log output from tasks like update_borg. Exception: list_dir
-        // reports its tree as a JSON-encoded output_log; stash it in the
-        // cache for the browse modal's poll endpoint instead of spamming
-        // server_log with a multi-KB JSON blob.
+        // reports its tree as a JSON-encoded output_log; persist it on
+        // the job row (task_result column) so the browse modal's poll
+        // endpoint can read it back. We also push to the Cache layer
+        // as a fast-path, but DB is the source of truth — Cache returns
+        // unavailable on systems where memcached isn't running.
         if (!empty($input['output_log'])) {
             if (($job['task_type'] ?? '') === 'list_dir' && $result === 'completed') {
+                $this->db->update('backup_jobs', [
+                    'task_result' => $input['output_log'],
+                ], 'id = ?', [$jobId]);
                 $tree = json_decode($input['output_log'], true);
                 if (is_array($tree)) {
                     \BBS\Services\Cache::getInstance()->set("browse_result:{$jobId}", $tree, 900);
