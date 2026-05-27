@@ -389,7 +389,14 @@ class AgentApiController extends Controller
         } elseif (!$isCataloging) {
             $data['completed_at'] = $now;
             $data['duration_seconds'] = max(0, $duration);
-            $data['status_message'] = null;
+            // list_dir stashes its request params (including cache_key) in
+            // status_message at queue time; the browsePoll endpoint needs
+            // those after completion to populate the per-params cache.
+            // For every other task type the field is a transient progress
+            // line and gets cleared on completion as usual.
+            if (($job['task_type'] ?? '') !== 'list_dir') {
+                $data['status_message'] = null;
+            }
         }
 
         // If the agent never reported "running", backfill started_at
