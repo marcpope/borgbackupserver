@@ -431,9 +431,13 @@ case "$ACTION" in
             BORG_EXTRA_OPTS=(--lock-wait 600)
         fi
 
-        # Run borg command as the repo-owning user
+        # Run borg command as the repo-owning user. BORG_CHECK_I_KNOW_WHAT_I_AM_DOING=YES
+        # is only consulted when `borg check --repair` runs (skips its interactive
+        # 'YES' prompt that would otherwise block server-side repair jobs); harmless
+        # on every other subcommand.
         sudo -u "$USERNAME" \
             BORG_PASSPHRASE="$PASSPHRASE" \
+            BORG_CHECK_I_KNOW_WHAT_I_AM_DOING=YES \
             BORG_UNKNOWN_UNENCRYPTED_REPO_ACCESS_IS_OK=yes \
             BORG_RELOCATED_REPO_ACCESS_IS_OK=yes \
             BORG_BASE_DIR="$BORG_DIR" \

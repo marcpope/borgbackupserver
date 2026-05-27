@@ -191,6 +191,9 @@ class RemoteSshService
         }
         $env['BORG_UNKNOWN_UNENCRYPTED_REPO_ACCESS_IS_OK'] = 'yes';
         $env['BORG_RELOCATED_REPO_ACCESS_IS_OK'] = 'yes';
+        // Skip the interactive 'YES' prompt when running `check --repair`;
+        // borg only reads this env var for that subcommand.
+        $env['BORG_CHECK_I_KNOW_WHAT_I_AM_DOING'] = 'YES';
 
         return $this->runBorgWithKey($config, $cmd, $env);
     }
