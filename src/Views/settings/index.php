@@ -1878,6 +1878,7 @@ document.getElementById('appIconFileInput').addEventListener('change', function(
                 <tr><td><span class="badge bg-success">GET</span></td><td><code>/api/v1/clients</code></td><td>List all clients</td></tr>
                 <tr><td><span class="badge bg-primary">POST</span></td><td><code>/api/v1/clients</code></td><td>Create a client (returns api_key for agent install)</td></tr>
                 <tr><td><span class="badge bg-success">GET</span></td><td><code>/api/v1/clients/{id}</code></td><td>Get client details with repos &amp; plans</td></tr>
+                <tr><td><span class="badge bg-warning text-dark">PUT</span></td><td><code>/api/v1/clients/{id}</code></td><td>Rename a client: <code>{"name": "new-name"}</code></td></tr>
                 <tr><td><span class="badge bg-danger">DELETE</span></td><td><code>/api/v1/clients/{id}</code></td><td>Delete a client</td></tr>
                 <tr><td><span class="badge bg-success">GET</span></td><td><code>/api/v1/clients/{id}/repositories</code></td><td>List repositories</td></tr>
                 <tr><td><span class="badge bg-primary">POST</span></td><td><code>/api/v1/clients/{id}/repositories</code></td><td>Create a repository</td></tr>
@@ -1904,12 +1905,15 @@ document.getElementById('appIconFileInput').addEventListener('change', function(
                 <tr><td><span class="badge bg-primary">POST</span></td><td><code>/api/v1/clients/{id}/plugin-configs</code></td><td>Create a plugin config</td></tr>
                 <tr><td colspan="3" class="text-muted small fw-semibold pt-2">Storage</td></tr>
                 <tr><td><span class="badge bg-success">GET</span></td><td><code>/api/v1/storage</code></td><td>List local &amp; remote SSH storage locations</td></tr>
+                <tr><td><span class="badge bg-primary">POST</span></td><td><code>/api/v1/storage</code></td><td>Register a new local storage location: <code>{"label": "...", "path": "/abs/path", "is_default": false}</code></td></tr>
                 <tr><td><span class="badge bg-success">GET</span></td><td><code>/api/v1/storage/capacity</code></td><td>Provisioned / used / free bytes for the default storage location</td></tr>
                 <tr><td colspan="3" class="text-muted small fw-semibold pt-2">Repositories (cross-client)</td></tr>
                 <tr><td><span class="badge bg-success">GET</span></td><td><code>/api/v1/repositories</code></td><td>List every repository across every client. Add <code>?include_secrets=1</code> to also return the decrypted passphrase (requires Display Secrets token).</td></tr>
                 <tr><td><span class="badge bg-warning text-dark">PUT</span></td><td><code>/api/v1/repositories/{repo_id}/s3-sync</code></td><td>Toggle per-repository S3 off-site sync: <code>{"enabled": true|false}</code></td></tr>
                 <tr><td colspan="3" class="text-muted small fw-semibold pt-2">S3 Off-site Sync</td></tr>
                 <tr><td><span class="badge bg-success">GET</span></td><td><code>/api/v1/s3-credentials</code></td><td>Read the global S3 configuration (endpoint / region / bucket / path_prefix / configured). Add <code>?include_secrets=1</code> to also return <code>access_key</code> + <code>secret_key</code> (requires Display Secrets token).</td></tr>
+                <tr><td><span class="badge bg-primary">POST</span></td><td><code>/api/v1/s3-credentials</code></td><td>Set the global S3 configuration: <code>{"endpoint": "...", "region": "...", "bucket": "...", "access_key": "...", "secret_key": "...", "path_prefix": ""}</code></td></tr>
+                <tr><td><span class="badge bg-danger">DELETE</span></td><td><code>/api/v1/s3-credentials</code></td><td>Clear the global S3 configuration and disable per-repo S3 sync on every repository</td></tr>
                 <tr><td colspan="3" class="text-muted small fw-semibold pt-2">Maintenance</td></tr>
                 <tr><td><span class="badge bg-success">GET</span></td><td><code>/api/v1/maintenance</code></td><td>Read the maintenance-mode flag</td></tr>
                 <tr><td><span class="badge bg-primary">POST</span></td><td><code>/api/v1/maintenance</code></td><td>Toggle maintenance mode: <code>{"enabled": true|false}</code> (pauses agent dispatch)</td></tr>

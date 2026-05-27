@@ -1520,12 +1520,19 @@ class AdminApiController extends Controller
 
     /**
      * POST /api/v1/s3-credentials
-     * Set the global S3 sync credentials. Platform-only because in hosted
-     * mode the customer never sees the access key/secret.
+     * Set the global S3 sync credentials. In a normal deployment any admin
+     * token works — matches the Settings UI surface where any admin can
+     * configure S3. Hosted mode keeps the tighter platform-token gate
+     * because the customer admin shouldn't be able to redirect syncs to
+     * a non-platform bucket.
      */
     public function setS3Credentials(): void
     {
-        $this->requirePlatformApiToken();
+        if (\BBS\Core\Config::isHosted()) {
+            $this->requirePlatformApiToken();
+        } else {
+            $this->requireApiToken();
+        }
         $input = $this->getJsonInput();
 
         $fields = ['s3_endpoint', 's3_region', 's3_bucket', 's3_access_key', 's3_secret_key', 's3_path_prefix'];
@@ -1565,7 +1572,11 @@ class AdminApiController extends Controller
      */
     public function clearS3Credentials(): void
     {
-        $this->requirePlatformApiToken();
+        if (\BBS\Core\Config::isHosted()) {
+            $this->requirePlatformApiToken();
+        } else {
+            $this->requireApiToken();
+        }
 
         $keys = ['s3_endpoint', 's3_region', 's3_bucket', 's3_access_key', 's3_secret_key', 's3_path_prefix'];
         foreach ($keys as $key) {
