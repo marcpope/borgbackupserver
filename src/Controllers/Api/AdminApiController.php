@@ -1778,4 +1778,290 @@ class AdminApiController extends Controller
             'include_secrets' => $includeSecrets,
         ]);
     }
+
+    // ── Users ───────────────────────────────────────────────────────
+
+    /**
+     * Shape a users-table row for API responses. Strips password_hash
+     * and totp_secret unconditionally — those are never returned.
+     */
+    private function shapeUser(array $row): array
+    {
+        return [
+            'id'            => (int) $row['id'],
+            'username'      => $row['username'],
+            'email'         => $row['email'],
+            'role'          => $row['role'],
+            'all_clients'   => (bool) $row['all_clients'],
+            'auth_provider' => $row['auth_provider'] ?? 'local',
+            'oidc_status'   => $row['oidc_status'] ?? 'active',
+            'totp_enabled'  => (bool) ($row['totp_enabled'] ?? false),
+            'timezone'      => $row['timezone'],
+            'time_format'   => $row['time_format'],
+        ];
+    }
+
+    /**
+     * GET /api/v1/users
+     */
+    public function listUsers(): void
+    {
+        $this->requireApiToken();
+        $rows = $this->db->fetchAll("SELECT * FROM users ORDER BY username");
+        $out = array_map(fn($r) => $this->shapeUser($r), $rows);
+        $this->json(['users' => $out]);
+    }
+
+    /**
+     * GET /api/v1/users/{id}
+     */
+    public function getUser(int $id): void
+    {
+        $this->requireApiToken();
+        $row = $this->db->fetchOne("SELECT * FROM users WHERE id = ?", [$id]);
+        if (!$row) {
+            $this->json(['error' => 'User not found'], 404);
+        }
+        $this->json($this->shapeUser($row));
+    }
+
+    /**
+     * POST /api/v1/users
+     * Body: {"username": "...", "email": "...", "password": "...", "role": "user|admin"}
+     */
+    public function createUser(): void
+    {
+        $this->requireApiToken();
+        $input = $this->getJsonInput();
+
+        $username = trim((string) ($input['username'] ?? ''));
+        $email    = trim((string) ($input['email'] ?? ''));
+        $password = (string) ($input['password'] ?? '');
+        $role     = $input['role'] ?? 'user';
+
+        if ($username === '' || $email === '' || $password === '') {
+            $this->json(['error' => 'username, email, and password are required'], 400);
+        }
+        if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            $this->json(['error' => 'email is not valid'], 400);
+        }
+        if (strlen($password) < 8) {
+            $this->json(['error' => 'password must be at least 8 characters'], 400);
+        }
+        $role = in_array($role, ['admin', 'user'], true) ? $role : 'user';
+
+        if ($this->db->fetchOne("SELECT id FROM users WHERE username = ? OR email = ?", [$username, $email])) {
+            $this->json(['error' => 'A user with that username or email already exists'], 409);
+        }
+
+        $newId = $this->db->insert('users', [
+            'username'      => $username,
+            'email'         => $email,
+            'password_hash' => password_hash($password, PASSWORD_BCRYPT),
+            'role'          => $role,
+        ]);
+        $row = $this->db->fetchOne("SELECT * FROM users WHERE id = ?", [$newId]);
+        $this->json($this->shapeUser($row), 201);
+    }
+
+    /**
+     * PUT /api/v1/users/{id}
+     * Body: any of email / password / role / all_clients / timezone / time_format.
+     * username changes are NOT supported via this endpoint (creates session
+     * inconsistency for the in-flight user; do it via the UI if you really
+     * need to). Pass reset_totp:true to clear the user's 2FA secret.
+     */
+    public function updateUser(int $id): void
+    {
+        $this->requireApiToken();
+        $input = $this->getJsonInput();
+
+        $existing = $this->db->fetchOne("SELECT * FROM users WHERE id = ?", [$id]);
+        if (!$existing) {
+            $this->json(['error' => 'User not found'], 404);
+        }
+
+        $updates = [];
+        if (isset($input['email'])) {
+            $email = trim((string) $input['email']);
+            if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+                $this->json(['error' => 'email is not valid'], 400);
+            }
+            $dup = $this->db->fetchOne("SELECT id FROM users WHERE email = ? AND id != ?", [$email, $id]);
+            if ($dup) $this->json(['error' => 'That email is already in use'], 409);
+            $updates['email'] = $email;
+        }
+        if (isset($input['password'])) {
+            $password = (string) $input['password'];
+            if (strlen($password) < 8) {
+                $this->json(['error' => 'password must be at least 8 characters'], 400);
+            }
+            $updates['password_hash'] = password_hash($password, PASSWORD_BCRYPT);
+        }
+        if (isset($input['role'])) {
+            $role = $input['role'];
+            if (!in_array($role, ['admin', 'user'], true)) {
+                $this->json(['error' => 'role must be admin or user'], 400);
+            }
+            // Don't allow demoting the last remaining admin.
+            if ($existing['role'] === 'admin' && $role !== 'admin') {
+                $adminCount = (int) ($this->db->fetchOne("SELECT COUNT(*) AS c FROM users WHERE role = 'admin'")['c'] ?? 0);
+                if ($adminCount <= 1) {
+                    $this->json(['error' => 'Cannot demote the last admin user'], 409);
+                }
+            }
+            $updates['role'] = $role;
+        }
+        if (isset($input['all_clients'])) {
+            $updates['all_clients'] = $input['all_clients'] ? 1 : 0;
+        }
+        if (isset($input['timezone'])) {
+            $updates['timezone'] = (string) $input['timezone'];
+        }
+        if (isset($input['time_format'])) {
+            $tf = $input['time_format'];
+            if (!in_array($tf, ['12h', '24h'], true)) {
+                $this->json(['error' => 'time_format must be 12h or 24h'], 400);
+            }
+            $updates['time_format'] = $tf;
+        }
+        if (!empty($input['reset_totp'])) {
+            $updates['totp_secret'] = null;
+            $updates['totp_enabled'] = 0;
+            $updates['totp_enabled_at'] = null;
+        }
+
+        if (empty($updates)) {
+            $this->json(['error' => 'No updatable fields provided'], 400);
+        }
+
+        $this->db->update('users', $updates, 'id = ?', [$id]);
+        $row = $this->db->fetchOne("SELECT * FROM users WHERE id = ?", [$id]);
+        $this->json($this->shapeUser($row));
+    }
+
+    /**
+     * DELETE /api/v1/users/{id}
+     */
+    public function deleteUser(int $id): void
+    {
+        $ctx = $this->requireApiToken();
+
+        $row = $this->db->fetchOne("SELECT * FROM users WHERE id = ?", [$id]);
+        if (!$row) {
+            $this->json(['error' => 'User not found'], 404);
+        }
+        if ((int) $ctx['id'] === (int) $id) {
+            $this->json(['error' => 'Cannot delete the user the API token belongs to'], 409);
+        }
+        if ($row['role'] === 'admin') {
+            $adminCount = (int) ($this->db->fetchOne("SELECT COUNT(*) AS c FROM users WHERE role = 'admin'")['c'] ?? 0);
+            if ($adminCount <= 1) {
+                $this->json(['error' => 'Cannot delete the last admin user'], 409);
+            }
+        }
+        $this->db->delete('users', 'id = ?', [$id]);
+        $this->json(['status' => 'ok']);
+    }
+
+    // ── Server log ──────────────────────────────────────────────────
+
+    /**
+     * GET /api/v1/log
+     * Filters: ?level=info|warning|error&agent_id=N&since=YYYY-MM-DD%20HH:MM:SS&limit=N&offset=N
+     */
+    public function listLog(): void
+    {
+        $this->requireApiToken();
+
+        $level   = $_GET['level'] ?? null;
+        $agentId = isset($_GET['agent_id']) ? (int) $_GET['agent_id'] : null;
+        $since   = $_GET['since'] ?? null;
+        $limit   = isset($_GET['limit']) ? max(1, min(500, (int) $_GET['limit'])) : 100;
+        $offset  = isset($_GET['offset']) ? max(0, (int) $_GET['offset']) : 0;
+
+        $where  = [];
+        $params = [];
+        if ($level !== null && in_array($level, ['info', 'warning', 'error'], true)) {
+            $where[] = "l.level = ?";
+            $params[] = $level;
+        }
+        if ($agentId !== null && $agentId > 0) {
+            $where[] = "l.agent_id = ?";
+            $params[] = $agentId;
+        }
+        if ($since !== null && $since !== '') {
+            $where[] = "l.created_at >= ?";
+            $params[] = $since;
+        }
+        $whereSql = !empty($where) ? ('WHERE ' . implode(' AND ', $where)) : '';
+
+        $total = (int) ($this->db->fetchOne(
+            "SELECT COUNT(*) AS c FROM server_log l {$whereSql}",
+            $params
+        )['c'] ?? 0);
+
+        $rows = $this->db->fetchAll(
+            "SELECT l.id, l.agent_id, a.name AS agent_name, l.backup_job_id, l.level, l.message, l.created_at
+             FROM server_log l
+             LEFT JOIN agents a ON a.id = l.agent_id
+             {$whereSql}
+             ORDER BY l.created_at DESC, l.id DESC
+             LIMIT {$limit} OFFSET {$offset}",
+            $params
+        );
+
+        $this->json([
+            'log'    => $rows,
+            'total'  => $total,
+            'limit'  => $limit,
+            'offset' => $offset,
+        ]);
+    }
+
+    // ── Schedules (cross-client overview) ───────────────────────────
+
+    /**
+     * GET /api/v1/schedules
+     * Flat view of every backup plan and its schedule across all clients.
+     * Aggregates what /clients/{id}/plans returns per-client into one
+     * response so monitoring / oncall tools don't have to fan-out.
+     */
+    public function listSchedules(): void
+    {
+        $this->requireApiToken();
+
+        $rows = $this->db->fetchAll(
+            "SELECT bp.id AS plan_id, bp.name AS plan_name, bp.enabled AS plan_enabled,
+                    bp.agent_id, a.name AS agent_name, a.status AS agent_status,
+                    bp.repository_id, r.name AS repository_name,
+                    s.frequency, s.times, s.day_of_week, s.day_of_month,
+                    s.timezone, s.enabled AS schedule_enabled,
+                    s.next_run, s.last_run,
+                    (SELECT bj.status FROM backup_jobs bj
+                       WHERE bj.backup_plan_id = bp.id
+                       ORDER BY bj.id DESC LIMIT 1) AS last_status,
+                    (SELECT bj.completed_at FROM backup_jobs bj
+                       WHERE bj.backup_plan_id = bp.id AND bj.status = 'completed'
+                       ORDER BY bj.id DESC LIMIT 1) AS last_completed_at
+             FROM backup_plans bp
+             JOIN agents a ON a.id = bp.agent_id
+             JOIN repositories r ON r.id = bp.repository_id
+             LEFT JOIN schedules s ON s.backup_plan_id = bp.id
+             ORDER BY a.name, bp.name"
+        );
+
+        foreach ($rows as &$r) {
+            $r['plan_id']         = (int) $r['plan_id'];
+            $r['agent_id']        = (int) $r['agent_id'];
+            $r['repository_id']   = (int) $r['repository_id'];
+            $r['plan_enabled']    = (bool) $r['plan_enabled'];
+            $r['schedule_enabled']= isset($r['schedule_enabled']) ? (bool) $r['schedule_enabled'] : null;
+            $r['day_of_week']     = isset($r['day_of_week']) && $r['day_of_week'] !== null
+                                    ? (int) $r['day_of_week'] : null;
+        }
+        unset($r);
+
+        $this->json(['schedules' => $rows]);
+    }
 }

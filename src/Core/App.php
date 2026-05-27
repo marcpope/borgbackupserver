@@ -298,6 +298,13 @@ class App
         $this->router->map('POST', '/api/v1/platform/rotate-token', 'Api\\AdminApiController@rotatePlatformToken');
         $this->router->map('PUT', '/api/v1/repositories/[i:repoId]/s3-sync', 'Api\\AdminApiController@setRepositoryS3Sync');
         $this->router->map('GET', '/api/v1/repositories', 'Api\\AdminApiController@listAllRepositories');
+        $this->router->map('GET', '/api/v1/users', 'Api\\AdminApiController@listUsers');
+        $this->router->map('POST', '/api/v1/users', 'Api\\AdminApiController@createUser');
+        $this->router->map('GET', '/api/v1/users/[i:id]', 'Api\\AdminApiController@getUser');
+        $this->router->map('PUT', '/api/v1/users/[i:id]', 'Api\\AdminApiController@updateUser');
+        $this->router->map('DELETE', '/api/v1/users/[i:id]', 'Api\\AdminApiController@deleteUser');
+        $this->router->map('GET', '/api/v1/log', 'Api\\AdminApiController@listLog');
+        $this->router->map('GET', '/api/v1/schedules', 'Api\\AdminApiController@listSchedules');
 
         // Catalog & Restore (client-facing)
         $this->router->map('GET', '/clients/[i:id]/catalog/[i:archive_id]', 'ClientController@catalog');

@@ -1914,6 +1914,16 @@ document.getElementById('appIconFileInput').addEventListener('change', function(
                 <tr><td><span class="badge bg-success">GET</span></td><td><code>/api/v1/s3-credentials</code></td><td>Read the global S3 configuration (endpoint / region / bucket / path_prefix / configured). Add <code>?include_secrets=1</code> to also return <code>access_key</code> + <code>secret_key</code> (requires Display Secrets token).</td></tr>
                 <tr><td><span class="badge bg-primary">POST</span></td><td><code>/api/v1/s3-credentials</code></td><td>Set the global S3 configuration: <code>{"endpoint": "...", "region": "...", "bucket": "...", "access_key": "...", "secret_key": "...", "path_prefix": ""}</code></td></tr>
                 <tr><td><span class="badge bg-danger">DELETE</span></td><td><code>/api/v1/s3-credentials</code></td><td>Clear the global S3 configuration and disable per-repo S3 sync on every repository</td></tr>
+                <tr><td colspan="3" class="text-muted small fw-semibold pt-2">Users</td></tr>
+                <tr><td><span class="badge bg-success">GET</span></td><td><code>/api/v1/users</code></td><td>List all BBS users</td></tr>
+                <tr><td><span class="badge bg-primary">POST</span></td><td><code>/api/v1/users</code></td><td>Create a user: <code>{"username", "email", "password", "role": "admin|user"}</code></td></tr>
+                <tr><td><span class="badge bg-success">GET</span></td><td><code>/api/v1/users/{id}</code></td><td>Get one user</td></tr>
+                <tr><td><span class="badge bg-warning text-dark">PUT</span></td><td><code>/api/v1/users/{id}</code></td><td>Update email / password / role / all_clients / timezone / time_format. Pass <code>reset_totp:true</code> to clear 2FA.</td></tr>
+                <tr><td><span class="badge bg-danger">DELETE</span></td><td><code>/api/v1/users/{id}</code></td><td>Delete a user (refuses to delete the last admin or the token's own user)</td></tr>
+                <tr><td colspan="3" class="text-muted small fw-semibold pt-2">Server Log</td></tr>
+                <tr><td><span class="badge bg-success">GET</span></td><td><code>/api/v1/log</code></td><td>Read server_log entries. Filters: <code>?level=info|warning|error</code>, <code>?agent_id=N</code>, <code>?since=YYYY-MM-DD HH:MM:SS</code>, <code>?limit=N&amp;offset=N</code> (limit max 500, default 100).</td></tr>
+                <tr><td colspan="3" class="text-muted small fw-semibold pt-2">Schedules</td></tr>
+                <tr><td><span class="badge bg-success">GET</span></td><td><code>/api/v1/schedules</code></td><td>Flat list of every plan with its schedule, next_run, last_run, last_status, and last_completed_at across all clients</td></tr>
                 <tr><td colspan="3" class="text-muted small fw-semibold pt-2">Maintenance</td></tr>
                 <tr><td><span class="badge bg-success">GET</span></td><td><code>/api/v1/maintenance</code></td><td>Read the maintenance-mode flag</td></tr>
                 <tr><td><span class="badge bg-primary">POST</span></td><td><code>/api/v1/maintenance</code></td><td>Toggle maintenance mode: <code>{"enabled": true|false}</code> (pauses agent dispatch)</td></tr>
