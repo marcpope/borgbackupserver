@@ -144,8 +144,12 @@ class S3SyncService
             return ['success' => false, 'output' => "Local repo path not found: {$localPath}"];
         }
 
-        // Build rclone command
-        $cmd = ['rclone', 'sync', $localPath, $remote, '--transfers', '4', '--checkers', '8'];
+        // Build rclone command. --s3-no-check-bucket skips the pre-flight
+        // CreateBucket call rclone otherwise issues on every session — the
+        // bucket already exists (we never create it), and least-privilege
+        // IAM policies that don't grant s3:CreateBucket 403 on that probe
+        // and abort the whole sync before any object is written.
+        $cmd = ['rclone', 'sync', $localPath, $remote, '--transfers', '4', '--checkers', '8', '--s3-no-check-bucket'];
 
         if (!empty($creds['bandwidth_limit'])) {
             $cmd[] = '--bwlimit';
@@ -254,8 +258,9 @@ class S3SyncService
             }
         }
 
-        // Build rclone command - sync FROM S3 TO local (reverse of syncRepository)
-        $cmd = ['rclone', 'sync', $remote, $localPath, '--transfers', '4', '--checkers', '8'];
+        // Build rclone command - sync FROM S3 TO local (reverse of syncRepository).
+        // --s3-no-check-bucket: see syncRepository().
+        $cmd = ['rclone', 'sync', $remote, $localPath, '--transfers', '4', '--checkers', '8', '--s3-no-check-bucket'];
 
         if (!empty($creds['bandwidth_limit'])) {
             $cmd[] = '--bwlimit';
@@ -345,7 +350,7 @@ class S3SyncService
         }
 
         $remote = "S3:{$creds['bucket']}/";
-        $cmd = ['rclone', 'lsd', $remote, '--max-depth', '1', '--contimeout', '5s', '--timeout', '8s'];
+        $cmd = ['rclone', 'lsd', $remote, '--max-depth', '1', '--contimeout', '5s', '--timeout', '8s', '--s3-no-check-bucket'];
 
         $result = $this->runRcloneWithTimeout($cmd, $creds, 10);
 
@@ -460,7 +465,7 @@ class S3SyncService
         $remote = "S3:{$creds['bucket']}/{$remotePath}";
 
         // List directories (repos) under the agent folder
-        $cmd = ['rclone', 'lsd', $remote, '--contimeout', '5s', '--timeout', '8s'];
+        $cmd = ['rclone', 'lsd', $remote, '--contimeout', '5s', '--timeout', '8s', '--s3-no-check-bucket'];
 
         $result = $this->runRcloneWithTimeout($cmd, $creds, 10);
 
@@ -631,8 +636,10 @@ class S3SyncService
         $remotePath = $prefix ? "{$prefix}/{$agentName}/{$repoName}" : "{$agentName}/{$repoName}";
         $remote = "S3:{$creds['bucket']}/{$remotePath}/.bbs-manifest.json";
 
-        // Upload via rclone copyto
-        $cmd = ['rclone', 'copyto', $manifestFile, $remote];
+        // Upload via rclone copyto.
+        // --s3-no-check-bucket: skip the pre-flight CreateBucket probe that
+        // 403s on least-privilege IAM policies (see syncRepository()).
+        $cmd = ['rclone', 'copyto', $manifestFile, $remote, '--s3-no-check-bucket'];
         $env = $this->buildRcloneEnv($creds);
 
         $desc = [

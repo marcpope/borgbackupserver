@@ -640,6 +640,7 @@ case "$ACTION" in
             rclone sync "$LOCAL_PATH" "$REMOTE" \
             --transfers 4 --checkers 8 \
             -v --stats-one-line --stats 5s \
+            --s3-no-check-bucket \
             "${EXTRA_ARGS[@]}" 2>&1
 
         exit $?
@@ -716,6 +717,7 @@ case "$ACTION" in
             rclone sync "$REMOTE" "$LOCAL_PATH" \
             --transfers 4 --checkers 8 \
             -v --stats-one-line --stats 5s \
+            --s3-no-check-bucket \
             "${EXTRA_ARGS[@]}" 2>&1
 
         EXIT_CODE=$?
@@ -933,7 +935,8 @@ case "$ACTION" in
             "RCLONE_CONFIG_S3_REGION=${S3_REGION}" \
             rclone sync "$LOCAL_DIR" "$REMOTE" \
             --include 'bbs-backup-*.tar.gz' \
-            --transfers 2 -v 2>&1
+            --transfers 2 -v \
+            --s3-no-check-bucket 2>&1
 
         EXIT_CODE=$?
         if [ $EXIT_CODE -eq 0 ]; then
