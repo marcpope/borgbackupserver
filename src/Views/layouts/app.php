@@ -8,6 +8,12 @@
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
     <link href="/css/style.css?v=<?= filemtime(__DIR__ . '/../../../public/css/style.css') ?>" rel="stylesheet">
+    <!-- bootstrap.bundle here (head, blocking) instead of at body-end so view
+         inline scripts that reference `bootstrap` (Tooltip, Collapse) don't
+         race against the loader. Without this, the first uncached page load
+         on tabs with inline bootstrap calls intermittently throws
+         "bootstrap is not defined" and the page renders in a broken state. -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
     <script src="/js/app-utils.js?v=<?= filemtime(__DIR__ . '/../../../public/js/app-utils.js') ?>"></script>
     <link rel="manifest" href="/manifest.json">
     <!-- Favicons + apple-touch-icon. Served by BrandingController, which
@@ -316,7 +322,7 @@
     window.BBS_TIME_24H = <?= json_encode(($_SESSION['time_format'] ?? '12h') === '24h') ?>;
     window.BBS_TIMEZONE = <?= json_encode($_SESSION['timezone'] ?? 'America/New_York') ?>;
     </script>
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+    <!-- bootstrap.bundle moved to <head> (see comment there) — no second tag here. -->
     <script>
     // Global dropdown/tooltip escape fix (issue #161 and predecessors).
     // Every dropdown toggle in the app gets data-bs-strategy="fixed" so Popper

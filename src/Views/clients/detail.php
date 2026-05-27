@@ -1191,9 +1191,16 @@ $sizeDisplay = $totalSize > 0 ? \BBS\Services\ServerStats::formatBytes((int) $to
         if (grid) grid.style.display = 'none';
         if (solo) solo.style.display = 'none';
         if (create) create.style.display = '';
-        // Collapse any open edit panels
+        // Collapse any open edit panels. Bootstrap.js loads via <script defer>
+        // in the layout, so on a fast click immediately after page-render the
+        // global may not yet exist — fall back to a CSS class swap, which is
+        // what bootstrap's Collapse does internally anyway.
         document.querySelectorAll('.edit-plan-panel.show').forEach(function(p) {
-            bootstrap.Collapse.getOrCreateInstance(p).hide();
+            if (window.bootstrap && bootstrap.Collapse) {
+                bootstrap.Collapse.getOrCreateInstance(p).hide();
+            } else {
+                p.classList.remove('show');
+            }
         });
     }
     function hideCreatePlan() {
@@ -1442,7 +1449,7 @@ $sizeDisplay = $totalSize > 0 ? \BBS\Services\ServerStats::formatBytes((int) $to
                             <input type="hidden" name="day_of_week" class="schedule-dow-hidden" value="<?= (int)$editDow ?>">
                             <div class="input-group" style="max-width:300px">
                                 <span class="input-group-text">@ time of day</span>
-                                <input type="time" class="form-control schedule-time-input" value="<?= htmlspecialchars($editTimes ?: '00:00') ?>">
+                                <input type="time" class="form-control schedule-time-input" value="<?= htmlspecialchars(trim(explode(',', $editTimes ?: '00:00')[0])) ?>">
                             </div>
                             <input type="hidden" name="times" class="schedule-weekly-times-hidden" value="<?= htmlspecialchars($editTimes) ?>">
                         </div>
@@ -1463,7 +1470,7 @@ $sizeDisplay = $totalSize > 0 ? \BBS\Services\ServerStats::formatBytes((int) $to
                                 </select>
                                 <div class="input-group" style="max-width:300px">
                                     <span class="input-group-text">@ time of day</span>
-                                    <input type="time" class="form-control schedule-time-input" value="<?= htmlspecialchars($editTimes ?: '00:00') ?>">
+                                    <input type="time" class="form-control schedule-time-input" value="<?= htmlspecialchars(trim(explode(',', $editTimes ?: '00:00')[0])) ?>">
                                 </div>
                             </div>
                             <input type="hidden" name="times" class="schedule-monthly-times-hidden" value="<?= htmlspecialchars($editTimes) ?>">
