@@ -1747,4 +1747,107 @@ class ClientController extends Controller
         $this->flash('success', 'Agent update job queued for ' . $agent['name']);
         $this->redirect("/clients/{$id}");
     }
+
+    /**
+     * POST /clients/{id}/browse — queue a list_dir task on the agent so
+     * the user can interactively pick backup directories from the plan-
+     * create modal. Body: { path, depth, show_hidden, show_all }.
+     * Returns either the task_id (poll /browse/{task_id} for the result)
+     * or the cached tree if the same params hit the per-agent cache.
+     */
+    public function browse(int $id): void
+    {
+        $this->requireAuth();
+        if (!$this->canAccessAgent($id)) {
+            $this->json(['error' => 'Access denied'], 403);
+        }
+        $this->verifyCsrf();
+
+        $agent = $this->db->fetchOne("SELECT id, name, status FROM agents WHERE id = ?", [$id]);
+        if (!$agent) {
+            $this->json(['error' => 'Agent not found'], 404);
+        }
+        if (($agent['status'] ?? 'offline') !== 'online') {
+            $this->json(['error' => 'Agent is offline; cannot browse filesystem'], 409);
+        }
+
+        $input = json_decode(file_get_contents('php://input'), true) ?: [];
+        $path = trim((string) ($input['path'] ?? '/'));
+        if ($path === '') $path = '/';
+        $depth = max(0, min(5, (int) ($input['depth'] ?? 2)));
+        $showHidden = !empty($input['show_hidden']);
+        $showAll    = !empty($input['show_all']);
+
+        $cache = \BBS\Services\Cache::getInstance();
+        $cacheKey = sprintf(
+            'browse_tree:%d:%s',
+            $id,
+            md5("{$path}|{$depth}|" . ($showHidden ? '1' : '0') . '|' . ($showAll ? '1' : '0'))
+        );
+        $cached = $cache->get($cacheKey);
+        if (is_array($cached)) {
+            // Sliding TTL — every access resets the clock
+            $cache->set($cacheKey, $cached, 900);
+            $this->json(['status' => 'completed', 'tree' => $cached, 'cached' => true]);
+            return;
+        }
+
+        $jobId = $this->db->insert('backup_jobs', [
+            'agent_id' => $id,
+            'task_type' => 'list_dir',
+            'status' => 'queued',
+            'status_message' => json_encode([
+                'path' => $path,
+                'depth' => $depth,
+                'show_hidden' => $showHidden,
+                'show_all' => $showAll,
+                'cache_key' => $cacheKey,
+            ]),
+        ]);
+
+        $this->json(['status' => 'pending', 'task_id' => $jobId]);
+    }
+
+    /**
+     * GET /clients/{id}/browse/{task_id} — poll for a browse() result.
+     * Returns pending until the agent reports back; then completed with
+     * the tree, which is also stashed in the params-keyed cache for
+     * 15 minutes so the next identical request short-circuits.
+     */
+    public function browsePoll(int $id, int $taskId): void
+    {
+        $this->requireAuth();
+        if (!$this->canAccessAgent($id)) {
+            $this->json(['error' => 'Access denied'], 403);
+        }
+
+        $job = $this->db->fetchOne(
+            "SELECT id, status, status_message, error_log FROM backup_jobs WHERE id = ? AND agent_id = ? AND task_type = 'list_dir'",
+            [$taskId, $id]
+        );
+        if (!$job) {
+            $this->json(['error' => 'Task not found'], 404);
+        }
+
+        if ($job['status'] === 'failed') {
+            $this->json(['status' => 'failed', 'error' => $job['error_log'] ?? 'list_dir failed']);
+            return;
+        }
+        if ($job['status'] !== 'completed') {
+            $this->json(['status' => 'pending']);
+            return;
+        }
+
+        $cache = \BBS\Services\Cache::getInstance();
+        $tree = $cache->get("browse_result:{$taskId}");
+        if (!is_array($tree)) {
+            $this->json(['status' => 'failed', 'error' => 'Result not available (may have expired)']);
+            return;
+        }
+        $params = json_decode($job['status_message'] ?? '{}', true) ?: [];
+        if (!empty($params['cache_key'])) {
+            $cache->set($params['cache_key'], $tree, 900);
+        }
+        $this->json(['status' => 'completed', 'tree' => $tree]);
+    }
 }

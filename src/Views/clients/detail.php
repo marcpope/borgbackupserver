@@ -1839,6 +1839,19 @@ $sizeDisplay = $totalSize > 0 ? \BBS\Services\ServerStats::formatBytes((int) $to
                             <button type="button" class="btn btn-sm btn-outline-secondary dir-btn" data-dir="/var/lib/mysql">/var/lib/mysql</button>
                         </div>
                         <?php endif; ?>
+                        <div class="mt-2">
+                            <?php $agentOnline = ($agent['status'] ?? '') === 'online'; ?>
+                            <?php if ($agentOnline): ?>
+                            <button type="button" class="btn btn-sm btn-outline-primary" id="dirBrowseBtn" data-agent-id="<?= (int) $agent['id'] ?>" data-is-windows="<?= $isWindows ? '1' : '0' ?>">
+                                <i class="bi bi-folder2-open me-1"></i>Browse…
+                            </button>
+                            <span class="form-text small ms-2">Pick directories from a live listing of the client's filesystem.</span>
+                            <?php else: ?>
+                            <button type="button" class="btn btn-sm btn-outline-secondary" disabled title="Client is offline">
+                                <i class="bi bi-folder2-open me-1"></i>Browse (client offline)
+                            </button>
+                            <?php endif; ?>
+                        </div>
                     </div>
                     <div class="col-md-3 form-text pt-2">One directory per line<?php if ($isWindows): ?><br><small class="text-muted">e.g. C:\Users, D:\Data</small><?php endif; ?></div>
                 </div>
@@ -3455,3 +3468,374 @@ const csrfToken = '<?= $this->csrfToken() ?>';
     });
 })();
 </script>
+
+<!-- ─── Live Filesystem Browser modal ─────────────────────────────── -->
+<div class="modal fade" id="dirBrowseModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-xl modal-dialog-centered modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h6 class="modal-title"><i class="bi bi-folder2-open me-1"></i>Browse Filesystem — <span id="dirBrowseAgentName"></span></h6>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="d-flex flex-wrap align-items-center gap-3 mb-2 small">
+                    <span class="text-muted">Path: <code id="dirBrowseRoot">/</code></span>
+                    <div class="form-check form-check-inline mb-0">
+                        <input class="form-check-input" type="checkbox" id="dirBrowseHidden">
+                        <label class="form-check-label" for="dirBrowseHidden">Show hidden</label>
+                    </div>
+                    <div class="form-check form-check-inline mb-0">
+                        <input class="form-check-input" type="checkbox" id="dirBrowseShowAll">
+                        <label class="form-check-label" for="dirBrowseShowAll">Show pseudo-fs (/proc, /sys, …)</label>
+                    </div>
+                    <button type="button" class="btn btn-sm btn-outline-secondary ms-auto" id="dirBrowseRefresh">
+                        <i class="bi bi-arrow-clockwise me-1"></i>Refresh
+                    </button>
+                </div>
+                <div class="row g-2">
+                    <div class="col-md-7">
+                        <div class="border rounded p-2" style="height: 460px; overflow: auto; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 0.85rem;" id="dirBrowseTree">
+                            <div class="text-muted py-3 text-center"><span class="spinner-border spinner-border-sm me-2"></span>Loading…</div>
+                        </div>
+                    </div>
+                    <div class="col-md-1 d-flex flex-column align-items-center justify-content-center gap-2">
+                        <button type="button" class="btn btn-sm btn-primary w-100" id="dirBrowseAdd" title="Add selected directories">»</button>
+                        <button type="button" class="btn btn-sm btn-outline-secondary w-100" id="dirBrowseRemove" title="Remove from selected">«</button>
+                    </div>
+                    <div class="col-md-4">
+                        <div class="d-flex justify-content-between align-items-center mb-1">
+                            <span class="small fw-semibold">Selected</span>
+                            <span class="small text-muted" id="dirBrowseSelectedCount">0</span>
+                        </div>
+                        <div class="border rounded p-2 small" style="height: 460px; overflow: auto;" id="dirBrowseSelected"></div>
+                    </div>
+                </div>
+                <div class="alert alert-warning small mt-3 mb-0 d-none" id="dirBrowseTruncated">
+                    <i class="bi bi-exclamation-triangle me-1"></i>Listing truncated — directory contains more entries than the per-request cap. Expand specific subtrees to fetch them on demand.
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-sm btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-sm btn-success" id="dirBrowseSave"><i class="bi bi-check2 me-1"></i>Use Selected</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+(function () {
+    const browseBtn = document.getElementById('dirBrowseBtn');
+    if (!browseBtn) return;
+
+    const agentId = parseInt(browseBtn.dataset.agentId, 10);
+    const isWindows = browseBtn.dataset.isWindows === '1';
+    const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content
+                   || document.querySelector('input[name="csrf_token"]')?.value || '';
+    const treeEl = document.getElementById('dirBrowseTree');
+    const selectedEl = document.getElementById('dirBrowseSelected');
+    const selectedCountEl = document.getElementById('dirBrowseSelectedCount');
+    const truncatedAlert = document.getElementById('dirBrowseTruncated');
+    const hiddenChk = document.getElementById('dirBrowseHidden');
+    const showAllChk = document.getElementById('dirBrowseShowAll');
+    const refreshBtn = document.getElementById('dirBrowseRefresh');
+    const saveBtn = document.getElementById('dirBrowseSave');
+    const addBtn = document.getElementById('dirBrowseAdd');
+    const removeBtn = document.getElementById('dirBrowseRemove');
+    const dirInput = document.getElementById('directoriesInput');
+    const modalEl = document.getElementById('dirBrowseModal');
+    const bsModal = new bootstrap.Modal(modalEl);
+
+    document.getElementById('dirBrowseAgentName').textContent = document.title.split(' · ')[0] || 'client';
+    const rootPath = isWindows ? 'C:\\' : '/';
+    document.getElementById('dirBrowseRoot').textContent = rootPath;
+
+    // ── State ─────────────────────────────────────────────────────
+    // `nodeIndex` maps full path → DOM <li>; children load lazily and
+    // patch into the tree by path. `selectedPaths` is a Set of full
+    // paths currently in the right pane.
+    const nodeIndex = new Map();
+    const selectedPaths = new Set();
+    const treeCheckHighlight = new Set(); // paths currently in textarea, shown as already-selected
+
+    function escapeHtml(s) {
+        const d = document.createElement('div');
+        d.textContent = s ?? '';
+        return d.innerHTML;
+    }
+    function fmtSize(b) {
+        if (b == null) return '';
+        if (b < 1024) return b + ' B';
+        if (b < 1024*1024) return (b/1024).toFixed(0) + ' KB';
+        if (b < 1024*1024*1024) return (b/1024/1024).toFixed(0) + ' MB';
+        return (b/1024/1024/1024).toFixed(1) + ' GB';
+    }
+
+    // ── Tree rendering ────────────────────────────────────────────
+    function renderNode(node, level) {
+        const indent = '  '.repeat(level);
+        const li = document.createElement('div');
+        li.className = 'dirbrowse-node';
+        li.dataset.path = node.path;
+        li.dataset.type = node.type;
+        li.dataset.loaded = (node.children && node.children.length) || node.type !== 'directory' ? '1' : '0';
+
+        const row = document.createElement('div');
+        row.className = 'dirbrowse-row d-flex align-items-center';
+        row.style.cursor = 'pointer';
+        row.style.padding = '1px 2px';
+        row.style.whiteSpace = 'nowrap';
+
+        const expand = document.createElement('span');
+        expand.className = 'dirbrowse-expand';
+        expand.style.display = 'inline-block';
+        expand.style.width = (level * 14 + 14) + 'px';
+        expand.style.textAlign = 'right';
+        expand.style.color = '#888';
+        expand.style.marginRight = '4px';
+        expand.textContent = node.type === 'directory' ? '▶' : ' ';
+        row.appendChild(expand);
+
+        const icon = document.createElement('i');
+        icon.className = node.type === 'directory' ? 'bi bi-folder-fill me-1 text-warning'
+                      : node.type === 'symlink'   ? 'bi bi-link-45deg me-1 text-info'
+                      :                              'bi bi-file-earmark me-1 text-muted';
+        row.appendChild(icon);
+
+        const nameSpan = document.createElement('span');
+        nameSpan.textContent = node.name;
+        if (treeCheckHighlight.has(node.path)) {
+            nameSpan.style.fontWeight = 'bold';
+            nameSpan.style.color = 'var(--bs-success, #198754)';
+        }
+        row.appendChild(nameSpan);
+
+        if (node.type === 'directory' && node.entry_count != null) {
+            const meta = document.createElement('span');
+            meta.className = 'ms-2 text-muted small';
+            meta.textContent = `(${node.entry_count})`;
+            row.appendChild(meta);
+        } else if (node.type === 'file' && node.size != null) {
+            const meta = document.createElement('span');
+            meta.className = 'ms-2 text-muted small';
+            meta.textContent = fmtSize(node.size);
+            row.appendChild(meta);
+        }
+
+        row.addEventListener('click', (ev) => {
+            ev.stopPropagation();
+            document.querySelectorAll('.dirbrowse-row.active').forEach(r => r.classList.remove('active'));
+            row.classList.add('active');
+            if (node.type === 'directory') {
+                toggleNode(li, node);
+            }
+        });
+
+        li.appendChild(row);
+
+        const childrenWrap = document.createElement('div');
+        childrenWrap.className = 'dirbrowse-children';
+        childrenWrap.style.display = 'none';
+        li.appendChild(childrenWrap);
+
+        if (node.children && node.children.length) {
+            node.children.forEach(c => {
+                childrenWrap.appendChild(renderNode(c, level + 1));
+            });
+        }
+
+        nodeIndex.set(node.path, li);
+        return li;
+    }
+
+    async function toggleNode(li, node) {
+        const wrap = li.querySelector(':scope > .dirbrowse-children');
+        const expand = li.querySelector(':scope > .dirbrowse-row > .dirbrowse-expand');
+        const open = wrap.style.display !== 'none';
+        if (open) {
+            wrap.style.display = 'none';
+            expand.textContent = '▶';
+            return;
+        }
+        if (li.dataset.loaded !== '1' || wrap.children.length === 0) {
+            // Lazy-load this directory at depth 3
+            await fetchTree(node.path, 3, true, li);
+        }
+        wrap.style.display = '';
+        expand.textContent = '▼';
+    }
+
+    async function fetchTree(path, depth, replaceChildren = false, anchorLi = null) {
+        const body = {
+            path,
+            depth,
+            show_hidden: hiddenChk.checked,
+            show_all: showAllChk.checked,
+        };
+        let resp;
+        try {
+            resp = await fetch(`/clients/${agentId}/browse`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
+                credentials: 'same-origin',
+                body: JSON.stringify(body),
+            });
+        } catch (e) {
+            renderError('Network error: ' + e.message, anchorLi);
+            return;
+        }
+        if (!resp.ok) {
+            const errBody = await resp.json().catch(() => ({}));
+            renderError(errBody.error || `Request failed (${resp.status})`, anchorLi);
+            return;
+        }
+        const j = await resp.json();
+        if (j.status === 'completed') {
+            applyTree(j.tree, replaceChildren, anchorLi);
+            return;
+        }
+        if (j.status === 'pending' && j.task_id) {
+            await pollTask(j.task_id, replaceChildren, anchorLi);
+            return;
+        }
+        renderError(j.error || 'Unexpected response', anchorLi);
+    }
+
+    async function pollTask(taskId, replaceChildren, anchorLi) {
+        const start = Date.now();
+        // Burst polling: 400ms for first 5s, then 1.5s up to 90s total
+        while (Date.now() - start < 90000) {
+            const elapsed = Date.now() - start;
+            await new Promise(r => setTimeout(r, elapsed < 5000 ? 400 : 1500));
+            let r;
+            try {
+                r = await fetch(`/clients/${agentId}/browse/${taskId}`, { credentials: 'same-origin' });
+            } catch (e) { continue; }
+            if (!r.ok) continue;
+            const j = await r.json();
+            if (j.status === 'completed') {
+                applyTree(j.tree, replaceChildren, anchorLi);
+                return;
+            }
+            if (j.status === 'failed') {
+                renderError(j.error || 'Browse failed', anchorLi);
+                return;
+            }
+        }
+        renderError('Timed out waiting for client response', anchorLi);
+    }
+
+    function applyTree(tree, replaceChildren, anchorLi) {
+        if (tree.truncated) {
+            truncatedAlert.classList.remove('d-none');
+        }
+        if (replaceChildren && anchorLi) {
+            // Replacing an in-tree directory's children — keep anchorLi's
+            // own row, swap its <dirbrowse-children> contents with the
+            // tree's children rendered at the next level.
+            const wrap = anchorLi.querySelector(':scope > .dirbrowse-children');
+            wrap.innerHTML = '';
+            const level = parseInt(anchorLi.dataset.level || '0', 10) + 1;
+            (tree.children || []).forEach(c => wrap.appendChild(renderNode(c, level)));
+            anchorLi.dataset.loaded = '1';
+        } else {
+            // Initial render
+            treeEl.innerHTML = '';
+            const root = renderNode(tree, 0);
+            root.dataset.level = '0';
+            treeEl.appendChild(root);
+            // Auto-expand the root so the user sees children immediately
+            const wrap = root.querySelector(':scope > .dirbrowse-children');
+            const expand = root.querySelector(':scope > .dirbrowse-row > .dirbrowse-expand');
+            if (wrap && tree.children && tree.children.length) {
+                wrap.style.display = '';
+                expand.textContent = '▼';
+            }
+        }
+    }
+
+    function renderError(msg, anchorLi) {
+        if (anchorLi) {
+            const wrap = anchorLi.querySelector(':scope > .dirbrowse-children');
+            wrap.innerHTML = `<div class="text-danger small px-2 py-1">${escapeHtml(msg)}</div>`;
+            wrap.style.display = '';
+        } else {
+            treeEl.innerHTML = `<div class="text-danger p-3">${escapeHtml(msg)}</div>`;
+        }
+    }
+
+    // ── Selected pane ─────────────────────────────────────────────
+    function renderSelected() {
+        selectedEl.innerHTML = '';
+        const arr = Array.from(selectedPaths).sort();
+        if (arr.length === 0) {
+            selectedEl.innerHTML = '<div class="text-muted small text-center py-3">No directories selected.<br>Click rows in the tree, then «»</div>';
+        } else {
+            arr.forEach(p => {
+                const row = document.createElement('div');
+                row.className = 'dirbrowse-selected-row d-flex align-items-center justify-content-between py-1 border-bottom';
+                row.dataset.path = p;
+                row.style.cursor = 'pointer';
+                row.innerHTML = `<code class="text-truncate me-2" title="${escapeHtml(p)}">${escapeHtml(p)}</code>`;
+                row.addEventListener('click', () => {
+                    document.querySelectorAll('.dirbrowse-selected-row.active').forEach(r => r.classList.remove('active'));
+                    row.classList.add('active');
+                });
+                selectedEl.appendChild(row);
+            });
+        }
+        selectedCountEl.textContent = arr.length;
+    }
+
+    addBtn.addEventListener('click', () => {
+        const active = document.querySelector('.dirbrowse-row.active');
+        if (!active) return;
+        const li = active.parentElement;
+        if (li.dataset.type !== 'directory') return; // only directories
+        const path = li.dataset.path;
+        selectedPaths.add(path);
+        renderSelected();
+    });
+
+    removeBtn.addEventListener('click', () => {
+        const active = document.querySelector('.dirbrowse-selected-row.active');
+        if (!active) return;
+        selectedPaths.delete(active.dataset.path);
+        renderSelected();
+    });
+
+    saveBtn.addEventListener('click', () => {
+        // Replace the textarea contents with the selected paths.
+        dirInput.value = Array.from(selectedPaths).sort().join('\n');
+        bsModal.hide();
+    });
+
+    refreshBtn.addEventListener('click', () => {
+        truncatedAlert.classList.add('d-none');
+        nodeIndex.clear();
+        treeEl.innerHTML = '<div class="text-muted py-3 text-center"><span class="spinner-border spinner-border-sm me-2"></span>Refreshing…</div>';
+        fetchTree(rootPath, 2);
+    });
+    hiddenChk.addEventListener('change', () => refreshBtn.click());
+    showAllChk.addEventListener('change', () => refreshBtn.click());
+
+    browseBtn.addEventListener('click', () => {
+        // Seed right pane from current textarea
+        selectedPaths.clear();
+        treeCheckHighlight.clear();
+        (dirInput.value || '').split(/\r?\n/).forEach(p => {
+            const t = p.trim();
+            if (t) { selectedPaths.add(t); treeCheckHighlight.add(t); }
+        });
+        renderSelected();
+        truncatedAlert.classList.add('d-none');
+        treeEl.innerHTML = '<div class="text-muted py-3 text-center"><span class="spinner-border spinner-border-sm me-2"></span>Loading…</div>';
+        bsModal.show();
+        fetchTree(rootPath, 2);
+    });
+})();
+</script>
+<style>
+.dirbrowse-row:hover { background: var(--bs-tertiary-bg); }
+.dirbrowse-row.active { background: var(--bs-primary-bg-subtle, rgba(13,110,253,0.15)); }
+.dirbrowse-selected-row.active { background: var(--bs-primary-bg-subtle, rgba(13,110,253,0.15)); }
+</style>
