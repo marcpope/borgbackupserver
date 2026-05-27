@@ -3103,9 +3103,14 @@ def _build_list_dir_tree(task):
             "children": [],
             "truncated": False,
         }
+        # Note: os.scandir() context-manager + PEP 448 dict-spread require
+        # Python 3.6/3.5 respectively. Some agents run older interpreters
+        # (CentOS 7, embedded Linux); using the older non-context-manager
+        # form and explicit dict copies keeps this portable to 3.4+.
         try:
             entries = []
-            with os.scandir(node_path) as it:
+            it = os.scandir(node_path)
+            try:
                 for de in it:
                     if counter["stop"]:
                         node["truncated"] = True
@@ -3134,6 +3139,16 @@ def _build_list_dir_tree(task):
                         "size": size,
                         "mtime": mtime,
                     })
+            finally:
+                # os.scandir() became a context manager in 3.6; close() in 3.6
+                # too. Use getattr() so older interpreters skip the close
+                # rather than AttributeErroring.
+                close = getattr(it, "close", None)
+                if close is not None:
+                    try:
+                        close()
+                    except Exception:
+                        pass
             entries.sort(key=lambda e: (0 if e["type"] == "directory" else 1, e["name"].lower()))
             node["entry_count"] = len(entries)
             if remaining_depth <= 0:
@@ -3145,7 +3160,9 @@ def _build_list_dir_tree(task):
                     if child["type"] == "directory":
                         sub = _walk(child["path"], remaining_depth - 1)
                         if sub is None:
-                            sub = {**child, "children": [], "truncated": True}
+                            sub = dict(child)
+                            sub["children"] = []
+                            sub["truncated"] = True
                         else:
                             sub["size"] = None  # directories: no size
                         node["children"].append(sub)
