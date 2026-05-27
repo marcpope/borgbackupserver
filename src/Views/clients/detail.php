@@ -1842,7 +1842,7 @@ $sizeDisplay = $totalSize > 0 ? \BBS\Services\ServerStats::formatBytes((int) $to
                         <div class="mt-2">
                             <?php $agentOnline = ($agent['status'] ?? '') === 'online'; ?>
                             <?php if ($agentOnline): ?>
-                            <button type="button" class="btn btn-sm btn-outline-primary" id="dirBrowseBtn" data-agent-id="<?= (int) $agent['id'] ?>" data-is-windows="<?= $isWindows ? '1' : '0' ?>" data-bs-toggle="modal" data-bs-target="#dirBrowseModal">
+                            <button type="button" class="btn btn-sm btn-outline-primary" id="dirBrowseBtn" data-agent-id="<?= (int) $agent['id'] ?>" data-is-windows="<?= $isWindows ? '1' : '0' ?>">
                                 <i class="bi bi-folder2-open me-1"></i>Browse…
                             </button>
                             <span class="form-text small ms-2">Pick directories from a live listing of the client's filesystem.</span>
@@ -3543,19 +3543,7 @@ const csrfToken = '<?= $this->csrfToken() ?>';
     const removeBtn = document.getElementById('dirBrowseRemove');
     const dirInput = document.getElementById('directoriesInput');
     const modalEl = document.getElementById('dirBrowseModal');
-    // Don't pre-instantiate bootstrap.Modal — if bootstrap.js hasn't
-    // finished loading at script-eval time the constructor throws and
-    // the rest of this IIFE never runs (no click handler, no fetch).
-    // We rely on data-bs-toggle/target to *open* the modal and only
-    // touch the bootstrap.Modal API for programmatic close.
-    function hideModal() {
-        if (window.bootstrap?.Modal) {
-            bootstrap.Modal.getOrCreateInstance(modalEl).hide();
-        } else {
-            modalEl.classList.remove('show');
-            modalEl.style.display = 'none';
-        }
-    }
+    const bsModal = new bootstrap.Modal(modalEl);
 
     document.getElementById('dirBrowseAgentName').textContent = document.title.split(' · ')[0] || 'client';
     const rootPath = isWindows ? 'C:\\' : '/';
@@ -3818,7 +3806,7 @@ const csrfToken = '<?= $this->csrfToken() ?>';
     saveBtn.addEventListener('click', () => {
         // Replace the textarea contents with the selected paths.
         dirInput.value = Array.from(selectedPaths).sort().join('\n');
-        hideModal();
+        bsModal.hide();
     });
 
     refreshBtn.addEventListener('click', () => {
@@ -3830,12 +3818,8 @@ const csrfToken = '<?= $this->csrfToken() ?>';
     hiddenChk.addEventListener('change', () => refreshBtn.click());
     showAllChk.addEventListener('change', () => refreshBtn.click());
 
-    // Bootstrap auto-opens the modal via data-bs-toggle on the button.
-    // We hook click to prime state (seed selected, show spinner) and
-    // 'shown.bs.modal' to kick off the fetch only after the modal is
-    // visible — this guarantees the user always sees the spinner even
-    // if the network request is slow.
     browseBtn.addEventListener('click', () => {
+        // Seed right pane from current textarea
         selectedPaths.clear();
         treeCheckHighlight.clear();
         (dirInput.value || '').split(/\r?\n/).forEach(p => {
@@ -3844,9 +3828,8 @@ const csrfToken = '<?= $this->csrfToken() ?>';
         });
         renderSelected();
         truncatedAlert.classList.add('d-none');
-        treeEl.innerHTML = '<div class="text-muted py-3 text-center"><span class="spinner-border spinner-border-sm me-2"></span>Loading directory listing from client…</div>';
-    });
-    modalEl.addEventListener('shown.bs.modal', () => {
+        treeEl.innerHTML = '<div class="text-muted py-3 text-center"><span class="spinner-border spinner-border-sm me-2"></span>Loading…</div>';
+        bsModal.show();
         fetchTree(rootPath, 2);
     });
 })();
