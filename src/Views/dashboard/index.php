@@ -48,7 +48,7 @@ $dfFix = function (string $s): string {
     align-items: stretch;
 }
 .v2 .health-tile {
-    background: rgba(255,255,255,0.025);
+    background: var(--bs-tertiary-bg);
     border-radius: 10px;
     padding: 0 10px 5px;
     display: flex;
@@ -105,9 +105,12 @@ $dfFix = function (string $s): string {
 
 /* CPU gauge */
 .v2 .cpu-gauge { width: 100%; max-width: 150px; height: auto; display: block; }
-.v2 .cpu-gauge .arc-bg { stroke: rgba(255,255,255,0.08); }
+.v2 .cpu-gauge .arc-bg { stroke: rgba(0,0,0,0.08); }
 .v2 .cpu-gauge .arc-fg { transition: stroke-dashoffset 0.6s ease, stroke 0.3s; }
 .v2 .cpu-gauge .needle { transition: transform 0.6s ease, stroke 0.3s; transform-origin: 100px 110px; transform-box: fill-box; }
+.v2 .cpu-gauge .ticks { stroke: rgba(0,0,0,0.30); }
+[data-bs-theme="dark"] .v2 .cpu-gauge .arc-bg { stroke: rgba(255,255,255,0.08); }
+[data-bs-theme="dark"] .v2 .cpu-gauge .ticks { stroke: rgba(255,255,255,0.22); }
 .v2 .cpu-pct { font-size: 1.3rem; font-weight: 700; line-height: 1; margin-top: -48px; }
 .v2 .cpu-pct .pct-suffix,
 .v2 .disk-pct .pct-suffix { font-size: 0.8rem; font-weight: 600; opacity: 0.75; margin-left: 1px; }
@@ -136,6 +139,12 @@ $dfFix = function (string $s): string {
 .v2 .mem-pct { font-size: 1.25rem; font-weight: 700; margin-top: 4px; line-height: 1; }
 .v2 .mem-thermo { height: 110px; width: auto; }
 .v2 .mem-thermo .fill { transition: y 0.6s ease, height 0.6s ease, fill 0.3s; }
+.v2 .mem-thermo .tube { fill: rgba(0,0,0,0.04); stroke: rgba(0,0,0,0.25); }
+.v2 .mem-thermo .scale { stroke: rgba(0,0,0,0.35); }
+.v2 .mem-thermo .scale-text { fill: rgba(0,0,0,0.55); }
+[data-bs-theme="dark"] .v2 .mem-thermo .tube { fill: rgba(255,255,255,0.04); stroke: rgba(255,255,255,0.22); }
+[data-bs-theme="dark"] .v2 .mem-thermo .scale { stroke: rgba(255,255,255,0.3); }
+[data-bs-theme="dark"] .v2 .mem-thermo .scale-text { fill: rgba(255,255,255,0.55); }
 
 /* Disk strip — full width across the bottom. Horizontal: head | numbers | bar */
 .v2 .health-tile.disk {
@@ -152,7 +161,8 @@ $dfFix = function (string $s): string {
 .v2 .disk-bar {
     flex: 1;
     height: 18px;
-    background: rgba(255,255,255,0.08);
+    background: var(--bs-tertiary-bg);
+    border: 1px solid var(--bs-border-color-translucent);
     border-radius: 9px;
     position: relative;
     min-width: 80px;
@@ -272,8 +282,8 @@ $dfFix = function (string $s): string {
     gap: 6px;
 }
 .v2 .summary-tile {
-    background: rgba(255,255,255,0.025);
-    border: 1px solid rgba(255,255,255,0.05);
+    background: var(--bs-tertiary-bg);
+    border: 1px solid var(--bs-border-color-translucent);
     border-radius: 8px;
     padding: 18px 4px 20px;
     display: flex;
@@ -496,7 +506,7 @@ $dfFix = function (string $s): string {
                                 <path id="cpu-arc" class="arc-fg" d="M 20 110 A 80 80 0 0 1 180 110" fill="none" stroke="<?= $cpuColor ?>"
                                       stroke-width="14" stroke-linecap="round"
                                       stroke-dasharray="<?= $arcLen ?>" stroke-dashoffset="<?= round($cpuOffset, 2) ?>"/>
-                                <g stroke="rgba(255,255,255,0.22)" stroke-width="1.5">
+                                <g class="ticks" stroke-width="1.5">
                                     <?php for ($a = -180; $a <= 0; $a += 18):
                                         $rad = deg2rad($a);
                                         $x1 = 100 + 62 * cos($rad); $y1 = 110 + 62 * sin($rad);
@@ -525,11 +535,11 @@ $dfFix = function (string $s): string {
                                     <div class="mem-pct" id="mem-pct"><?= round($memPct, 1) ?>%</div>
                                 </div>
                                 <svg class="mem-thermo" viewBox="0 0 100 220" xmlns="http://www.w3.org/2000/svg">
-                                    <rect x="40" y="10" width="20" height="165" rx="10" fill="rgba(255,255,255,0.04)" stroke="rgba(255,255,255,0.22)" stroke-width="2"/>
+                                    <rect class="tube" x="40" y="10" width="20" height="165" rx="10" stroke-width="2"/>
                                     <circle cx="50" cy="185" r="20" fill="<?= $memColor ?>" opacity="0.95"/>
                                     <rect x="44" y="170" width="12" height="15" fill="<?= $memColor ?>"/>
                                     <rect id="mem-fill" class="fill" x="44" y="<?= round($memFillY, 2) ?>" width="12" height="<?= round($memFillH, 2) ?>" fill="<?= $memColor ?>"/>
-                                    <g stroke="rgba(255,255,255,0.3)" stroke-width="1">
+                                    <g class="scale" stroke-width="1">
                                         <?php for ($i = 0; $i <= 10; $i++):
                                             $ty = 15 + ($i * 15.5);
                                             $w = ($i % 5 === 0) ? 8 : 4;
@@ -537,7 +547,7 @@ $dfFix = function (string $s): string {
                                         <line x1="62" y1="<?= $ty ?>" x2="<?= 62 + $w ?>" y2="<?= $ty ?>"/>
                                         <?php endfor; ?>
                                     </g>
-                                    <g fill="rgba(255,255,255,0.55)" font-size="10" font-family="inherit">
+                                    <g class="scale-text" font-size="10" font-family="inherit">
                                         <text x="75" y="18">100%</text>
                                         <text x="75" y="96">50%</text>
                                         <text x="75" y="174">0%</text>
