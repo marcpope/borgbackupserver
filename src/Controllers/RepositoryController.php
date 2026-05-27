@@ -677,32 +677,45 @@ class RepositoryController extends Controller
 
         try {
             $ch = \BBS\Core\ClickHouse::getInstance();
-            if ($ch->isAvailable()) {
-                $clickhouseAvailable = true;
-                $aid = (int) $agentId;
-                $arid = (int) $archiveId;
+            $clickhouseAvailable = $ch->isAvailable();
+        } catch (\Exception $e) {
+            // ClickHouse unreachable — both stat panels just stay empty.
+        }
 
-                // Files by status — cheap: scans only this archive, groups by status.
+        if ($clickhouseAvailable && isset($ch)) {
+            $aid = (int) $agentId;
+            $arid = (int) $archiveId;
+
+            // Files by status — cheap: scans only this archive, groups by
+            // status. Wrapped in its own try so a failure here doesn't also
+            // sink the Largest Files panel (or vice versa).
+            try {
                 $statusBreakdown = $ch->fetchAll(
                     "SELECT status, count() as cnt, sum(file_size) as total_size
                      FROM file_catalog
                      WHERE agent_id = {$aid} AND archive_id = {$arid} AND path != ''
                      GROUP BY status ORDER BY cnt DESC"
                 );
+            } catch (\Exception $e) {
+                error_log("archiveDetail statusBreakdown query failed (agent_id={$aid}, archive_id={$arid}): " . $e->getMessage());
+            }
 
-                // Largest files. status != 'X' so excluded entries (node_modules,
-                // /proc, /sys-style paths that were on disk but skipped) don't
-                // dominate the list — their size is irrelevant to the archive (#132).
+            // Largest files. Exclude status='X' (entries borg saw but skipped
+            // via exclude patterns) so they don't dominate the list — their
+            // size is irrelevant to the archive (#132). Cast to FixedString
+            // to keep strict ClickHouse versions happy with the comparison
+            // against the FixedString(1) status column.
+            try {
                 $largestFiles = $ch->fetchAll(
                     "SELECT path, file_name, file_size, status
                      FROM file_catalog
                      WHERE agent_id = {$aid} AND archive_id = {$arid} AND path != ''
-                       AND status != 'X'
+                       AND status != toFixedString('X', 1)
                      ORDER BY file_size DESC LIMIT 20"
                 );
+            } catch (\Exception $e) {
+                error_log("archiveDetail largestFiles query failed (agent_id={$aid}, archive_id={$arid}): " . $e->getMessage());
             }
-        } catch (\Exception $e) {
-            // ClickHouse unavailable
         }
 
         $this->view('repositories/archive_detail', [
