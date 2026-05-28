@@ -2328,12 +2328,14 @@ $sizeDisplay = $totalSize > 0 ? \BBS\Services\ServerStats::formatBytes((int) $to
         });
     });
 
-    // Show/hide create section when edit panel is toggled
+    // Hide create-plan-section when an edit panel opens (the two views
+    // are mutually exclusive). We deliberately do NOT mirror this on
+    // 'hidden.bs.collapse' — when the user clicks 'Add Backup Plan'
+    // while an edit panel is open, showCreatePlan() collapses the edit
+    // panel, and a hidden-handler that hid create would race against
+    // the show.
     document.querySelectorAll('.edit-plan-panel').forEach(panel => {
         panel.addEventListener('shown.bs.collapse', function() {
-            document.getElementById('create-plan-section').style.display = 'none';
-        });
-        panel.addEventListener('hidden.bs.collapse', function() {
             document.getElementById('create-plan-section').style.display = 'none';
         });
     });
