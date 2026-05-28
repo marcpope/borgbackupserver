@@ -3713,10 +3713,8 @@ const csrfToken = '<?= $this->csrfToken() ?>';
             return;
         }
         if (li.dataset.loaded !== '1' || wrap.children.length === 0) {
-            // Show an inline spinner so the click feels responsive while
-            // the agent's depth-3 fetch is in flight.
-            wrap.innerHTML = '<div class="text-muted small py-1 ps-4"><span class="spinner-border spinner-border-sm me-1"></span>Loading directory…</div>';
-            wrap.style.display = '';
+            // fetchTree handles its own delayed-spinner so cache hits feel
+            // instant; we just toggle the chevron so the click registers.
             expand.textContent = '▽';
             await fetchTree(node.path, 3, true, li);
         }
@@ -3731,6 +3729,19 @@ const csrfToken = '<?= $this->csrfToken() ?>';
             show_hidden: hiddenChk.checked,
             show_all: showAllChk.checked,
         };
+        // Delayed spinner: only show after 300ms so cache hits (which
+        // complete in well under that) don't flash a loading state.
+        const spinnerTarget = anchorLi
+            ? anchorLi.querySelector(':scope > .dirbrowse-children')
+            : treeEl;
+        const spinnerTimer = setTimeout(() => {
+            if (anchorLi) {
+                spinnerTarget.innerHTML = '<div class="text-muted small py-1 ps-4"><span class="spinner-border spinner-border-sm me-1"></span>Loading…</div>';
+                spinnerTarget.style.display = '';
+            } else {
+                spinnerTarget.innerHTML = '<div class="text-muted py-3 text-center"><span class="spinner-border spinner-border-sm me-2"></span>Loading directory listing from client…</div>';
+            }
+        }, 300);
         let resp;
         try {
             resp = await fetch(`/clients/${agentId}/browse`, {
@@ -3740,15 +3751,18 @@ const csrfToken = '<?= $this->csrfToken() ?>';
                 body: JSON.stringify(body),
             });
         } catch (e) {
+            clearTimeout(spinnerTimer);
             renderError('Network error: ' + e.message, anchorLi);
             return;
         }
         if (!resp.ok) {
+            clearTimeout(spinnerTimer);
             const errBody = await resp.json().catch(() => ({}));
             renderError(errBody.error || `Request failed (${resp.status})`, anchorLi);
             return;
         }
         const j = await resp.json();
+        clearTimeout(spinnerTimer);
         if (j.status === 'completed') {
             applyTree(j.tree, replaceChildren, anchorLi);
             return;
@@ -3906,7 +3920,10 @@ const csrfToken = '<?= $this->csrfToken() ?>';
             });
             renderSelected();
             truncatedAlert.classList.add('d-none');
-            treeEl.innerHTML = '<div class="text-muted py-3 text-center"><span class="spinner-border spinner-border-sm me-2"></span>Loading directory listing from client…</div>';
+            // Don't show the spinner immediately — fetchTree will only
+            // surface it if the request takes >300ms. On a cache hit the
+            // tree appears with no visible loading state.
+            treeEl.innerHTML = '';
         });
     });
     modalEl.addEventListener('shown.bs.modal', () => {
