@@ -1506,7 +1506,19 @@ $sizeDisplay = $totalSize > 0 ? \BBS\Services\ServerStats::formatBytes((int) $to
                     <div class="row mb-3">
                         <label class="col-md-3 col-form-label fw-semibold">Backup Directories</label>
                         <div class="col-md-6">
-                            <textarea class="form-control edit-directories" name="directories" rows="3" required><?= htmlspecialchars($plan['directories']) ?></textarea>
+                            <textarea id="editDirectories-<?= $plan['id'] ?>" class="form-control edit-directories" name="directories" rows="3" required><?= htmlspecialchars($plan['directories']) ?></textarea>
+                            <div class="mt-2">
+                                <?php $editAgentOnline = ($agent['status'] ?? '') === 'online'; ?>
+                                <?php if ($editAgentOnline): ?>
+                                <button type="button" class="btn btn-sm btn-outline-primary dir-browse-btn" data-agent-id="<?= (int) $agent['id'] ?>" data-is-windows="<?= stripos($agent['os_info'] ?? '', 'Windows') !== false ? '1' : '0' ?>" data-target-textarea="#editDirectories-<?= $plan['id'] ?>" data-bs-toggle="modal" data-bs-target="#dirBrowseModal">
+                                    <i class="bi bi-folder2-open me-1"></i>Browse…
+                                </button>
+                                <?php else: ?>
+                                <button type="button" class="btn btn-sm btn-outline-secondary" disabled title="Client is offline">
+                                    <i class="bi bi-folder2-open me-1"></i>Browse (client offline)
+                                </button>
+                                <?php endif; ?>
+                            </div>
                         </div>
                         <div class="col-md-3 form-text pt-2">One directory per line<?php if (stripos($agent['os_info'] ?? '', 'Windows') !== false): ?><br><small class="text-muted">e.g. C:\Users, C:\Projects</small><?php endif; ?></div>
                     </div>
@@ -1825,7 +1837,17 @@ $sizeDisplay = $totalSize > 0 ? \BBS\Services\ServerStats::formatBytes((int) $to
                     <div class="col-md-6">
                         <?php if ($isWindows): ?>
                         <textarea class="form-control" name="directories" id="directoriesInput" rows="3" required placeholder="C:\Users&#10;C:\Projects&#10;C:\inetpub\wwwroot"></textarea>
-                        <div class="mt-2">
+                        <div class="mt-2 d-flex flex-wrap align-items-center gap-1">
+                            <?php $agentOnline = ($agent['status'] ?? '') === 'online'; ?>
+                            <?php if ($agentOnline): ?>
+                            <button type="button" class="btn btn-sm btn-outline-primary dir-browse-btn me-2" data-agent-id="<?= (int) $agent['id'] ?>" data-is-windows="1" data-target-textarea="#directoriesInput" data-bs-toggle="modal" data-bs-target="#dirBrowseModal">
+                                <i class="bi bi-folder2-open me-1"></i>Browse…
+                            </button>
+                            <?php else: ?>
+                            <button type="button" class="btn btn-sm btn-outline-secondary me-2" disabled title="Client is offline">
+                                <i class="bi bi-folder2-open me-1"></i>Browse (client offline)
+                            </button>
+                            <?php endif; ?>
                             <span class="text-muted small me-1">Quick add:</span>
                             <button type="button" class="btn btn-sm btn-outline-secondary dir-btn" data-dir="C:\Users">C:\Users</button>
                             <button type="button" class="btn btn-sm btn-outline-secondary dir-btn" data-dir="C:\Projects">C:\Projects</button>
@@ -1834,31 +1856,26 @@ $sizeDisplay = $totalSize > 0 ? \BBS\Services\ServerStats::formatBytes((int) $to
                         </div>
                         <?php else: ?>
                         <textarea class="form-control" name="directories" id="directoriesInput" rows="3" required placeholder="/home&#10;/etc&#10;/var/www"></textarea>
-                        <div class="mt-2">
+                        <div class="mt-2 d-flex flex-wrap align-items-center gap-1">
+                            <?php $agentOnline = ($agent['status'] ?? '') === 'online'; ?>
+                            <?php if ($agentOnline): ?>
+                            <button type="button" class="btn btn-sm btn-outline-primary dir-browse-btn me-2" data-agent-id="<?= (int) $agent['id'] ?>" data-is-windows="<?= $isWindows ? '1' : '0' ?>" data-target-textarea="#directoriesInput" data-bs-toggle="modal" data-bs-target="#dirBrowseModal">
+                                <i class="bi bi-folder2-open me-1"></i>Browse…
+                            </button>
+                            <?php else: ?>
+                            <button type="button" class="btn btn-sm btn-outline-secondary me-2" disabled title="Client is offline">
+                                <i class="bi bi-folder2-open me-1"></i>Browse (client offline)
+                            </button>
+                            <?php endif; ?>
                             <span class="text-muted small me-1">Quick add:</span>
                             <button type="button" class="btn btn-sm btn-outline-secondary dir-btn" data-dir="/home">/home</button>
                             <button type="button" class="btn btn-sm btn-outline-secondary dir-btn" data-dir="/etc">/etc</button>
                             <button type="button" class="btn btn-sm btn-outline-secondary dir-btn" data-dir="/var">/var</button>
-                            <button type="button" class="btn btn-sm btn-outline-secondary dir-btn" data-dir="/opt">/opt</button>
-                            <button type="button" class="btn btn-sm btn-outline-secondary dir-btn" data-dir="/srv">/srv</button>
                             <button type="button" class="btn btn-sm btn-outline-secondary dir-btn" data-dir="/usr/local">/usr/local</button>
                             <button type="button" class="btn btn-sm btn-outline-secondary dir-btn" data-dir="/var/www">/var/www</button>
                             <button type="button" class="btn btn-sm btn-outline-secondary dir-btn" data-dir="/var/lib/mysql">/var/lib/mysql</button>
                         </div>
                         <?php endif; ?>
-                        <div class="mt-2">
-                            <?php $agentOnline = ($agent['status'] ?? '') === 'online'; ?>
-                            <?php if ($agentOnline): ?>
-                            <button type="button" class="btn btn-sm btn-outline-primary" id="dirBrowseBtn" data-agent-id="<?= (int) $agent['id'] ?>" data-is-windows="<?= $isWindows ? '1' : '0' ?>" data-bs-toggle="modal" data-bs-target="#dirBrowseModal">
-                                <i class="bi bi-folder2-open me-1"></i>Browse…
-                            </button>
-                            <span class="form-text small ms-2">Pick directories from a live listing of the client's filesystem.</span>
-                            <?php else: ?>
-                            <button type="button" class="btn btn-sm btn-outline-secondary" disabled title="Client is offline">
-                                <i class="bi bi-folder2-open me-1"></i>Browse (client offline)
-                            </button>
-                            <?php endif; ?>
-                        </div>
                     </div>
                     <div class="col-md-3 form-text pt-2">One directory per line<?php if ($isWindows): ?><br><small class="text-muted">e.g. C:\Users, D:\Data</small><?php endif; ?></div>
                 </div>
@@ -3531,11 +3548,16 @@ const csrfToken = '<?= $this->csrfToken() ?>';
 
 <script>
 (function () {
-    const browseBtn = document.getElementById('dirBrowseBtn');
-    if (!browseBtn) return;
+    const browseBtns = document.querySelectorAll('.dir-browse-btn');
+    if (browseBtns.length === 0) return;
 
-    const agentId = parseInt(browseBtn.dataset.agentId, 10);
-    const isWindows = browseBtn.dataset.isWindows === '1';
+    // Multiple Browse buttons share one modal — the create-plan form has
+    // one, each edit-plan form has one. We track which textarea the
+    // currently-active button maps to, set at click time, used when
+    // Save populates the textarea.
+    let agentId = parseInt(browseBtns[0].dataset.agentId, 10);
+    let isWindows = browseBtns[0].dataset.isWindows === '1';
+    let dirInput = document.getElementById('directoriesInput');
     const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content
                    || document.querySelector('input[name="csrf_token"]')?.value || '';
     const treeEl = document.getElementById('dirBrowseTree');
@@ -3548,7 +3570,6 @@ const csrfToken = '<?= $this->csrfToken() ?>';
     const saveBtn = document.getElementById('dirBrowseSave');
     const addBtn = document.getElementById('dirBrowseAdd');
     const removeBtn = document.getElementById('dirBrowseRemove');
-    const dirInput = document.getElementById('directoriesInput');
     const modalEl = document.getElementById('dirBrowseModal');
     // Don't pre-instantiate bootstrap.Modal — if bootstrap.js hasn't
     // finished loading at script-eval time the constructor throws and
@@ -3579,8 +3600,10 @@ const csrfToken = '<?= $this->csrfToken() ?>';
     });
 
     document.getElementById('dirBrowseAgentName').textContent = document.title.split(' · ')[0] || 'client';
-    const rootPath = isWindows ? 'C:\\' : '/';
-    document.getElementById('dirBrowseRoot').textContent = rootPath;
+    // Computed lazily per-modal-open so the same JS works for any Browse
+    // button on the page (each may target a different agent OS).
+    function rootForCurrentAgent() { return isWindows ? 'C:\\' : '/'; }
+    const rootPathEl = document.getElementById('dirBrowseRoot');
 
     // ── State ─────────────────────────────────────────────────────
     // `nodeIndex` maps full path → DOM <li>; children load lazily and
@@ -3841,8 +3864,12 @@ const csrfToken = '<?= $this->csrfToken() ?>';
     });
 
     saveBtn.addEventListener('click', () => {
-        // Replace the textarea contents with the selected paths.
-        dirInput.value = Array.from(selectedPaths).sort().join('\n');
+        // Replace the textarea contents with the selected paths. dirInput
+        // was bound at click-time on the Browse button so it points at the
+        // form (create or edit) whose Browse button opened this modal.
+        if (dirInput) {
+            dirInput.value = Array.from(selectedPaths).sort().join('\n');
+        }
         hideModal();
     });
 
@@ -3850,29 +3877,42 @@ const csrfToken = '<?= $this->csrfToken() ?>';
         truncatedAlert.classList.add('d-none');
         nodeIndex.clear();
         treeEl.innerHTML = '<div class="text-muted py-3 text-center"><span class="spinner-border spinner-border-sm me-2"></span>Refreshing…</div>';
-        fetchTree(rootPath, 2);
+        const rp = rootForCurrentAgent();
+        rootPathEl.textContent = rp;
+        fetchTree(rp, 2);
     });
     hiddenChk.addEventListener('change', () => refreshBtn.click());
     showAllChk.addEventListener('change', () => refreshBtn.click());
 
-    // Bootstrap auto-opens the modal via data-bs-toggle on the button.
-    // We hook click to prime state (seed selected, show spinner) and
+    // Bootstrap auto-opens the modal via data-bs-toggle on each button.
+    // We hook click to prime per-button state (which textarea to write
+    // back to, which agent's filesystem to browse, etc.) and
     // 'shown.bs.modal' to kick off the fetch only after the modal is
     // visible — this guarantees the user always sees the spinner even
     // if the network request is slow.
-    browseBtn.addEventListener('click', () => {
-        selectedPaths.clear();
-        treeCheckHighlight.clear();
-        (dirInput.value || '').split(/\r?\n/).forEach(p => {
-            const t = p.trim();
-            if (t) { selectedPaths.add(t); treeCheckHighlight.add(t); }
+    browseBtns.forEach(btn => {
+        btn.addEventListener('click', () => {
+            agentId = parseInt(btn.dataset.agentId, 10);
+            isWindows = btn.dataset.isWindows === '1';
+            const targetSel = btn.dataset.targetTextarea || '#directoriesInput';
+            dirInput = document.querySelector(targetSel) || document.getElementById('directoriesInput');
+
+            selectedPaths.clear();
+            treeCheckHighlight.clear();
+            const initial = (dirInput && dirInput.value) || '';
+            initial.split(/\r?\n/).forEach(p => {
+                const t = p.trim();
+                if (t) { selectedPaths.add(t); treeCheckHighlight.add(t); }
+            });
+            renderSelected();
+            truncatedAlert.classList.add('d-none');
+            treeEl.innerHTML = '<div class="text-muted py-3 text-center"><span class="spinner-border spinner-border-sm me-2"></span>Loading directory listing from client…</div>';
         });
-        renderSelected();
-        truncatedAlert.classList.add('d-none');
-        treeEl.innerHTML = '<div class="text-muted py-3 text-center"><span class="spinner-border spinner-border-sm me-2"></span>Loading directory listing from client…</div>';
     });
     modalEl.addEventListener('shown.bs.modal', () => {
-        fetchTree(rootPath, 2);
+        const rp = rootForCurrentAgent();
+        rootPathEl.textContent = rp;
+        fetchTree(rp, 2);
     });
 })();
 </script>

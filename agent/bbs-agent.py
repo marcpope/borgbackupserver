@@ -46,7 +46,7 @@ if not hasattr(subprocess, "run"):
     subprocess.run = _subprocess_run
     subprocess.CompletedProcess = _CompletedProcess
 
-AGENT_VERSION = "2.55.6"
+AGENT_VERSION = "2.55.7"
 BORG_PATH = None  # Resolved in get_system_info()
 IS_WINDOWS = sys.platform == "win32"
 
@@ -3949,6 +3949,17 @@ def main():
     last_info_report = time.time()
     info_report_interval = 3600
 
+    # Burst-poll window. When the UI's file-browser modal queues list_dir
+    # tasks, we want the agent to feel near-real-time — but at 30s default
+    # polling, every click is a 15s average wait. Once we see a list_dir
+    # task come through, drop to a 2s poll interval for the next 60s so
+    # follow-up clicks during the same browse session are snappy. Window
+    # resets each time a new list_dir arrives, so an active user keeps
+    # the agent warm; an idle modal lets it drop back to normal polling.
+    BURST_INTERVAL = 2
+    BURST_WINDOW = 60
+    burst_until = 0
+
     while running:
         try:
             # Poll for tasks
@@ -3990,6 +4001,10 @@ def main():
                             execute_update_agent(config, task)
                         else:
                             execute_task(config, task)
+                        # Refresh burst-poll window when we see a list_dir
+                        # task — the user is interactively browsing.
+                        if task.get("task") == "list_dir":
+                            burst_until = time.time() + BURST_WINDOW
                     finally:
                         task_running = False
                         current_job_id = None
@@ -4000,8 +4015,11 @@ def main():
         except Exception as e:
             logger.error("Poll loop error: {}".format(e))
 
-        # Wait for next poll
-        for _ in range(config["poll_interval"]):
+        # Wait for next poll. If a list_dir came through recently we're
+        # in burst mode — short interval so subsequent browse clicks feel
+        # near-instant. Otherwise the standard server-configured interval.
+        sleep_seconds = BURST_INTERVAL if time.time() < burst_until else config["poll_interval"]
+        for _ in range(sleep_seconds):
             if not running:
                 break
             time.sleep(1)
