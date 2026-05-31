@@ -3837,25 +3837,43 @@ def _execute_task_inner(config, task, job_id, task_type, command, env_vars,
 
 
 def clear_stale_cache_locks():
-    """Remove stale borg cache locks that can block operations after a crash."""
-    if IS_WINDOWS:
-        cache_dir = os.path.join(os.environ.get("LOCALAPPDATA", os.path.expanduser("~")), "borg", "Cache")
-    else:
-        cache_dir = os.path.expanduser("~/.cache/borg")
-    if not os.path.isdir(cache_dir):
-        return
+    """Remove stale borg cache locks that can block operations after a crash.
+
+    Borg 1.2+ stores its cache at ~/.cache/borg/<repo_id>/ on all platforms
+    (including Windows, where ~ resolves to the user profile — for a service
+    running as SYSTEM that's C:\\WINDOWS\\system32\\config\\systemprofile).
+    Older borg used %LOCALAPPDATA%\\borg\\Cache on Windows. Forceful kills
+    (cancel, service stop, crash) leave lock.exclusive behind; borg's own
+    stale-PID detection is unreliable on Windows, so the next run hits a
+    lock timeout. We check both paths plus BORG_CACHE_DIR if set.
+    """
     import shutil
-    for entry in os.listdir(cache_dir):
-        lock_path = os.path.join(cache_dir, entry, "lock.exclusive")
-        if os.path.exists(lock_path):
-            try:
-                if os.path.isdir(lock_path):
-                    shutil.rmtree(lock_path)
-                else:
-                    os.remove(lock_path)
-                logger.info("Cleared stale cache lock: {}".format(lock_path))
-            except Exception as e:
-                logger.warning("Could not clear cache lock {}: {}".format(lock_path, e))
+    candidates = []
+    env_cache = os.environ.get("BORG_CACHE_DIR")
+    if env_cache:
+        candidates.append(env_cache)
+    candidates.append(os.path.expanduser("~/.cache/borg"))
+    if IS_WINDOWS:
+        local_appdata = os.environ.get("LOCALAPPDATA")
+        if local_appdata:
+            candidates.append(os.path.join(local_appdata, "borg", "Cache"))
+
+    seen = set()
+    for cache_dir in candidates:
+        if not cache_dir or cache_dir in seen or not os.path.isdir(cache_dir):
+            continue
+        seen.add(cache_dir)
+        for entry in os.listdir(cache_dir):
+            lock_path = os.path.join(cache_dir, entry, "lock.exclusive")
+            if os.path.exists(lock_path):
+                try:
+                    if os.path.isdir(lock_path):
+                        shutil.rmtree(lock_path)
+                    else:
+                        os.remove(lock_path)
+                    logger.info("Cleared stale cache lock: {}".format(lock_path))
+                except Exception as e:
+                    logger.warning("Could not clear cache lock {}: {}".format(lock_path, e))
 
 
 def signal_handler(signum, frame):
