@@ -2133,6 +2133,79 @@ def _parse_script_command(value):
     return argv, argv[0]
 
 
+def _diagnose_script_path(exe_path):
+    """Return a human-readable diagnosis of why a script path isn't runnable.
+    Returns None when the file exists, is readable, and is executable for the
+    current process. Otherwise returns a multi-line string explaining the
+    exact failure (missing, parent dir blocked, wrong perms, owned by another
+    user, etc.) plus the agent's effective uid/user so the reporter can
+    compare with `ls -la` output."""
+    try:
+        running_as = "uid={}".format(os.geteuid()) if hasattr(os, "geteuid") else "user={}".format(os.environ.get("USERNAME") or os.environ.get("USER") or "?")
+        try:
+            import pwd  # type: ignore
+            running_as = "uid={} ({})".format(os.geteuid(), pwd.getpwuid(os.geteuid()).pw_name)
+        except Exception:
+            pass
+    except Exception:
+        running_as = "unknown user"
+
+    if not exe_path:
+        return "Script path is empty."
+
+    parent = os.path.dirname(exe_path) or "."
+
+    if not os.path.exists(parent):
+        return "Parent directory does not exist: {} (agent running as {})".format(parent, running_as)
+
+    if not os.access(parent, os.R_OK | os.X_OK):
+        try:
+            st = os.stat(parent)
+            perms = oct(st.st_mode & 0o777)
+        except Exception:
+            perms = "?"
+        return ("Cannot access parent directory: {} (perms {}, agent running as {}).\n"
+                "The agent user needs 'x' on every directory in the path. "
+                "If the script lives in /root or another restricted dir, move it "
+                "somewhere readable like /usr/local/bin or /opt/bbs-hooks.").format(parent, perms, running_as)
+
+    if not os.path.exists(exe_path):
+        try:
+            siblings = ", ".join(sorted(os.listdir(parent))[:8])
+        except Exception:
+            siblings = "(cannot list)"
+        return ("File does not exist: {} (agent running as {}).\n"
+                "Parent dir is readable. First files in {}: {}").format(exe_path, running_as, parent, siblings)
+
+    if not os.path.isfile(exe_path):
+        return "Path exists but is not a regular file: {}".format(exe_path)
+
+    if not os.access(exe_path, os.R_OK):
+        try:
+            st = os.stat(exe_path)
+            perms = oct(st.st_mode & 0o777)
+            owner = "{}:{}".format(st.st_uid, st.st_gid)
+        except Exception:
+            perms, owner = "?", "?"
+        return ("File exists but is not readable: {} (perms {}, owner {}, agent running as {}).\n"
+                "Run `chmod 755 {}` (or chown to the agent user).").format(exe_path, perms, owner, running_as, exe_path)
+
+    if not os.access(exe_path, os.X_OK):
+        try:
+            st = os.stat(exe_path)
+            perms = oct(st.st_mode & 0o777)
+            owner = "{}:{}".format(st.st_uid, st.st_gid)
+        except Exception:
+            perms, owner = "?", "?"
+        return ("File exists but is not executable for the agent: {} "
+                "(perms {}, owner {}, agent running as {}).\n"
+                "Run `chmod +x {}`. If the +x bit is already set, the agent user "
+                "may not be in the file's owner/group — try `chmod 755 {}` or "
+                "`chown <agent-user> {}`.").format(exe_path, perms, owner, running_as, exe_path, exe_path, exe_path)
+
+    return None
+
+
 def _build_shell_hook_env(config, task, backup_status):
     """Build the env dict for a shell_hook script. Returns (env, cleanup_fn).
     cleanup_fn() must be called once the subprocess exits to remove the temp
@@ -2217,15 +2290,9 @@ def execute_plugin_shell_hook(config, task=None):
 
     pre_argv, pre_exe = _parse_script_command(pre_script)
 
-    if not os.path.isfile(pre_exe):
-        msg = "Pre-script not found: {}".format(pre_exe)
-        if abort_on_failure:
-            raise Exception(msg)
-        logger.warning(msg)
-        return result
-
-    if not os.access(pre_exe, os.X_OK):
-        msg = "Pre-script not executable: {}".format(pre_exe)
+    problem = _diagnose_script_path(pre_exe)
+    if problem:
+        msg = "Pre-script cannot run: {}\n{}".format(pre_exe, problem)
         if abort_on_failure:
             raise Exception(msg)
         logger.warning(msg)
@@ -2276,13 +2343,10 @@ def cleanup_plugin_shell_hook(config, plugin_result, task=None, backup_result=No
 
     post_argv, post_exe = _parse_script_command(post_script)
 
-    if not os.path.isfile(post_exe):
-        logger.warning("Post-script not found: {}".format(post_exe))
-        return "{} not found".format(post_exe)
-
-    if not os.access(post_exe, os.X_OK):
-        logger.warning("Post-script not executable: {}".format(post_exe))
-        return "{} not executable".format(post_exe)
+    problem = _diagnose_script_path(post_exe)
+    if problem:
+        logger.warning("Post-script cannot run: {}\n{}".format(post_exe, problem))
+        return "Post-script cannot run: {} — {}".format(post_exe, problem.replace("\n", " "))
 
     env, cleanup_fn = _build_shell_hook_env(config, task, backup_result or "completed")
 
