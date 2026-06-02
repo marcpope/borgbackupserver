@@ -140,7 +140,13 @@ def _ssh_common_opts(connect_timeout=None):
     when key-auth is set up, so we just omit them."""
     if IS_DROPBEAR:
         return ["-y", "-y"]
-    null = "NUL" if IS_WINDOWS else "/dev/null"
+    # Always "/dev/null" — even on Windows. The bundled ssh is MinGit /
+    # Git-for-Windows (MSYS2-based), which maps "/dev/null" to the real null
+    # device but treats "NUL" as a relative filename. With
+    # StrictHostKeyChecking=no, ssh appends newly-seen host keys to the
+    # UserKnownHostsFile, so "NUL" creates a literal, reserved-name file named
+    # NUL in the working directory that Explorer/PowerShell cannot delete (#300).
+    null = "/dev/null"
     opts = [
         "-o", "StrictHostKeyChecking=no",
         "-o", "UserKnownHostsFile={}".format(null),
@@ -3349,12 +3355,14 @@ def _execute_task_inner(config, task, job_id, task_type, command, env_vars,
     # Use forward slashes - Windows SSH accepts them and backslashes get
     # stripped as escape characters when passed through subprocess/shell
     if IS_WINDOWS and "BORG_RSH" in env:
+        # Note: "/dev/null" in UserKnownHostsFile is intentionally NOT rewritten
+        # to "NUL". The bundled MinGit/MSYS2 ssh maps "/dev/null" to the real
+        # null device but would create a literal, undeletable reserved-name file
+        # named NUL for "NUL" (#300).
         env["BORG_RSH"] = env["BORG_RSH"].replace(
             "/etc/bbs-agent/ssh_key", SSH_KEY_PATH.replace("\\", "/")
         ).replace(
             "/tmp/bbs-remote-ssh-key", REMOTE_KEY_PATH.replace("\\", "/")
-        ).replace(
-            "/dev/null", "NUL"
         )
         # Replace bare "ssh" command with our bundled ssh.exe to avoid the
         # Windows built-in OpenSSH stdin forwarding bug that hangs borg.

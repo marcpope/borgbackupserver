@@ -57,6 +57,23 @@ if ($svc) {
 # -----------------------------------------------------------------------------
 if (Test-Path $AgentDir) {
     Write-Step "Removing agent directory..."
+
+    # Older agents (<= 2.60.1) could create a file literally named "NUL" here —
+    # a reserved DOS device name that Explorer/PowerShell and a plain
+    # Remove-Item refuse to delete ("Invalid MS-DOS function"), which would
+    # otherwise abort the whole recursive removal (#300). Delete any
+    # reserved-name leftovers via the \\?\ extended-length path so the
+    # directory can be cleaned up.
+    $reserved = @("NUL", "CON", "PRN", "AUX") +
+                (1..9 | ForEach-Object { "COM$_" }) +
+                (1..9 | ForEach-Object { "LPT$_" })
+    foreach ($name in $reserved) {
+        $p = Join-Path $AgentDir $name
+        if (Test-Path -LiteralPath "\\?\$p") {
+            cmd /c "del /f /q `"\\?\$p`"" 2>$null | Out-Null
+        }
+    }
+
     Remove-Item -Path $AgentDir -Recurse -Force
     Write-Ok "Removed $AgentDir"
 } else {
