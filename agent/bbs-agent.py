@@ -2212,6 +2212,56 @@ def _diagnose_script_path(exe_path):
     return None
 
 
+def _diagnose_exec_failure(exe_path, error):
+    """Explain a FileNotFoundError/OSError raised when actually exec'ing a
+    script that already passed the exists/readable/executable checks. The
+    classic cause is the shebang interpreter not being found: Windows CRLF
+    line endings turn `#!/bin/bash` into the interpreter `/bin/bash\\r` (which
+    doesn't exist), so execve returns ENOENT and Python surfaces a bare
+    '[Errno 2] No such file or directory' on a file that plainly exists (#297).
+
+    Reads the shebang line and builds a targeted hint. Always returns a
+    multi-line string ending with the raw OS error for reference."""
+    shebang = ""
+    crlf = False
+    interp = ""
+    try:
+        with open(exe_path, "rb") as fh:
+            first = fh.readline(512)
+        crlf = first.endswith(b"\r\n") or first.rstrip(b"\n").endswith(b"\r")
+        text = first.decode("utf-8", errors="replace").rstrip("\r\n")
+        if text.startswith("#!"):
+            shebang = text
+            # Interpreter is the first token after #! (CRLF leaves a trailing \r)
+            interp = text[2:].strip().split()[0] if text[2:].strip() else ""
+            interp = interp.rstrip("\r")
+    except Exception:
+        pass
+
+    lines = ["Script exists and is executable, but failed to start (exec error)."]
+    if crlf:
+        lines.append(
+            "The file has Windows (CRLF) line endings — the shebang interpreter "
+            "is being read as '{}\\r', which doesn't exist. Convert it to Unix "
+            "(LF) endings: `sed -i 's/\\r$//' {}` (or `dos2unix {}`).".format(
+                interp or "/bin/sh", exe_path, exe_path))
+    elif shebang and interp and not os.path.exists(interp):
+        lines.append(
+            "The shebang line `{}` points to an interpreter that does not exist: "
+            "{}. Install it or fix the path on the first line.".format(shebang, interp))
+    elif shebang:
+        lines.append(
+            "Check that the shebang line `{}` points to an installed interpreter "
+            "and that the file uses Unix (LF) line endings, not Windows (CRLF).".format(shebang))
+    else:
+        lines.append(
+            "The file has no usable `#!` shebang line, or its interpreter is "
+            "missing. Add a shebang like `#!/bin/bash` (with Unix LF line endings) "
+            "or run it through an explicit interpreter.")
+    lines.append("Underlying error: {}".format(error))
+    return "\n".join(lines)
+
+
 def _build_shell_hook_env(config, task, backup_status):
     """Build the env dict for a shell_hook script. Returns (env, cleanup_fn).
     cleanup_fn() must be called once the subprocess exits to remove the temp
@@ -2333,6 +2383,12 @@ def execute_plugin_shell_hook(config, task=None):
             if abort_on_failure:
                 raise Exception(msg)
             logger.warning(msg)
+        except OSError as e:
+            msg = "Pre-script could not be executed: {}\n{}".format(
+                pre_exe, _diagnose_exec_failure(pre_exe, e))
+            if abort_on_failure:
+                raise Exception(msg)
+            logger.warning(msg)
     finally:
         cleanup_fn()
 
@@ -2377,6 +2433,11 @@ def cleanup_plugin_shell_hook(config, plugin_result, task=None, backup_result=No
         except subprocess.TimeoutExpired:
             logger.warning("Post-script timed out after {}s: {}".format(timeout, post_script))
             return "{} timed out after {}s".format(post_script, timeout)
+        except OSError as e:
+            diag = _diagnose_exec_failure(post_exe, e)
+            logger.warning("Post-script could not be executed: {}\n{}".format(post_exe, diag))
+            return "Post-script could not be executed: {} — {}".format(
+                post_exe, diag.replace("\n", " "))
     finally:
         cleanup_fn()
 
@@ -2415,6 +2476,9 @@ def test_plugin_shell_hook(config):
             results.append("{}: {} exit 0{}".format(label, value, " — {}".format(output) if output else ""))
         except subprocess.TimeoutExpired:
             raise Exception("{} timed out after {}s: {}".format(label, timeout, value))
+        except OSError as e:
+            raise Exception("{} could not be executed: {}\n{}".format(
+                label, exe, _diagnose_exec_failure(exe, e)))
 
     return " | ".join(results)
 
