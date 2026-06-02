@@ -661,7 +661,8 @@ class ClientController extends Controller
             $params
         );
 
-        $files = $ch->fetchAll(
+        // fetchAllOrdered: dodge the CH 26.5 ORDER BY..LIMIT lazy-materialization bug (#301)
+        $files = $ch->fetchAllOrdered(
             "SELECT path as file_path, file_name, file_size, status,
                     formatDateTime(mtime, '%Y-%m-%d %H:%i:%S') as mtime
              FROM file_catalog

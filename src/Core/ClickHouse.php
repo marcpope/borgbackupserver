@@ -7,6 +7,8 @@ class ClickHouse
     private static ?self $instance = null;
     private string $baseUrl;
     private string $database;
+    /** Whether this server knows query_plan_optimize_lazy_materialization (null = undetected). */
+    private ?bool $lazyMatSettingSupported = null;
 
     private function __construct()
     {
@@ -48,6 +50,41 @@ class ClickHouse
             }
         }
         return $rows;
+    }
+
+    /**
+     * fetchAll for `ORDER BY <non-key-col> LIMIT n` queries against the file
+     * catalog, with the ClickHouse 26.5 lazy-materialization top-N bug worked
+     * around (#301).
+     *
+     * CH 26.5's `__topKFilter` optimization (query_plan_optimize_lazy_
+     * materialization) mis-maps columns when the planner picks the lazy plan —
+     * which it does under memory pressure on larger archives — feeding a String
+     * column into a UInt64 filter and throwing `Code: 53 TYPE_MISMATCH`. That
+     * blanks the "Largest Files" panel and the catalog file list while the
+     * streaming GROUP BY queries (File Changes) keep working. Disabling lazy
+     * materialization for the query restores the correct plan.
+     *
+     * Older ClickHouse builds predate the setting (and the bug); if the server
+     * rejects it we cache that and fall back to a plain fetchAll so we don't
+     * pay a failed round-trip on every call.
+     */
+    public function fetchAllOrdered(string $sql, array $params = []): array
+    {
+        if ($this->lazyMatSettingSupported === false) {
+            return $this->fetchAll($sql, $params);
+        }
+        try {
+            $rows = $this->fetchAll($sql . ' SETTINGS query_plan_optimize_lazy_materialization = 0', $params);
+            $this->lazyMatSettingSupported = true;
+            return $rows;
+        } catch (\Throwable $e) {
+            if (stripos($e->getMessage(), 'UNKNOWN_SETTING') !== false) {
+                $this->lazyMatSettingSupported = false;
+                return $this->fetchAll($sql, $params);
+            }
+            throw $e;
+        }
     }
 
     /**

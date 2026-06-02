@@ -704,9 +704,10 @@ class RepositoryController extends Controller
             // via exclude patterns) so they don't dominate the list — their
             // size is irrelevant to the archive (#132). Cast to FixedString
             // to keep strict ClickHouse versions happy with the comparison
-            // against the FixedString(1) status column.
+            // against the FixedString(1) status column. Routed through
+            // fetchAllOrdered to dodge the CH 26.5 ORDER BY..LIMIT bug (#301).
             try {
-                $largestFiles = $ch->fetchAll(
+                $largestFiles = $ch->fetchAllOrdered(
                     "SELECT path, file_name, file_size, status
                      FROM file_catalog
                      WHERE agent_id = {$aid} AND archive_id = {$arid} AND path != ''
@@ -854,7 +855,7 @@ class RepositoryController extends Controller
                 $countRow = $ch->fetchOne("SELECT count() as cnt FROM file_catalog WHERE {$where}", $params);
                 $total = (int) ($countRow['cnt'] ?? 0);
 
-                $files = $ch->fetchAll("SELECT path, file_name, file_size, 'deleted' as status FROM file_catalog WHERE {$where} ORDER BY path LIMIT {$perPage} OFFSET {$offset}", $params);
+                $files = $ch->fetchAllOrdered("SELECT path, file_name, file_size, 'deleted' as status FROM file_catalog WHERE {$where} ORDER BY path LIMIT {$perPage} OFFSET {$offset}", $params);
             } else {
                 $where = "agent_id = {$aid} AND archive_id = {$arid} AND path != ''";
                 $params = [];
@@ -875,7 +876,7 @@ class RepositoryController extends Controller
                 $countRow = $ch->fetchOne("SELECT count() as cnt FROM file_catalog WHERE {$where}", $params);
                 $total = (int) ($countRow['cnt'] ?? 0);
 
-                $files = $ch->fetchAll("SELECT path, file_name, file_size, status FROM file_catalog WHERE {$where} ORDER BY path LIMIT {$perPage} OFFSET {$offset}", $params);
+                $files = $ch->fetchAllOrdered("SELECT path, file_name, file_size, status FROM file_catalog WHERE {$where} ORDER BY path LIMIT {$perPage} OFFSET {$offset}", $params);
             }
 
             $this->json(['files' => $files, 'total' => $total, 'page' => $page]);
