@@ -40,6 +40,19 @@ class ReportService
         // All agents
         $agents = $this->db->fetchAll("SELECT id, name, hostname, status, last_heartbeat FROM agents ORDER BY name");
 
+        // On-disk repository size per agent — the deduplicated footprint
+        // maintained by RepositorySizeService. This is the same figure the
+        // Clients page shows (and matches `du`); the report's "Size" column
+        // uses it so the two never disagree, and so it stays correct even when
+        // the most recent backup failed (#292). It deliberately does NOT use
+        // the last archive's original_size (uncompressed, non-deduplicated).
+        $repoSizeByAgent = [];
+        foreach ($this->db->fetchAll(
+            "SELECT agent_id, COALESCE(SUM(size_bytes), 0) as total_size FROM repositories GROUP BY agent_id"
+        ) as $rs) {
+            $repoSizeByAgent[(int) $rs['agent_id']] = (int) $rs['total_size'];
+        }
+
         $agentData = [];
         $totalCompleted = 0;
         $totalFailed = 0;
@@ -135,6 +148,7 @@ class ReportService
                 'hostname' => $agent['hostname'],
                 'status' => $agent['status'],
                 'last_heartbeat' => $agent['last_heartbeat'],
+                'repo_size' => $repoSizeByAgent[(int) $agent['id']] ?? 0,
                 'last_backup' => $lastJob ? [
                     // Status is the client-level overall across all plans; the
                     // individual plan results are in plan_breakdown below.
@@ -430,7 +444,10 @@ class ReportService
             $lastBackup = '--';
             $result = '--';
             $files = '--';
-            $size = '--';
+            // Size is the on-disk repository footprint (matches the Clients page
+            // and `du`), shown whenever the client has stored data — even if the
+            // most recent backup failed (#292).
+            $size = $agent['repo_size'] > 0 ? self::formatBytes($agent['repo_size']) : '--';
 
             if ($agent['last_backup']) {
                 $lb = $agent['last_backup'];
@@ -443,7 +460,6 @@ class ReportService
                     $result = "<span style='color:#dc3545;font-weight:600;'>FAILED</span>";
                 }
                 $files = number_format($lb['files']);
-                $size = self::formatBytes($lb['original_size']);
             }
 
             $todayNote = '';
