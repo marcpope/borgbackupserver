@@ -251,11 +251,14 @@ install_borg() {
             [ -z "$brew_bin" ] && [ -x /opt/homebrew/bin/brew ] && brew_bin="/opt/homebrew/bin/brew"
             [ -z "$brew_bin" ] && [ -x /usr/local/bin/brew ] && brew_bin="/usr/local/bin/brew"
             if [ -z "$brew_bin" ]; then
+                # No Homebrew — don't abort. macOS ships python3 via the Command
+                # Line Tools, and the agent installs Borg from the server on
+                # first run (macOS/arm64 binaries are hosted), so fall through to
+                # the "pending" path below instead of failing the whole install.
                 stop_spinner
-                print_error "Homebrew required on macOS. Install from https://brew.sh, then re-run."
-                exit 1
-            fi
-            if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ]; then
+                print_info "Homebrew not found — the agent will install Borg on first run."
+                print_info "Install Homebrew from https://brew.sh to provide it now instead."
+            elif [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ]; then
                 sudo -u "$SUDO_USER" "$brew_bin" install borgbackup python3 >/dev/null 2>&1 || true
             else
                 "$brew_bin" install borgbackup python3 >/dev/null 2>&1 || true
