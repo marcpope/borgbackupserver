@@ -57,6 +57,11 @@ stop_spinner() {
     fi
 }
 
+# Never leave a frozen spinner behind. `set -e` plus suppressed output means a
+# failed package step used to kill the script mid-spin with no message (#304);
+# this clears the spinner on any exit so at least the prompt is usable.
+trap stop_spinner EXIT
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # Output helpers
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -235,12 +240,25 @@ install_borg() {
             }
             ;;
         macos)
-            if command -v brew &>/dev/null; then
-                brew install borgbackup python3 >/dev/null 2>&1
-            else
+            # Homebrew refuses to run as root, and this installer runs under
+            # sudo — so `brew install` as root exits non-zero. With output
+            # hidden and `set -e`, that killed the script mid-spinner with no
+            # message (#304). Resolve brew (including Apple Silicon's
+            # /opt/homebrew, which isn't in root's PATH) and run it as the user
+            # who invoked sudo. Tolerate failure so the post-install check below
+            # can fall back to "agent installs borg on first run".
+            brew_bin="$(command -v brew 2>/dev/null || true)"
+            [ -z "$brew_bin" ] && [ -x /opt/homebrew/bin/brew ] && brew_bin="/opt/homebrew/bin/brew"
+            [ -z "$brew_bin" ] && [ -x /usr/local/bin/brew ] && brew_bin="/usr/local/bin/brew"
+            if [ -z "$brew_bin" ]; then
                 stop_spinner
-                print_error "Homebrew required on macOS. Install from https://brew.sh"
+                print_error "Homebrew required on macOS. Install from https://brew.sh, then re-run."
                 exit 1
+            fi
+            if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ]; then
+                sudo -u "$SUDO_USER" "$brew_bin" install borgbackup python3 >/dev/null 2>&1 || true
+            else
+                "$brew_bin" install borgbackup python3 >/dev/null 2>&1 || true
             fi
             ;;
         *)
@@ -252,8 +270,15 @@ install_borg() {
 
     stop_spinner
 
-    if command -v borg &>/dev/null; then
-        local borg_ver=$(borg --version 2>/dev/null | head -1)
+    # Resolve borg even when it landed outside root's PATH — notably Apple
+    # Silicon Homebrew installs to /opt/homebrew/bin, which sudo's PATH omits.
+    local borg_path
+    borg_path="$(command -v borg 2>/dev/null || true)"
+    [ -z "$borg_path" ] && [ -x /opt/homebrew/bin/borg ] && borg_path="/opt/homebrew/bin/borg"
+    [ -z "$borg_path" ] && [ -x /usr/local/bin/borg ] && borg_path="/usr/local/bin/borg"
+
+    if [ -n "$borg_path" ]; then
+        local borg_ver=$("$borg_path" --version 2>/dev/null | head -1)
         print_success "Installed: ${BOLD}$borg_ver${NC}"
         BORG_INSTALLED="new"
         BORG_VERSION="$borg_ver"

@@ -20,9 +20,12 @@ echo -e "${BOLD}BBS Agent Uninstaller${NC}"
 echo ""
 
 read -rp "  This will remove the BBS agent from this machine. Continue? [y/N] " yn
-if [[ "${yn,,}" != "y" ]]; then
-    die "Aborted."
-fi
+# Portable y/N check — ${yn,,} (bash 4 lowercasing) is a "bad substitution" on
+# macOS's bundled bash 3.2 (#304). A case glob works everywhere.
+case "$yn" in
+    [Yy]*) ;;
+    *) die "Aborted." ;;
+esac
 
 echo ""
 
