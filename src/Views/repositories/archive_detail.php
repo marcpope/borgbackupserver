@@ -224,11 +224,20 @@ if ($savings >= 100 && $archive['deduplicated_size'] > 0) {
                 <?php if ($totalFiles > 0): ?>
                 <div class="progress mb-3" style="height: 24px;">
                     <?php foreach ($fileRows as $row):
-                        $pct = round(((int) $row['cnt'] / $totalFiles) * 100, 1);
-                        if ($pct < 0.5) continue;
+                        $cnt = (int) $row['cnt'];
+                        if ($cnt === 0) continue;
+                        $pct = round(($cnt / $totalFiles) * 100, 1);
                         [$label, $badge] = $statusLabels[$row['status']] ?? [$row['status'], 'bg-secondary'];
+                        // Floor present-but-tiny change categories to a visible
+                        // sliver instead of dropping them — on mature backups the
+                        // added/modified counts are well under 1% of the total, so
+                        // a hard threshold made the bar read as 100% Unchanged even
+                        // when files changed (#305). The dominant Unchanged segment
+                        // flex-shrinks to make room.
+                        $style = 'width: ' . $pct . '%;';
+                        if ($row['status'] !== 'U') $style .= ' min-width: 6px;';
                     ?>
-                    <div class="progress-bar <?= $badge ?>" style="width: <?= $pct ?>%" title="<?= $label ?>: <?= number_format($row['cnt']) ?> files"><?php if ($pct > 5): ?><?= $label ?><?php endif; ?></div>
+                    <div class="progress-bar <?= $badge ?>" style="<?= $style ?>" title="<?= $label ?>: <?= number_format($cnt) ?> files"><?php if ($pct > 5): ?><?= $label ?><?php endif; ?></div>
                     <?php endforeach; ?>
                 </div>
                 <?php endif; ?>
