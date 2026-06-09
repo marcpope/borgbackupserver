@@ -31,6 +31,27 @@ class DashboardController extends Controller
         $data = array_merge($data, $this->getDashboardExtras());
         $data['pageTitle'] = 'Dashboard';
 
+        // Scheduler heartbeat staleness. The cron scheduler stamps
+        // 'scheduler_last_run' every minute; when it goes stale the cron is
+        // dead or misconfigured, which silently strands server-side jobs
+        // (prune/compact/catalog) in the queue while agent backups keep
+        // working via the poll endpoint (#307). Only warn once agents exist,
+        // so a brand-new install doesn't nag before the first cron tick.
+        $data['schedulerLastRun'] = null;
+        $data['schedulerStale'] = false;
+        $agentCount = (int) ($this->db->fetchOne("SELECT COUNT(*) AS c FROM agents")['c'] ?? 0);
+        if ($agentCount > 0) {
+            $row = $this->db->fetchOne("SELECT `value` FROM settings WHERE `key` = 'scheduler_last_run'");
+            $data['schedulerLastRun'] = $row['value'] ?? null;
+            // The heartbeat is written in UTC (scheduler.php forces UTC), so
+            // parse it as UTC rather than the web process's default timezone.
+            $lastTs = 0;
+            if ($data['schedulerLastRun']) {
+                $lastTs = (new \DateTime($data['schedulerLastRun'], new \DateTimeZone('UTC')))->getTimestamp();
+            }
+            $data['schedulerStale'] = (time() - $lastTs) > 600; // >10 min (10+ missed runs)
+        }
+
         $this->view('dashboard/index', $data);
     }
 

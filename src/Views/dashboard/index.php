@@ -321,6 +321,23 @@ $dfFix = function (string $s): string {
 </style>
 
 <div class="v2 container-fluid px-0">
+    <?php if (!empty($schedulerStale)): ?>
+    <div class="alert alert-warning d-flex align-items-start gap-2 mb-3" role="alert">
+        <i class="bi bi-exclamation-triangle-fill mt-1"></i>
+        <div>
+            <strong>The scheduler isn't running.</strong>
+            <?php if (!empty($schedulerLastRun)): ?>
+                It last ran <?= htmlspecialchars(\BBS\Core\TimeHelper::ago($schedulerLastRun)) ?> (expected every minute).
+            <?php else: ?>
+                It has never recorded a run.
+            <?php endif; ?>
+            Server-side jobs (prune, compact, catalog) will stay queued and can block later backups for the same repository, even though agent backups still run.
+            <div class="small mt-1 text-body-secondary">
+                Check the scheduler cron is active. On Docker: <code>tail /var/log/bbs-scheduler.log</code> inside the container (it should update every minute) and confirm <code>cron</code> is running. On bare metal, confirm the <code>scheduler.php</code> cron entry exists for the web user.
+            </div>
+        </div>
+    </div>
+    <?php endif; ?>
     <!-- Row 1: Hero tiles — same icon-on-left pattern as /clients and /queue -->
     <?php $errCls = $errorCount > 0 ? 'danger' : 'success'; ?>
     <div class="row g-3 mb-3">

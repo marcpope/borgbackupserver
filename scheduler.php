@@ -19,6 +19,18 @@ Config::load();
 
 $db = \BBS\Core\Database::getInstance();
 
+// Heartbeat: record that the cron scheduler actually ran. When this goes
+// stale the dashboard warns — that surfaces a dead or misconfigured cron,
+// which is the usual cause of server-side jobs (prune/compact/catalog)
+// sitting in the queue forever while agent backups keep working via the
+// poll endpoint (#307). Written first so it reflects "cron fired" regardless
+// of what later steps do.
+$db->query(
+    "INSERT INTO settings (`key`, `value`) VALUES ('scheduler_last_run', ?)
+     ON DUPLICATE KEY UPDATE `value` = VALUES(`value`)",
+    [date('Y-m-d H:i:s')]
+);
+
 // Step 1: Mark agents offline if no heartbeat in 3x poll interval
 $pollInterval = $db->fetchOne("SELECT `value` FROM settings WHERE `key` = 'agent_poll_interval'");
 $threshold = ((int)($pollInterval['value'] ?? 30)) * 3;
