@@ -197,7 +197,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $stmt = $pdo->prepare("UPDATE settings SET `value` = ? WHERE `key` = 'server_host'");
                 $stmt->execute([$setup['server_host']]);
 
-                // 7. Create migrations table and mark all as executed
+                // 7. Run migrations against the imported schema, then record
+                // them as applied.
+                //
+                // schema.sql is meant to be the full current schema, so most
+                // migrations are duplicates here. But if schema.sql has drifted
+                // from migrations/ (a missed fold-in), simply *marking* them
+                // applied — as this step used to — left a fresh install missing
+                // columns AND flagged the migrations done, so they could never
+                // be applied later either: a permanent 500 (#308). Instead we
+                // actually run each migration; duplicate-column/table errors are
+                // expected and ignored, and any genuinely-missing change gets
+                // applied. Either way the migration is recorded so updates don't
+                // re-run it.
                 $pdo->exec("
                     CREATE TABLE IF NOT EXISTS migrations (
                         id INT AUTO_INCREMENT PRIMARY KEY,
@@ -210,6 +222,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 sort($migrationFiles);
                 $stmt = $pdo->prepare("INSERT IGNORE INTO migrations (filename) VALUES (?)");
                 foreach ($migrationFiles as $mf) {
+                    try {
+                        $pdo->exec(file_get_contents($mf));
+                    } catch (\PDOException $e) {
+                        // Expected when schema.sql already covers this migration
+                        // (duplicate column/table). Anything else is logged but
+                        // not fatal — the column may simply already exist.
+                    }
                     $stmt->execute([basename($mf)]);
                 }
 

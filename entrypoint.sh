@@ -541,6 +541,16 @@ if [ -f "/var/www/bbs/schema.sql" ]; then
     if [ "$FRESH_INSTALL" -eq 1 ]; then
         echo "Importing database schema..."
         mysql -u bbs -p"$DB_PASS" bbs < /var/www/bbs/schema.sql
+
+        # Safety net: run the migrations against the freshly-imported schema.
+        # schema.sql is meant to be the full current schema, but if it ever
+        # drifts from migrations/ (a missed fold-in), a fresh install would be
+        # missing columns and 500 (#308). The Migrator tolerates "already
+        # applied" errors, so this patches any gap and records every migration
+        # as applied — so later upgrades don't re-run them.
+        echo "Applying database migrations..."
+        su -s /bin/sh -c "cd /var/www/bbs && /usr/local/bin/php migrate.php" www-data 2>&1 \
+            || echo "Warning: migration runner returned an error (migrations will retry on next start)"
     fi
 fi
 
