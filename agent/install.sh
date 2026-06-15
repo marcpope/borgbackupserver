@@ -240,25 +240,65 @@ install_borg() {
             }
             ;;
         macos)
-            # Homebrew refuses to run as root, and this installer runs under
-            # sudo — so `brew install` as root exits non-zero. With output
-            # hidden and `set -e`, that killed the script mid-spinner with no
-            # message (#304). Resolve brew (including Apple Silicon's
-            # /opt/homebrew, which isn't in root's PATH) and run it as the user
-            # who invoked sudo. Tolerate failure so the post-install check below
-            # can fall back to "agent installs borg on first run".
+            # On macOS, Borg has to come from Homebrew. The agent's own
+            # first-run fallbacks don't work here — the pip path dies with
+            # "no such option: --break-system-packages" — so without brew the
+            # agent ends up with "borg command not found" (#311). So require
+            # Homebrew up front, offering to install it if it's missing.
+            #
+            # brew refuses to run as root and this installer runs under sudo, so
+            # everything brew-related runs as the invoking user ($SUDO_USER).
+            # Resolve brew including Apple Silicon's /opt/homebrew (not in root's
+            # PATH).
             brew_bin="$(command -v brew 2>/dev/null || true)"
             [ -z "$brew_bin" ] && [ -x /opt/homebrew/bin/brew ] && brew_bin="/opt/homebrew/bin/brew"
             [ -z "$brew_bin" ] && [ -x /usr/local/bin/brew ] && brew_bin="/usr/local/bin/brew"
+
             if [ -z "$brew_bin" ]; then
-                # No Homebrew — don't abort. macOS ships python3 via the Command
-                # Line Tools, and the agent installs Borg from the server on
-                # first run (macOS/arm64 binaries are hosted), so fall through to
-                # the "pending" path below instead of failing the whole install.
-                stop_spinner
-                print_info "Homebrew not found — the agent will install Borg on first run."
-                print_info "Install Homebrew from https://brew.sh to provide it now instead."
-            elif [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ]; then
+                stop_spinner   # pause the progress spinner so we can prompt
+                print_warning "Homebrew is required to install Borg on macOS, and it isn't installed."
+
+                # The installer is normally run as `curl ... | sudo bash`, so
+                # stdin is the script itself — read the user's answer from the
+                # controlling terminal instead. No terminal (headless/piped with
+                # no tty) means we can't ask, so we stop with instructions.
+                reply=""
+                if [ -r /dev/tty ]; then
+                    printf "  Install Homebrew now? [y/N] " > /dev/tty
+                    read -r reply < /dev/tty || reply=""
+                fi
+
+                case "$reply" in
+                    [Yy]*)
+                        if [ -z "${SUDO_USER:-}" ] || [ "$SUDO_USER" = "root" ]; then
+                            print_error "Homebrew can't be installed as root. Install it as your normal user:"
+                            print_error '  /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'
+                            print_error "then re-run this installer."
+                            exit 1
+                        fi
+                        print_step "Installing Homebrew (this can take a few minutes)..."
+                        sudo -u "$SUDO_USER" env NONINTERACTIVE=1 /bin/bash -c \
+                            "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" < /dev/tty || true
+
+                        brew_bin="$(command -v brew 2>/dev/null || true)"
+                        [ -z "$brew_bin" ] && [ -x /opt/homebrew/bin/brew ] && brew_bin="/opt/homebrew/bin/brew"
+                        [ -z "$brew_bin" ] && [ -x /usr/local/bin/brew ] && brew_bin="/usr/local/bin/brew"
+                        if [ -z "$brew_bin" ]; then
+                            print_error "Homebrew installation didn't complete. Install it from https://brew.sh and re-run this installer."
+                            exit 1
+                        fi
+                        print_success "Homebrew installed"
+                        ;;
+                    *)
+                        print_error "Borg requires Homebrew on macOS. Install it from https://brew.sh, then re-run this installer."
+                        exit 1
+                        ;;
+                esac
+                # Resume the progress spinner for the borg install below.
+                start_spinner "Installing borgbackup and python3..."
+            fi
+
+            if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ]; then
                 sudo -u "$SUDO_USER" "$brew_bin" install borgbackup python3 >/dev/null 2>&1 || true
             else
                 "$brew_bin" install borgbackup python3 >/dev/null 2>&1 || true
