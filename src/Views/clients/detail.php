@@ -485,7 +485,7 @@ $sizeDisplay = $totalSize > 0 ? \BBS\Services\ServerStats::formatBytes((int) $to
     </div>
 
     <?php if (!empty($durationChart)): ?>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+    <script src="/assets/chartjs/chart.umd.min.js"></script>
     <script>
     const _dk = document.documentElement.getAttribute('data-bs-theme') === 'dark';
     const _tc = _dk ? '#8b929a' : '#6c757d';

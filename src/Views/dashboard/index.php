@@ -1002,7 +1002,7 @@ $dfFix = function (string $s): string {
     </div>
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+<script src="/assets/chartjs/chart.umd.min.js"></script>
 <script>
 document.addEventListener('DOMContentLoaded', function () {
     const chartData = <?= json_encode($chartData) ?>;

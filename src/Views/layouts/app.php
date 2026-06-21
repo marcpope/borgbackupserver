@@ -4,16 +4,22 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title><?= htmlspecialchars($pageTitle ?? 'Dashboard') ?> - Borg Backup Server</title>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
+    <!-- Self-hosted assets (no CDN). A self-hosted backup server must work in
+         airgapped / firewalled networks; loading Bootstrap & fonts from a CDN
+         meant the UI (buttons, dropdowns, modals) silently broke when the CDN
+         was unreachable or slow, since the blocking bootstrap script stalls the
+         whole page (#320). Served from /public/assets, shipped in the image. -->
+    <link href="/assets/inter/inter.css" rel="stylesheet">
+    <link href="/assets/bootstrap/bootstrap.min.css" rel="stylesheet">
+    <link href="/assets/bootstrap-icons/bootstrap-icons.min.css" rel="stylesheet">
     <link href="/css/style.css?v=<?= filemtime(__DIR__ . '/../../../public/css/style.css') ?>" rel="stylesheet">
     <!-- bootstrap.bundle here (head, blocking) instead of at body-end so view
          inline scripts that reference `bootstrap` (Tooltip, Collapse) don't
          race against the loader. Without this, the first uncached page load
          on tabs with inline bootstrap calls intermittently throws
-         "bootstrap is not defined" and the page renders in a broken state. -->
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+         "bootstrap is not defined" and the page renders in a broken state.
+         Now local, so it loads instantly and reliably. -->
+    <script src="/assets/bootstrap/bootstrap.bundle.min.js"></script>
     <script src="/js/app-utils.js?v=<?= filemtime(__DIR__ . '/../../../public/js/app-utils.js') ?>"></script>
     <link rel="manifest" href="/manifest.json">
     <!-- Favicons + apple-touch-icon. Served by BrandingController, which

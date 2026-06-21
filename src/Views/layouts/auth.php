@@ -7,9 +7,9 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title><?= htmlspecialchars($pageTitle ?? 'Login') ?> - Borg Backup Server</title>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
+    <link href="/assets/inter/inter.css" rel="stylesheet">
+    <link href="/assets/bootstrap/bootstrap.min.css" rel="stylesheet">
+    <link href="/assets/bootstrap-icons/bootstrap-icons.min.css" rel="stylesheet">
     <link href="/css/style.css" rel="stylesheet">
     <link rel="manifest" href="/manifest.json">
     <link rel="icon" type="image/png" sizes="16x16" href="/branding/icon/16">
@@ -410,7 +410,7 @@
         </div>
     </div>
     </div><!-- /.auth-frame -->
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="/assets/bootstrap/bootstrap.bundle.min.js"></script>
     <script>
     /* Sparse binary-stream background: spawns one glyph every ~450ms,
        randomized Y / size / opacity / speed so they feel like data

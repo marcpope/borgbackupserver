@@ -220,7 +220,7 @@ document.getElementById('clientSearch').addEventListener('input', function() {
     });
 });
 </script>
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+<script src="/assets/chartjs/chart.umd.min.js"></script>
 <script>
 (function() {
     const _dk = document.documentElement.getAttribute('data-bs-theme') === 'dark';
