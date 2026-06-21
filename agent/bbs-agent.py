@@ -3308,6 +3308,37 @@ def _build_list_dir_tree(task):
             node["error"] = str(e)
         return node
 
+    # Windows has no unified "/" root — os.scandir("/") only ever sees the
+    # current drive (typically C:), so the file browser couldn't reach D:, E:,
+    # etc. (#318). When the root is requested, enumerate the drive letters and
+    # return each as an expandable node; the UI lazy-loads a drive's contents
+    # when it's clicked, which then scans that drive normally.
+    if os.name == "nt" and path.strip().rstrip("/\\") == "":
+        import string
+        drives = []
+        for letter in string.ascii_uppercase:
+            drive_path = "{}:\\".format(letter)
+            if os.path.exists(drive_path):
+                drives.append({
+                    "name": "{}:".format(letter),
+                    "path": drive_path,
+                    "type": "directory",
+                    "size": None,
+                    "mtime": None,
+                    "entry_count": None,  # unknown until expanded
+                    "children": [],       # lazy-loaded on click
+                    "truncated": False,
+                })
+        return {
+            "name": "Computer",
+            "path": "/",
+            "type": "directory",
+            "size": None,
+            "entry_count": len(drives),
+            "children": drives,
+            "truncated": False,
+        }
+
     return _walk(path.rstrip("/") or "/", depth)
 
 
