@@ -68,6 +68,8 @@ docker compose logs bbs
 
 Open `http://localhost:8080` and log in. See the **[Docker Installation guide](https://github.com/marcpope/borgbackupserver/wiki/Docker-Installation)** for full configuration, storage, reverse proxy, and update documentation.
 
+**Unraid:** a Community Applications template is included at [`unraid/borgbackupserver.xml`](unraid/borgbackupserver.xml) — add it via *Docker → Add Container → Template* (or your CA templates repo). It maps the web/SSH ports and the `/var/bbs` data path, and defaults `APP_URL`/`SSH_PORT` to the host.
+
 ---
 
 ## Documentation

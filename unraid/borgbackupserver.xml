@@ -1,0 +1,32 @@
+<?xml version="1.0"?>
+<!--
+  Unraid Community Applications template for Borg Backup Server (#315).
+  Mirrors docker-compose.yml: web on 80, SSH (agent borg) on 22, all data in
+  /var/bbs. APP_URL and SSH_PORT default to the host IP and mapped ports so
+  agents connect correctly. Admin password is auto-generated and shown in the
+  container log on first run unless ADMIN_PASS is set.
+-->
+<Container version="2">
+  <Name>BorgBackupServer</Name>
+  <Repository>marcpope/borgbackupserver:latest</Repository>
+  <Registry>https://hub.docker.com/r/marcpope/borgbackupserver</Registry>
+  <Network>bridge</Network>
+  <MyIP/>
+  <Shell>sh</Shell>
+  <Privileged>false</Privileged>
+  <Support>https://github.com/marcpope/borgbackupserver/issues</Support>
+  <Project>https://github.com/marcpope/borgbackupserver</Project>
+  <Overview>Self-hosted web app for centrally managing BorgBackup across Linux, macOS and Windows endpoints. A lightweight agent polls the server over HTTPS and backs up over SSH — no inbound connections to endpoints, so it works behind firewalls/NAT. After first boot, view the container log for the auto-generated admin password (unless you set ADMIN_PASS). Set the Web UI Port host value, then set APP_URL to http://YOUR-UNRAID-IP:THAT-PORT so agents can reach the server.</Overview>
+  <Category>Backup: Network:Web</Category>
+  <WebUI>http://[IP]:[PORT:80]/</WebUI>
+  <Icon>https://raw.githubusercontent.com/marcpope/borgbackupserver/main/public/images/icon-192.png</Icon>
+  <ExtraParams/>
+  <DonateText/>
+  <DonateLink/>
+  <Config Name="Web UI Port" Target="80" Default="8080" Mode="tcp" Description="Host port for the web interface." Type="Port" Display="always" Required="true" Mask="false">8080</Config>
+  <Config Name="SSH Port (agent borg)" Target="22" Default="2222" Mode="tcp" Description="Host port agents use to reach the server over SSH for borg. Must match the SSH_PORT variable below." Type="Port" Display="always" Required="true" Mask="false">2222</Config>
+  <Config Name="Data (/var/bbs)" Target="/var/bbs" Default="/mnt/user/appdata/borgbackupserver" Mode="rw" Description="All data: database, borg repositories, SSH keys, config. Point this at an array/pool share with enough space for your backups." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/borgbackupserver</Config>
+  <Config Name="APP_URL" Target="APP_URL" Default="http://[IP]:[PORT:80]" Mode="" Description="The URL agents use to reach this server. Should be http://YOUR-UNRAID-IP:WEB-UI-PORT (or a domain/https if you put a reverse proxy in front)." Type="Variable" Display="always" Required="true" Mask="false">http://[IP]:[PORT:80]</Config>
+  <Config Name="SSH_PORT" Target="SSH_PORT" Default="[PORT:22]" Mode="" Description="Must match the host SSH Port above so agents connect to the right port." Type="Variable" Display="always" Required="true" Mask="false">[PORT:22]</Config>
+  <Config Name="ADMIN_PASS" Target="ADMIN_PASS" Default="" Mode="" Description="Optional. Admin password set on first run only. Leave blank to auto-generate (shown in the container log)." Type="Variable" Display="always" Required="false" Mask="true"/>
+</Container>
