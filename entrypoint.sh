@@ -774,7 +774,16 @@ touch /var/log/bbs-scheduler.log
 chown www-data:www-data /var/log/bbs-scheduler.log
 cat > /etc/cron.d/bbs-scheduler << 'CRON'
 TMPDIR=/var/bbs/tmp
-* * * * * www-data cd /var/www/bbs && /usr/local/bin/php scheduler.php >> /var/log/bbs-scheduler.log 2>&1
+# Run the scheduler as root cron + `su` to www-data, NOT a `www-data`
+# user-field entry. In some container environments (e.g. Unraid's Docker)
+# /etc/cron.d entries with a non-root user field silently never execute —
+# cron's PAM session setup fails for the nologin www-data user — while root
+# entries in the same file run fine. That left the scheduler dead, so
+# server-side jobs (prune/compact/catalog) sat queued forever while agent
+# backups kept working via the poll endpoint (#307). Running as root and
+# dropping to www-data via su sidesteps the PAM-session issue and keeps file
+# ownership correct.
+* * * * * root su -s /bin/sh www-data -c 'cd /var/www/bbs && TMPDIR=/var/bbs/tmp /usr/local/bin/php scheduler.php' >> /var/log/bbs-scheduler.log 2>&1
 # Save UIDs for any user home dirs that have .ssh/ but no .uid file yet
 */5 * * * * root for d in /var/bbs/home/*/; do [ -d "$d/.ssh" ] && [ ! -f "$d/.uid" ] && stat -c \%u "$d" > "$d/.uid" 2>/dev/null; done
 # Cap ClickHouse stderr/stdout at ~50MB. ClickHouse runs as --daemon and
