@@ -176,6 +176,18 @@ $updateAvailable = $updateService->isUpdateAvailable();
                         <input type="number" class="form-control" name="auto_retry_max_attempts" value="<?= htmlspecialchars($settings['auto_retry_max_attempts'] ?? '3') ?>" min="1" max="10">
                         <div class="form-text">Cap on offline-induced retries per plan. Once exhausted, a final email is sent (bypassing dedup) so persistent failures aren't hidden. Default: 3.</div>
                     </div>
+                    <div class="mb-3">
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" name="auto_update_agents" value="1"
+                                   id="autoUpdateAgents" <?= (($settings['auto_update_agents'] ?? '1') === '1') ? 'checked' : '' ?>>
+                            <label class="form-check-label fw-semibold" for="autoUpdateAgents">
+                                Auto-update agents when BBS updates
+                            </label>
+                        </div>
+                        <div class="form-text">
+                            After BBS updates to a new version, automatically queue an agent update for every outdated, online client so agents stay in sync. Updates the agent script through the normal mechanism. Default: on.
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>

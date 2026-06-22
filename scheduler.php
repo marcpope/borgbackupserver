@@ -2090,6 +2090,65 @@ if (!$lastBorgCheckTime || strtotime($lastBorgCheckTime) < time() - 86400) {
     }
 }
 
+// Step 8b: Auto-update agents after a BBS update (#306).
+// When the bundled agent version changes (i.e. BBS was just updated), queue
+// an agent update for every outdated, online agent — once per new version,
+// tracked via 'auto_update_agents_last_version' so it doesn't re-queue every
+// minute. Enabled by default; turn off with the 'auto_update_agents' setting.
+// Updates the agent .py through the normal mechanism (the safe path — the
+// Windows launcher exe is never touched).
+$autoUpdAgents = $db->fetchOne("SELECT `value` FROM settings WHERE `key` = 'auto_update_agents'");
+if (($autoUpdAgents['value'] ?? '1') === '1') {
+    $bundledAgentVersion = null;
+    $agentFile = __DIR__ . '/agent/bbs-agent.py';
+    if (is_readable($agentFile) && ($fh = fopen($agentFile, 'r'))) {
+        for ($i = 0; $i < 50 && ($line = fgets($fh)) !== false; $i++) {
+            if (preg_match('/^AGENT_VERSION\s*=\s*["\']([^"\']+)["\']/', $line, $m)) {
+                $bundledAgentVersion = $m[1];
+                break;
+            }
+        }
+        fclose($fh);
+    }
+    $lastAutoVer = $db->fetchOne("SELECT `value` FROM settings WHERE `key` = 'auto_update_agents_last_version'");
+    if ($bundledAgentVersion && ($lastAutoVer['value'] ?? '') !== $bundledAgentVersion) {
+        $outdated = $db->fetchAll(
+            "SELECT id, name FROM agents
+             WHERE agent_version IS NOT NULL AND agent_version != ? AND status = 'online'",
+            [$bundledAgentVersion]
+        );
+        $pending = array_column($db->fetchAll(
+            "SELECT agent_id FROM backup_jobs WHERE task_type = 'update_agent' AND status IN ('queued','sent','running')"
+        ), 'agent_id');
+        $queuedUpd = 0;
+        foreach ($outdated as $ag) {
+            if (in_array($ag['id'], $pending)) {
+                continue;
+            }
+            $jid = $db->insert('backup_jobs', [
+                'agent_id' => $ag['id'],
+                'task_type' => 'update_agent',
+                'status' => 'queued',
+            ]);
+            $db->insert('server_log', [
+                'agent_id' => $ag['id'],
+                'backup_job_id' => $jid,
+                'level' => 'info',
+                'message' => "Agent update queued automatically (BBS updated to agent v{$bundledAgentVersion})",
+            ]);
+            $queuedUpd++;
+        }
+        if ($queuedUpd > 0) {
+            echo date('Y-m-d H:i:s') . " Auto agent-update: queued {$queuedUpd} update(s) to v{$bundledAgentVersion}\n";
+        }
+        $db->query(
+            "INSERT INTO settings (`key`, `value`) VALUES ('auto_update_agents_last_version', ?)
+             ON DUPLICATE KEY UPDATE `value` = VALUES(`value`)",
+            [$bundledAgentVersion]
+        );
+    }
+}
+
 // Step 9: Clean up old backup jobs (daily, keep 30 days)
 $lastJobCleanup = $db->fetchOne("SELECT `value` FROM settings WHERE `key` = 'last_job_cleanup'");
 $lastJobCleanupTime = $lastJobCleanup['value'] ?? null;
