@@ -2257,13 +2257,23 @@ if (($selfBackupEnabled['value'] ?? '1') === '1') {
     }
 }
 
-// Step 11: Weekly auto-compact of all repositories (Saturday night at 2 AM)
-// Jobs are queued sequentially and processed one at a time by the scheduler
+// Step 11: Weekly auto-compact of all repositories.
+// Day/hour are configurable (#272) — the default Saturday-2 AM window never
+// fires on storage that isn't powered on then. We trigger on the configured
+// day at OR AFTER the configured hour (not an exact hour match) so a machine
+// that only comes online later that day still catches the once-per-week run.
+// Jobs are queued sequentially and processed one at a time by the scheduler.
 $dayOfWeek = (int) date('w'); // 0=Sunday, 6=Saturday
 $hourOfDay = (int) date('G'); // 0-23
 
-// Check if it's Saturday (6) and within the 2 AM hour
-if ($dayOfWeek === 6 && $hourOfDay === 2) {
+$compactDaySetting  = $db->fetchOne("SELECT `value` FROM settings WHERE `key` = 'auto_compact_day'");
+$compactHourSetting = $db->fetchOne("SELECT `value` FROM settings WHERE `key` = 'auto_compact_hour'");
+$compactDay  = isset($compactDaySetting['value'])  && $compactDaySetting['value']  !== '' ? (int) $compactDaySetting['value']  : 6;
+$compactHour = isset($compactHourSetting['value']) && $compactHourSetting['value'] !== '' ? (int) $compactHourSetting['value'] : 2;
+$compactDay  = max(0, min(6, $compactDay));
+$compactHour = max(0, min(23, $compactHour));
+
+if ($dayOfWeek === $compactDay && $hourOfDay >= $compactHour) {
     $lastAutoCompact = $db->fetchOne("SELECT `value` FROM settings WHERE `key` = 'last_auto_compact'");
     $lastAutoCompactTime = $lastAutoCompact['value'] ?? null;
 

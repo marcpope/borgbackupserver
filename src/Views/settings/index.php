@@ -134,6 +134,27 @@ $updateAvailable = $updateService->isUpdateAvailable();
                         <div class="form-text">Kill backup jobs with no progress after this many minutes. Set higher for large files. Default: 120 (2 hours).</div>
                     </div>
                     <div class="mb-3">
+                        <label class="form-label fw-semibold">Weekly Compact Schedule</label>
+                        <?php
+                            $compactDay  = (int) ($settings['auto_compact_day'] ?? 6);
+                            $compactHour = (int) ($settings['auto_compact_hour'] ?? 2);
+                            $dayNames = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+                        ?>
+                        <div class="d-flex gap-2">
+                            <select class="form-select" name="auto_compact_day">
+                                <?php foreach ($dayNames as $i => $dn): ?>
+                                <option value="<?= $i ?>"<?= $i === $compactDay ? ' selected' : '' ?>><?= $dn ?></option>
+                                <?php endforeach; ?>
+                            </select>
+                            <select class="form-select" name="auto_compact_hour">
+                                <?php for ($h = 0; $h < 24; $h++): ?>
+                                <option value="<?= $h ?>"<?= $h === $compactHour ? ' selected' : '' ?>><?= sprintf('%02d:00', $h) ?></option>
+                                <?php endfor; ?>
+                            </select>
+                        </div>
+                        <div class="form-text">When repositories are auto-compacted (reclaims freed space) each week. Runs at or after this time on the chosen day, so storage that isn't powered on 24/7 still gets compacted. Default: Saturday 02:00.</div>
+                    </div>
+                    <div class="mb-3">
                         <label class="form-label fw-semibold">Notify When Agent Offline (minutes)</label>
                         <input type="number" class="form-control" name="agent_offline_notify_minutes" value="<?= htmlspecialchars($settings['agent_offline_notify_minutes'] ?? '5') ?>" min="1" max="60">
                         <div class="form-text">Wait this long before firing an "agent offline" notification or push. Brief network blips and short laptop suspends never become alerts. The agent still <em>shows</em> as offline immediately on dashboards — only the outbound notification is delayed. Default: 5.</div>
