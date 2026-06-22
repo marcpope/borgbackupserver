@@ -12,9 +12,12 @@
 <a href="/login/oidc" class="btn btn-primary btn-lg w-100 mb-3">
     <i class="bi bi-box-arrow-in-right me-2"></i><?= htmlspecialchars($oidcButtonLabel ?? 'Login with SSO') ?>
 </a>
+<?php if (empty($localLoginDisabled)): ?>
 <div class="text-center text-muted small mb-3">— or sign in with username —</div>
 <?php endif; ?>
+<?php endif; ?>
 
+<?php if (empty($localLoginDisabled)): ?>
 <form method="POST" action="/login">
     <div class="mb-3">
         <label for="username" class="form-label fw-semibold">Username</label>
@@ -37,3 +40,4 @@
         <i class="bi bi-lock-fill me-2"></i>Sign in
     </button>
 </form>
+<?php endif; ?>

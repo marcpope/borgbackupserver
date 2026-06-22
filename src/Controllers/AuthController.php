@@ -21,7 +21,32 @@ class AuthController extends Controller
             'flash' => $flash,
             'oidcEnabled' => $oidcService->isEnabled(),
             'oidcButtonLabel' => $oidcService->getButtonLabel(),
+            'localLoginDisabled' => $this->localLoginDisabled($oidcService),
         ]);
+    }
+
+    /**
+     * Whether username/password login is turned off in favour of SSO (#302).
+     *
+     * Controlled by the DISABLE_LOCAL_LOGIN env var (Docker) or a
+     * 'disable_local_login' setting. Only takes effect when OIDC is actually
+     * enabled — otherwise it's ignored, so a misconfiguration can't lock
+     * everyone out. Break-glass: clear the env var / setting (Docker: remove it
+     * and restart) to restore local login.
+     */
+    private function localLoginDisabled(?OidcService $oidc = null): bool
+    {
+        $oidc = $oidc ?? new OidcService();
+        if (!$oidc->isEnabled()) {
+            return false;
+        }
+        $env = $_ENV['DISABLE_LOCAL_LOGIN'] ?? getenv('DISABLE_LOCAL_LOGIN');
+        if ($env !== false && $env !== null && $env !== ''
+            && in_array(strtolower((string) $env), ['1', 'true', 'yes', 'on'], true)) {
+            return true;
+        }
+        $row = $this->db->fetchOne("SELECT `value` FROM settings WHERE `key` = 'disable_local_login'");
+        return ($row['value'] ?? '0') === '1';
     }
 
     public function login(): void
@@ -29,6 +54,13 @@ class AuthController extends Controller
         // Rate limit: 5 attempts per 5 minutes
         if (!$this->checkRateLimit('login', 5, 300)) {
             $this->flash('danger', 'Too many login attempts. Please wait a few minutes.');
+            $this->redirect('/login');
+        }
+
+        // Local login disabled (SSO-only) — reject password auth even on a
+        // direct POST, not just by hiding the form (#302).
+        if ($this->localLoginDisabled()) {
+            $this->flash('danger', 'Local login is disabled. Please sign in with SSO.');
             $this->redirect('/login');
         }
 
