@@ -946,7 +946,24 @@ def _install_borg_windows():
     import tempfile
 
     borg_dir = os.path.join(os.environ.get("ProgramFiles", r"C:\Program Files"), "BorgBackup")
-    borg_exe = os.path.join(borg_dir, "borg", "borg.exe")
+
+    def _locate_borg_exe():
+        # The borg-windows zip layout has shifted between releases: newer zips
+        # put borg.exe at the root, older ones nested it under borg\. Runtime
+        # detection (get_system_info) uses the root path, so prefer it; skip the
+        # bundled ssh\ tree so an unrelated borg.exe isn't picked up (#324).
+        for cand in (os.path.join(borg_dir, "borg.exe"),
+                     os.path.join(borg_dir, "borg", "borg.exe")):
+            if os.path.isfile(cand):
+                return cand
+        for root, _dirs, files in os.walk(borg_dir):
+            if (os.sep + "ssh" + os.sep) in (root + os.sep).lower():
+                continue
+            if "borg.exe" in files:
+                return os.path.join(root, "borg.exe")
+        return None
+
+    borg_exe = _locate_borg_exe() or os.path.join(borg_dir, "borg.exe")
     api_url = "https://api.github.com/repos/marcpope/borg-windows/releases/latest"
 
     # Get current version for comparison
@@ -1003,9 +1020,11 @@ def _install_borg_windows():
     except Exception as e:
         return "failed", "", "Failed to extract borg-windows.zip: {}".format(e)
 
-    # Verify new binary works
-    if not os.path.isfile(borg_exe):
-        return "failed", "", "borg.exe not found after extraction at {}".format(borg_exe)
+    # Re-locate borg.exe after extraction — the new zip's layout may differ
+    # from what was previously installed (root vs borg\ subdir) (#324).
+    borg_exe = _locate_borg_exe()
+    if not borg_exe:
+        return "failed", "", "borg.exe not found after extracting borg-windows.zip under {}".format(borg_dir)
 
     try:
         r = subprocess.run([borg_exe, "--version"], capture_output=True, timeout=10)
