@@ -74,8 +74,30 @@ if (Test-Path $AgentDir) {
         }
     }
 
-    Remove-Item -Path $AgentDir -Recurse -Force
-    Write-Ok "Removed $AgentDir"
+    # The installer locks down ssh_key to SYSTEM/Administrators *read-only* with
+    # inheritance removed, so even an elevated Remove-Item is denied delete on
+    # it ("Access to the path is denied") and the whole removal aborts (#322).
+    # Reset ACLs (restore inheritance, drop the explicit read-only ACEs) and
+    # clear any read-only attributes so the tree can be deleted.
+    icacls "$AgentDir" /reset /T /C /Q 2>$null | Out-Null
+    Get-ChildItem -LiteralPath $AgentDir -Recurse -Force -ErrorAction SilentlyContinue |
+        ForEach-Object { try { $_.Attributes = 'Normal' } catch { } }
+
+    try {
+        Remove-Item -Path $AgentDir -Recurse -Force -ErrorAction Stop
+    } catch {
+        # Last resort: take ownership, grant Administrators full control, retry.
+        # *S-1-5-32-544 is the Administrators group SID (locale-independent).
+        takeown /f "$AgentDir" /r /d Y 2>$null | Out-Null
+        icacls "$AgentDir" /grant "*S-1-5-32-544:(OI)(CI)F" /T /C /Q 2>$null | Out-Null
+        Remove-Item -Path $AgentDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    if (Test-Path $AgentDir) {
+        Write-Warn "Some files in $AgentDir could not be removed automatically — remove the folder manually."
+    } else {
+        Write-Ok "Removed $AgentDir"
+    }
 } else {
     Write-Warn "Agent directory not found: $AgentDir"
 }
