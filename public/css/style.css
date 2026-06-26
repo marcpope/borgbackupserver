@@ -589,7 +589,9 @@ body.bg-body-secondary {
     border-bottom: 2px solid var(--bs-border-color);
     padding-bottom: 0;
     flex-wrap: nowrap;
-    overflow-x: hidden;
+    /* No overflow clipping: setting overflow-x makes the browser compute
+       overflow-y to 'auto', and the nav-links' -2px margin-bottom then
+       triggers a stray vertical scrollbar on the sub-nav bar (#323). */
 }
 .storage-subnav .nav-link {
     color: var(--bs-secondary-color);
