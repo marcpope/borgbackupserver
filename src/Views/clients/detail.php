@@ -3604,7 +3604,12 @@ const csrfToken = '<?= $this->csrfToken() ?>';
     document.getElementById('dirBrowseAgentName').textContent = document.title.split(' · ')[0] || 'client';
     // Computed lazily per-modal-open so the same JS works for any Browse
     // button on the page (each may target a different agent OS).
-    function rootForCurrentAgent() { return isWindows ? 'C:\\' : '/'; }
+    // Always fetch "/" — on Windows the agent expands that to the list of
+    // drives (C:, D:, E:, …); fetching "C:\" instead only ever showed the
+    // system drive, including when editing a plan (#317). Display a friendly
+    // label since "/" reads oddly on Windows.
+    function rootForCurrentAgent() { return '/'; }
+    function rootLabelForCurrentAgent() { return isWindows ? 'This PC' : '/'; }
     const rootPathEl = document.getElementById('dirBrowseRoot');
 
     // ── State ─────────────────────────────────────────────────────
@@ -3894,7 +3899,7 @@ const csrfToken = '<?= $this->csrfToken() ?>';
         nodeIndex.clear();
         treeEl.innerHTML = '<div class="text-muted py-3 text-center"><span class="spinner-border spinner-border-sm me-2"></span>Refreshing…</div>';
         const rp = rootForCurrentAgent();
-        rootPathEl.textContent = rp;
+        rootPathEl.textContent = rootLabelForCurrentAgent();
         fetchTree(rp, 2);
     });
     hiddenChk.addEventListener('change', () => refreshBtn.click());
@@ -3930,7 +3935,7 @@ const csrfToken = '<?= $this->csrfToken() ?>';
     });
     modalEl.addEventListener('shown.bs.modal', () => {
         const rp = rootForCurrentAgent();
-        rootPathEl.textContent = rp;
+        rootPathEl.textContent = rootLabelForCurrentAgent();
         fetchTree(rp, 2);
     });
 })();
