@@ -33,14 +33,29 @@ RUN ARCH=$(dpkg --print-architecture) && \
     chmod 755 /usr/bin/rclone && \
     rm -rf /tmp/*
 
-# Install ClickHouse (catalog engine) and clean up in one layer
+# Install ClickHouse (catalog engine) and clean up in one layer.
+#
+# PINNED on purpose. The `stable` channel is unpinned by version, so an image
+# rebuild silently pulls whatever is latest. ClickHouse 26.6 raised its CPU
+# instruction baseline, and pulling it on a rebuild produced "Illegal
+# instruction (core dumped)" on hosts whose CPUs ran 26.5 fine — ClickHouse
+# never started, so catalog import / file-level restore broke for everyone on
+# those CPUs (#327). 26.5.2.39 is the last known-good build. Bump this ARG
+# deliberately and test on an older/baseline CPU before shipping — never let
+# it drift implicitly. `apt-mark hold` keeps the dist-upgrade below from
+# bumping it again.
+ARG CLICKHOUSE_VERSION=26.5.2.39
 RUN ARCH=$(dpkg --print-architecture) && \
     curl -fsSL -A 'Mozilla/5.0' 'https://packages.clickhouse.com/rpm/lts/repodata/repomd.xml.key' | \
         gpg --dearmor -o /usr/share/keyrings/clickhouse-keyring.gpg && \
     echo "deb [signed-by=/usr/share/keyrings/clickhouse-keyring.gpg arch=${ARCH}] https://packages.clickhouse.com/deb stable main" \
         > /etc/apt/sources.list.d/clickhouse.list && \
     apt-get update && \
-    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends clickhouse-server clickhouse-client && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        clickhouse-common-static=${CLICKHOUSE_VERSION} \
+        clickhouse-server=${CLICKHOUSE_VERSION} \
+        clickhouse-client=${CLICKHOUSE_VERSION} && \
+    apt-mark hold clickhouse-common-static clickhouse-server clickhouse-client && \
     apt-get upgrade -y && apt-get dist-upgrade -y && \
     rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
