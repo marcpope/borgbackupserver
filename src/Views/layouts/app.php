@@ -382,6 +382,21 @@
                 });
             });
             obs.observe(document.body, { childList: true, subtree: true });
+
+            // A dropdown left open on the page floats over a modal that opens
+            // afterward: the global max z-index on .dropdown-menu.show puts it
+            // (and its toggle's three-dots) above the modal backdrop, so it
+            // bleeds through — e.g. a plan's Actions kebab showing inside the
+            // Browse Filesystem modal (#328). Close any open dropdown when a
+            // modal is shown.
+            document.addEventListener('show.bs.modal', function() {
+                document.querySelectorAll('[data-bs-toggle="dropdown"][aria-expanded="true"]').forEach(function(t) {
+                    if (window.bootstrap && bootstrap.Dropdown) {
+                        var inst = bootstrap.Dropdown.getInstance(t);
+                        if (inst) inst.hide();
+                    }
+                });
+            });
         }
         if (document.readyState === 'loading') {
             document.addEventListener('DOMContentLoaded', init);
