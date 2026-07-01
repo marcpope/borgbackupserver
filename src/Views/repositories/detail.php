@@ -628,7 +628,7 @@ $sizeLabel = $totalSize > 0 ? \BBS\Services\ServerStats::formatBytes((int) $tota
 
     if (copyBtn) {
         copyBtn.addEventListener('click', function() {
-            navigator.clipboard.writeText(el.dataset.passphrase).then(function() {
+            BBS.copyText(el.dataset.passphrase).then(function() {
                 var icon = copyBtn.querySelector('i');
                 icon.className = 'bi bi-check';
                 setTimeout(function() { icon.className = 'bi bi-clipboard'; }, 1500);

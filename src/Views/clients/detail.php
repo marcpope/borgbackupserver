@@ -3232,7 +3232,7 @@ GRANT ALL PRIVILEGES ON DATABASE mydb TO <span id="pgUser2g">bbs_backup</span>;<
                     <div class="d-flex justify-content-between align-items-center mb-2">
                         <p class="mb-0">Run this command on the endpoint to install the BBS agent:</p>
                         <button class="btn btn-sm btn-outline-secondary" type="button"
-                                onclick="navigator.clipboard.writeText(document.getElementById('installCmdLinux').textContent.trim()); this.innerHTML='<i class=\'bi bi-check\'></i> Copied'; setTimeout(() => this.innerHTML='<i class=\'bi bi-clipboard\'></i> Copy', 2000)">
+                                onclick="BBS.copyText(document.getElementById('installCmdLinux').textContent.trim()); this.innerHTML='<i class=\'bi bi-check\'></i> Copied'; setTimeout(() => this.innerHTML='<i class=\'bi bi-clipboard\'></i> Copy', 2000)">
                             <i class="bi bi-clipboard"></i> Copy
                         </button>
                     </div>
@@ -3257,7 +3257,7 @@ GRANT ALL PRIVILEGES ON DATABASE mydb TO <span id="pgUser2g">bbs_backup</span>;<
                     <div class="d-flex justify-content-between align-items-center mb-2">
                         <p class="mb-0">Run this command in an <strong>Administrator</strong> Command Prompt or PowerShell:</p>
                         <button class="btn btn-sm btn-outline-secondary" type="button"
-                                onclick="navigator.clipboard.writeText(document.getElementById('installCmdWindows').textContent.trim()); this.innerHTML='<i class=\'bi bi-check\'></i> Copied'; setTimeout(() => this.innerHTML='<i class=\'bi bi-clipboard\'></i> Copy', 2000)">
+                                onclick="BBS.copyText(document.getElementById('installCmdWindows').textContent.trim()); this.innerHTML='<i class=\'bi bi-check\'></i> Copied'; setTimeout(() => this.innerHTML='<i class=\'bi bi-clipboard\'></i> Copy', 2000)">
                             <i class="bi bi-clipboard"></i> Copy
                         </button>
                     </div>

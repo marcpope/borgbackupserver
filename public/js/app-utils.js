@@ -26,4 +26,28 @@
         durationCache.set(seconds, label);
         return label;
     };
+
+    // navigator.clipboard only exists in secure contexts (HTTPS/localhost);
+    // plain-HTTP installs need the execCommand fallback (#333).
+    BBS.copyText = function(text) {
+        if (navigator.clipboard && window.isSecureContext) {
+            return navigator.clipboard.writeText(text);
+        }
+        return new Promise(function(resolve, reject) {
+            const ta = document.createElement('textarea');
+            ta.value = text;
+            ta.setAttribute('readonly', '');
+            ta.style.position = 'fixed';
+            ta.style.top = '-1000px';
+            document.body.appendChild(ta);
+            ta.select();
+            try {
+                document.execCommand('copy') ? resolve() : reject(new Error('Copy failed'));
+            } catch (e) {
+                reject(e);
+            } finally {
+                document.body.removeChild(ta);
+            }
+        });
+    };
 })(window);

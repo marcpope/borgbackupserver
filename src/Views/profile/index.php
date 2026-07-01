@@ -361,7 +361,7 @@
     <script>
     function copyRecoveryCodes() {
         var codes = <?= json_encode($recoveryCodes) ?>;
-        navigator.clipboard.writeText(codes.join('\n')).then(function() {
+        BBS.copyText(codes.join('\n')).then(function() {
             alert('Recovery codes copied to clipboard.');
         });
     }

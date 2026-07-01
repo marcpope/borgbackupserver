@@ -1826,7 +1826,7 @@ document.getElementById('appIconFileInput').addEventListener('change', function(
                 <strong>New API Token</strong> — copy it now, it will not be shown again:
                 <div class="mt-1">
                     <code id="newTokenValue" class="user-select-all fs-6"><?= htmlspecialchars($_SESSION['new_api_token']) ?></code>
-                    <button type="button" class="btn btn-sm btn-outline-success ms-2" onclick="navigator.clipboard.writeText(document.getElementById('newTokenValue').textContent).then(() => { this.innerHTML = '<i class=\'bi bi-check\'></i> Copied'; })">
+                    <button type="button" class="btn btn-sm btn-outline-success ms-2" onclick="BBS.copyText(document.getElementById('newTokenValue').textContent).then(() => { this.innerHTML = '<i class=\'bi bi-check\'></i> Copied'; })">
                         <i class="bi bi-clipboard"></i> Copy
                     </button>
                 </div>
