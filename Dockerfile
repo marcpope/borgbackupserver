@@ -70,8 +70,13 @@ RUN pip3 install --break-system-packages --no-cache-dir apprise wheel>=0.46.2 &&
 RUN docker-php-ext-install pdo pdo_mysql mbstring
 
 # PHP configuration: increase max_execution_time (default 30s is too short for
-# large backup operations, catalog imports, and API calls under load)
-RUN echo "max_execution_time = 300" > /usr/local/etc/php/conf.d/bbs.ini
+# large backup operations, catalog imports, and API calls under load).
+# The base image ships no php.ini, so display_errors defaults to On — turn it
+# off so warnings/deprecations are logged instead of rendered into pages (#332).
+RUN { echo "max_execution_time = 300"; \
+      echo "display_errors = Off"; \
+      echo "display_startup_errors = Off"; \
+      echo "log_errors = On"; } > /usr/local/etc/php/conf.d/bbs.ini
 
 # Install Composer
 RUN curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer

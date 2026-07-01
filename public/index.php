@@ -4,6 +4,13 @@
 // timezone mismatches when writing timestamps to the database with date().
 date_default_timezone_set('UTC');
 
+// Never render PHP notices/deprecations into pages (the official php Docker
+// image ships no php.ini, so display_errors defaults to On). Errors still go
+// to the error log, and Whoops renders exceptions when debug mode is on.
+error_reporting(E_ALL & ~E_DEPRECATED);
+ini_set('display_errors', '0');
+ini_set('log_errors', '1');
+
 require_once dirname(__DIR__) . '/vendor/autoload.php';
 
 // Security headers — safe for both HTTP (LAN) and HTTPS deployments
