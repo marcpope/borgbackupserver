@@ -167,44 +167,54 @@ $dfFix = function (string $s): string {
     flex-shrink: 0;
 }
 
-/* Network throughput meter — one row per direction: arrow | label+rate |
-   sparkline. Rates form a column, so tabular figures keep them aligned. */
+/* Network throughput meter — one block per direction: a compact header
+   row (arrow | label | rate) over a full-width sparkline strip. Stacking
+   keeps every element inside the tile no matter how narrow it gets. */
 .v2 .net-rows {
     display: flex;
     flex-direction: column;
     justify-content: center;
-    gap: 10px;
+    gap: 9px;
     flex: 1;
     width: 100%;
-    padding: 4px 2px;
+    padding: 4px 0;
+}
+.v2 .net-block {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    width: 100%;
+    min-width: 0;
 }
 .v2 .net-row {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 6px;
     width: 100%;
+    min-width: 0;
 }
 .v2 .net-row .net-dir {
     display: inline-flex;
-    width: 26px; height: 26px;
-    border-radius: 7px;
+    width: 20px; height: 20px;
+    border-radius: 6px;
     align-items: center;
     justify-content: center;
-    font-size: 1.05rem;
+    font-size: 0.95rem;
     background: rgba(13,202,240,0.14);
     color: #0dcaf0;
     flex-shrink: 0;
 }
-.v2 .net-row .net-text {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-start;
-    line-height: 1.15;
-    min-width: 74px;
-}
 .v2 .net-row .net-lbl { font-size: 0.62rem; font-weight: 600; letter-spacing: 0.04em; color: var(--bs-secondary-color); }
-.v2 .net-row .net-val { font-size: 0.92rem; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
-.v2 .net-spark { flex: 1; height: 26px; min-width: 40px; }
+.v2 .net-row .net-val {
+    margin-left: auto;
+    font-size: 0.88rem;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.v2 .net-spark { width: 100%; height: 16px; display: block; }
 .v2 .net-spark .spark-line { fill: none; stroke: #0dcaf0; stroke-width: 1.5; vector-effect: non-scaling-stroke; }
 .v2 .net-spark .spark-fill { fill: rgba(13,202,240,0.15); stroke: none; }
 
@@ -643,24 +653,24 @@ $dfFix = function (string $s): string {
                                 <i class="bi bi-arrow-down-up"></i><span>Network</span>
                             </div>
                             <div class="net-rows">
-                                <div class="net-row">
-                                    <span class="net-dir"><i class="bi bi-arrow-down-short"></i></span>
-                                    <span class="net-text">
+                                <div class="net-block">
+                                    <div class="net-row">
+                                        <span class="net-dir"><i class="bi bi-arrow-down-short"></i></span>
                                         <span class="net-lbl">DOWN</span>
                                         <span class="net-val" id="net-rx-label"><?= $netRxLabel ?></span>
-                                    </span>
-                                    <svg class="net-spark" id="net-rx-spark" viewBox="0 0 64 26" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg">
+                                    </div>
+                                    <svg class="net-spark" id="net-rx-spark" viewBox="0 0 64 16" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg">
                                         <polygon class="spark-fill" points=""/>
                                         <polyline class="spark-line" points=""/>
                                     </svg>
                                 </div>
-                                <div class="net-row">
-                                    <span class="net-dir"><i class="bi bi-arrow-up-short"></i></span>
-                                    <span class="net-text">
+                                <div class="net-block">
+                                    <div class="net-row">
+                                        <span class="net-dir"><i class="bi bi-arrow-up-short"></i></span>
                                         <span class="net-lbl">UP</span>
                                         <span class="net-val" id="net-tx-label"><?= $netTxLabel ?></span>
-                                    </span>
-                                    <svg class="net-spark" id="net-tx-spark" viewBox="0 0 64 26" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg">
+                                    </div>
+                                    <svg class="net-spark" id="net-tx-spark" viewBox="0 0 64 16" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg">
                                         <polygon class="spark-fill" points=""/>
                                         <polyline class="spark-line" points=""/>
                                     </svg>
@@ -1214,7 +1224,7 @@ document.addEventListener('DOMContentLoaded', function () {
         const netHist = { rx: [], tx: [] };
         function renderSpark(svg, buf) {
             if (!svg || buf.length < 2) return;
-            const W = 64, H = 26, PAD = 2;
+            const W = 64, H = 16, PAD = 2;
             const max = Math.max(1, ...buf);
             const step = W / (buf.length - 1); // stretch the window across the full width
             const pts = buf.map((v, i) =>
