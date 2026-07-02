@@ -220,6 +220,137 @@ class ServerStats
     }
 
     /**
+     * Network throughput in bytes/sec since the previous call, via a cached
+     * counter snapshot — same delta pattern as the MySQL QPS meter below.
+     * Returns ['rx_bps' => int|null, 'tx_bps' => int|null]; the values are
+     * null until a second sample exists or after a counter reset. Returns
+     * null entirely when no interface counters are readable.
+     */
+    public static function getNetworkThroughput(): ?array
+    {
+        $counters = self::readNetworkCounters();
+        if ($counters === null) {
+            return null;
+        }
+
+        $cache = Cache::getInstance();
+        $now = microtime(true);
+        $prev = $cache->get('net_io_snapshot');
+
+        // A second poller inside the same 2s window (extra dashboard tab,
+        // page load racing the poll) reuses the last computed rate instead
+        // of measuring a near-zero interval.
+        if (is_array($prev) && isset($prev['t']) && ($now - (float) $prev['t']) < 2) {
+            $rate = $cache->get('net_io_rate');
+            return is_array($rate) ? $rate : ['rx_bps' => null, 'tx_bps' => null];
+        }
+
+        $cache->set('net_io_snapshot', ['rx' => $counters['rx'], 'tx' => $counters['tx'], 't' => $now], 300);
+
+        if (!is_array($prev) || !isset($prev['rx'], $prev['tx'], $prev['t'])) {
+            return ['rx_bps' => null, 'tx_bps' => null];
+        }
+
+        $dt = $now - (float) $prev['t'];
+        $dRx = $counters['rx'] - (int) $prev['rx'];
+        $dTx = $counters['tx'] - (int) $prev['tx'];
+        if ($dt <= 0 || $dRx < 0 || $dTx < 0) {
+            // Counter reset (interface bounce / reboot) — skip this sample.
+            return ['rx_bps' => null, 'tx_bps' => null];
+        }
+
+        $rate = ['rx_bps' => (int) round($dRx / $dt), 'tx_bps' => (int) round($dTx / $dt)];
+        $cache->set('net_io_rate', $rate, 300);
+        return $rate;
+    }
+
+    /**
+     * Cumulative rx/tx byte counters summed across real interfaces.
+     * Linux reads /proc/net/dev — inside Docker that's the container's own
+     * network namespace, so the counters are BBS traffic only. Excludes
+     * loopback and host-side virtual devices (veth/bridges) that would
+     * double-count container traffic on a bare-metal host.
+     */
+    private static function readNetworkCounters(): ?array
+    {
+        if (PHP_OS_FAMILY === 'Darwin') {
+            return self::readNetworkCountersMac();
+        }
+
+        $raw = @file_get_contents('/proc/net/dev');
+        if ($raw === false) {
+            return null;
+        }
+
+        $rx = 0;
+        $tx = 0;
+        $found = false;
+        foreach (explode("\n", $raw) as $line) {
+            if (!str_contains($line, ':')) continue;
+            [$iface, $data] = explode(':', $line, 2);
+            $iface = trim($iface);
+            if ($iface === 'lo'
+                || str_starts_with($iface, 'veth')
+                || str_starts_with($iface, 'br-')
+                || str_starts_with($iface, 'docker')
+                || str_starts_with($iface, 'virbr')) {
+                continue;
+            }
+            $cols = preg_split('/\s+/', trim($data));
+            if (count($cols) < 9) continue;
+            // /proc/net/dev: rx bytes is col 0, tx bytes is col 8
+            $rx += (int) $cols[0];
+            $tx += (int) $cols[8];
+            $found = true;
+        }
+
+        return $found ? ['rx' => $rx, 'tx' => $tx] : null;
+    }
+
+    private static function readNetworkCountersMac(): ?array
+    {
+        // netstat -ibn prints one row per address; the <Link#N> row carries
+        // the interface's byte counters. The Address column can be empty on
+        // link rows, shifting the columns left by one.
+        $out = @shell_exec('netstat -ibn 2>/dev/null');
+        if (empty($out)) {
+            return null;
+        }
+
+        $rx = 0;
+        $tx = 0;
+        $seen = [];
+        $found = false;
+        foreach (explode("\n", trim($out)) as $i => $line) {
+            if ($i === 0) continue;
+            $cols = preg_split('/\s+/', trim($line));
+            if (count($cols) < 10 || !str_contains($cols[2] ?? '', 'Link')) continue;
+            $iface = $cols[0];
+            if ($iface === 'lo0' || isset($seen[$iface])) continue;
+            $seen[$iface] = true;
+            // With address:    Name Mtu Network Address Ipkts Ierrs Ibytes Opkts Oerrs Obytes
+            // Without address: Name Mtu Network Ipkts Ierrs Ibytes Opkts Oerrs Obytes Coll
+            $shift = count($cols) >= 11 ? 0 : -1;
+            $rx += (int) $cols[6 + $shift];
+            $tx += (int) $cols[9 + $shift];
+            $found = true;
+        }
+
+        return $found ? ['rx' => $rx, 'tx' => $tx] : null;
+    }
+
+    /**
+     * "12.4 MB/s" label for the dashboard network meter.
+     */
+    public static function formatRate(?int $bps): string
+    {
+        if ($bps === null) {
+            return '—';
+        }
+        return self::formatBytes($bps) . '/s';
+    }
+
+    /**
      * Get MySQL row counts and interesting aggregate stats.
      */
     public static function getMysqlStats(): array

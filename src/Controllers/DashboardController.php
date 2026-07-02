@@ -216,6 +216,7 @@ class DashboardController extends Controller
         $cpu = ServerStats::getCpuLoad();
         $mem = ServerStats::getMemory();
         $partitions = ServerStats::getPartitions();
+        $net = ServerStats::getNetworkThroughput();
 
         // Standardize df-style single-letter units to "GB"/"TB"/etc.
         $dfFix = function (string $s): string {
@@ -269,7 +270,14 @@ class DashboardController extends Controller
                 'percent' => $mem['percent'] ?? 0,
                 'used_label' => ServerStats::formatBytes($mem['used'] ?? 0),
                 'total_label' => ServerStats::formatBytes($mem['total'] ?? 0),
+                'pair_label' => ServerStats::formatBytesPair((int) ($mem['used'] ?? 0), (int) ($mem['total'] ?? 0)),
             ],
+            'net' => $net ? [
+                'rx_bps' => $net['rx_bps'],
+                'tx_bps' => $net['tx_bps'],
+                'rx_label' => ServerStats::formatRate($net['rx_bps']),
+                'tx_label' => ServerStats::formatRate($net['tx_bps']),
+            ] : null,
             'disk' => $disk ? [
                 'mount' => $disk['mount'],
                 'percent' => $disk['percent'] ?? 0,
@@ -623,6 +631,9 @@ class DashboardController extends Controller
         return [
             'cpuLoad' => $cache->remember('server_cpu', 60, fn() => ServerStats::getCpuLoad()),
             'memory' => $cache->remember('server_mem', 60, fn() => ServerStats::getMemory()),
+            // Not remember()-cached: the method keeps its own counter
+            // snapshot and must run every call to measure a delta.
+            'netThroughput' => ServerStats::getNetworkThroughput(),
             'partitions' => $cache->remember('server_parts', 60, fn() => ServerStats::getPartitions()),
             'mysqlStats' => $cache->remember('mysql_stats', 60, fn() => ServerStats::getMysqlStats()),
             'clickhouseStats' => $cache->remember('ch_stats', 60, fn() => ServerStats::getClickHouseStats()),

@@ -38,9 +38,10 @@ $dfFix = function (string $s): string {
 ?>
 
 <style>
-/* Server Health: CPU dial + memory thermometer on top row, disk strip
-   below spanning the full width. Single featured partition only — full
-   disk list lives in Storage Locations. */
+/* Server Health: CPU dial (with a compressed memory bar under it) and
+   network throughput meter on top row, disk strip below spanning the
+   full width. Single featured partition only — full disk list lives in
+   Storage Locations. */
 .v2 .health-tiles {
     display: grid;
     grid-template-columns: 1fr 1fr;
@@ -81,7 +82,7 @@ $dfFix = function (string $s): string {
 }
 .v2 .health-tile .tile-header-bar i { font-size: 0.9rem; line-height: 1; }
 .v2 .health-tile.cpu .tile-header-bar i { color: #ef4444; }
-.v2 .health-tile.mem .tile-header-bar i { color: #0dcaf0; }
+.v2 .health-tile.net .tile-header-bar i { color: #0dcaf0; }
 
 /* Legacy head (disk strip still uses it for its inline label). */
 .v2 .health-tile .tile-head {
@@ -103,11 +104,19 @@ $dfFix = function (string $s): string {
 }
 .v2 .health-tile.disk .icon { background: rgba(245,158,11,0.18); color: #f59e0b; }
 
-/* CPU gauge */
+/* CPU gauge. The dial group is vertically centered in the space between
+   the tile header and the memory bar. */
+.v2 .cpu-dial-wrap {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+}
 .v2 .cpu-gauge { width: 100%; max-width: 150px; height: auto; display: block; }
 .v2 .cpu-gauge .arc-bg { stroke: rgba(0,0,0,0.08); }
 .v2 .cpu-gauge .arc-fg { transition: stroke-dashoffset 0.6s ease, stroke 0.3s; }
-.v2 .cpu-gauge .needle { transition: transform 0.6s ease, stroke 0.3s; transform-origin: 100px 110px; transform-box: fill-box; }
 .v2 .cpu-gauge .ticks { stroke: rgba(0,0,0,0.30); }
 [data-bs-theme="dark"] .v2 .cpu-gauge .arc-bg { stroke: rgba(255,255,255,0.08); }
 [data-bs-theme="dark"] .v2 .cpu-gauge .ticks { stroke: rgba(255,255,255,0.22); }
@@ -116,35 +125,88 @@ $dfFix = function (string $s): string {
 .v2 .disk-pct .pct-suffix { font-size: 0.8rem; font-weight: 600; opacity: 0.75; margin-left: 1px; }
 .v2 .cpu-status { font-size: 0.7rem; margin-top: 4px; font-weight: 500; }
 
-/* Memory thermometer + stat column. Stats on the left (total / used / %),
-   thermometer on the right; the % is the prominent number. */
-.v2 .mem-wrap {
+/* Compressed memory meter under the CPU dial: label | bar | used/total.
+   Same track/overlay idiom as the disk strip, just smaller. */
+.v2 .cpu-mem-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    margin-top: 6px;
+    padding-top: 7px;
+    border-top: 1px solid var(--bs-border-color-translucent);
+}
+.v2 .cm-bar {
+    flex: 1;
+    height: 14px;
+    background: var(--bs-tertiary-bg);
+    border: 1px solid var(--bs-border-color-translucent);
+    border-radius: 7px;
+    position: relative;
+    min-width: 40px;
+}
+.v2 .cm-bar-fill { height: 100%; border-radius: 7px; transition: width 0.6s ease, background-color 0.3s; }
+.v2 .cm-bar-label {
+    position: absolute;
+    inset: 0;
     display: flex;
     align-items: center;
     justify-content: center;
-    gap: 14px;
-    margin: 2px 0 4px;
-    flex: 1;
+    color: #fff;
+    font-size: 0.62rem;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    text-shadow: 0 1px 2px rgba(0,0,0,0.85), 0 1px 4px rgba(0,0,0,0.85);
+    pointer-events: none;
 }
-.v2 .mem-stats {
+.v2 .cm-size {
+    font-size: 0.66rem;
+    color: var(--bs-secondary-color);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+
+/* Network throughput meter — one row per direction: arrow | label+rate |
+   sparkline. Rates form a column, so tabular figures keep them aligned. */
+.v2 .net-rows {
     display: flex;
     flex-direction: column;
-    align-items: flex-end;
-    gap: 3px;
-    font-variant-numeric: tabular-nums;
-    text-align: right;
+    justify-content: center;
+    gap: 10px;
+    flex: 1;
+    width: 100%;
+    padding: 4px 2px;
 }
-.v2 .mem-stat { font-size: 0.72rem; color: var(--bs-body-color); line-height: 1.2; }
-.v2 .mem-stat .lbl { color: var(--bs-secondary-color); font-weight: 400; }
-.v2 .mem-pct { font-size: 1.25rem; font-weight: 700; margin-top: 4px; line-height: 1; }
-.v2 .mem-thermo { height: 110px; width: auto; }
-.v2 .mem-thermo .fill { transition: y 0.6s ease, height 0.6s ease, fill 0.3s; }
-.v2 .mem-thermo .tube { fill: rgba(0,0,0,0.04); stroke: rgba(0,0,0,0.25); }
-.v2 .mem-thermo .scale { stroke: rgba(0,0,0,0.35); }
-.v2 .mem-thermo .scale-text { fill: rgba(0,0,0,0.55); }
-[data-bs-theme="dark"] .v2 .mem-thermo .tube { fill: rgba(255,255,255,0.04); stroke: rgba(255,255,255,0.22); }
-[data-bs-theme="dark"] .v2 .mem-thermo .scale { stroke: rgba(255,255,255,0.3); }
-[data-bs-theme="dark"] .v2 .mem-thermo .scale-text { fill: rgba(255,255,255,0.55); }
+.v2 .net-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+}
+.v2 .net-row .net-dir {
+    display: inline-flex;
+    width: 26px; height: 26px;
+    border-radius: 7px;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.05rem;
+    background: rgba(13,202,240,0.14);
+    color: #0dcaf0;
+    flex-shrink: 0;
+}
+.v2 .net-row .net-text {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    line-height: 1.15;
+    min-width: 74px;
+}
+.v2 .net-row .net-lbl { font-size: 0.62rem; font-weight: 600; letter-spacing: 0.04em; color: var(--bs-secondary-color); }
+.v2 .net-row .net-val { font-size: 0.92rem; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.v2 .net-spark { flex: 1; height: 26px; min-width: 40px; }
+.v2 .net-spark .spark-line { fill: none; stroke: #0dcaf0; stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+.v2 .net-spark .spark-fill { fill: rgba(13,202,240,0.15); stroke: none; }
 
 /* Disk strip — full width across the bottom. Horizontal: head | numbers | bar */
 .v2 .health-tile.disk {
@@ -534,68 +596,75 @@ $dfFix = function (string $s): string {
 
                         $arcLen    = 251.33;                              // π × radius 80, semicircle
                         $cpuOffset = $arcLen * (1 - $cpuPct / 100);
-                        $cpuAngle  = -90 + ($cpuPct * 1.8);               // -90°…+90° (0%…100%)
-                        $memFillH  = 155 * ($memPct / 100);               // tube interior is 155 tall
-                        $memFillY  = 170 - $memFillH;
+                        $memPair   = ServerStats::formatBytesPair($memUsed, $memTotal);
+
+                        // Network meter initial labels. First page load after a
+                        // cold cache has no rate yet ("—"); the 15s poll fills it.
+                        $netRxLabel = ServerStats::formatRate($netThroughput['rx_bps'] ?? null);
+                        $netTxLabel = ServerStats::formatRate($netThroughput['tx_bps'] ?? null);
                     ?>
                     <div class="health-tiles">
                         <!-- CPU gauge -->
                         <div class="health-tile cpu">
                             <div class="tile-header-bar">
-                                <i class="bi bi-cpu"></i><span>CPU</span>
+                                <i class="bi bi-cpu"></i><span>CPU &amp; Memory</span>
                             </div>
-                            <svg class="cpu-gauge" viewBox="0 0 200 130" xmlns="http://www.w3.org/2000/svg">
-                                <path class="arc-bg" d="M 20 110 A 80 80 0 0 1 180 110" fill="none" stroke-width="14" stroke-linecap="round"/>
-                                <path id="cpu-arc" class="arc-fg" d="M 20 110 A 80 80 0 0 1 180 110" fill="none" stroke="<?= $cpuColor ?>"
-                                      stroke-width="14" stroke-linecap="round"
-                                      stroke-dasharray="<?= $arcLen ?>" stroke-dashoffset="<?= round($cpuOffset, 2) ?>"/>
-                                <g class="ticks" stroke-width="1.5">
-                                    <?php for ($a = -180; $a <= 0; $a += 18):
-                                        $rad = deg2rad($a);
-                                        $x1 = 100 + 62 * cos($rad); $y1 = 110 + 62 * sin($rad);
-                                        $x2 = 100 + 70 * cos($rad); $y2 = 110 + 70 * sin($rad);
-                                    ?>
-                                    <line x1="<?= round($x1, 2) ?>" y1="<?= round($y1, 2) ?>" x2="<?= round($x2, 2) ?>" y2="<?= round($y2, 2) ?>"/>
-                                    <?php endfor; ?>
-                                </g>
-                                <line id="cpu-needle" class="needle" x1="100" y1="110" x2="100" y2="50"
-                                      stroke="<?= $cpuColor ?>" stroke-width="3" stroke-linecap="round"
-                                      transform="rotate(<?= round($cpuAngle, 2) ?> 100 110)"/>
-                            </svg>
-                            <div class="cpu-pct"><span id="cpu-pct-num"><?= round($cpuPct, 1) ?></span><span class="pct-suffix">%</span></div>
-                            <div class="cpu-status" id="cpu-status" style="color: <?= $cpuColor ?>"><?= $cpuStatus ?></div>
-                        </div>
-
-                        <!-- Memory thermometer -->
-                        <div class="health-tile mem">
-                            <div class="tile-header-bar">
-                                <i class="bi bi-memory"></i><span>Memory</span>
-                            </div>
-                            <div class="mem-wrap">
-                                <div class="mem-stats">
-                                    <div class="mem-stat"><span class="lbl">Total:</span> <span id="mem-total"><?= ServerStats::formatBytes($memTotal) ?></span></div>
-                                    <div class="mem-stat"><span class="lbl">Used:</span> <span id="mem-used"><?= ServerStats::formatBytes($memUsed) ?></span></div>
-                                    <div class="mem-pct" id="mem-pct"><?= round($memPct, 1) ?>%</div>
-                                </div>
-                                <svg class="mem-thermo" viewBox="0 0 100 220" xmlns="http://www.w3.org/2000/svg">
-                                    <rect class="tube" x="40" y="10" width="20" height="165" rx="10" stroke-width="2"/>
-                                    <circle cx="50" cy="185" r="20" fill="<?= $memColor ?>" opacity="0.95"/>
-                                    <rect x="44" y="170" width="12" height="15" fill="<?= $memColor ?>"/>
-                                    <rect id="mem-fill" class="fill" x="44" y="<?= round($memFillY, 2) ?>" width="12" height="<?= round($memFillH, 2) ?>" fill="<?= $memColor ?>"/>
-                                    <g class="scale" stroke-width="1">
-                                        <?php for ($i = 0; $i <= 10; $i++):
-                                            $ty = 15 + ($i * 15.5);
-                                            $w = ($i % 5 === 0) ? 8 : 4;
+                            <div class="cpu-dial-wrap">
+                                <svg class="cpu-gauge" viewBox="0 20 200 110" xmlns="http://www.w3.org/2000/svg">
+                                    <path class="arc-bg" d="M 20 110 A 80 80 0 0 1 180 110" fill="none" stroke-width="14" stroke-linecap="round"/>
+                                    <path id="cpu-arc" class="arc-fg" d="M 20 110 A 80 80 0 0 1 180 110" fill="none" stroke="<?= $cpuColor ?>"
+                                          stroke-width="14" stroke-linecap="round"
+                                          stroke-dasharray="<?= $arcLen ?>" stroke-dashoffset="<?= round($cpuOffset, 2) ?>"/>
+                                    <g class="ticks" stroke-width="1.5">
+                                        <?php for ($a = -180; $a <= 0; $a += 18):
+                                            $rad = deg2rad($a);
+                                            $x1 = 100 + 62 * cos($rad); $y1 = 110 + 62 * sin($rad);
+                                            $x2 = 100 + 70 * cos($rad); $y2 = 110 + 70 * sin($rad);
                                         ?>
-                                        <line x1="62" y1="<?= $ty ?>" x2="<?= 62 + $w ?>" y2="<?= $ty ?>"/>
+                                        <line x1="<?= round($x1, 2) ?>" y1="<?= round($y1, 2) ?>" x2="<?= round($x2, 2) ?>" y2="<?= round($y2, 2) ?>"/>
                                         <?php endfor; ?>
                                     </g>
-                                    <g class="scale-text" font-size="10" font-family="inherit">
-                                        <text x="75" y="18">100%</text>
-                                        <text x="75" y="96">50%</text>
-                                        <text x="75" y="174">0%</text>
-                                    </g>
                                 </svg>
+                                <div class="cpu-pct"><span id="cpu-pct-num"><?= round($cpuPct, 1) ?></span><span class="pct-suffix">%</span></div>
+                                <div class="cpu-status" id="cpu-status" style="color: <?= $cpuColor ?>"><?= $cpuStatus ?></div>
+                            </div>
+                            <div class="cpu-mem-row" title="Memory: <?= round($memPct, 1) ?>% used">
+                                <div class="cm-bar">
+                                    <div id="mem-bar-fill" class="cm-bar-fill" style="width: <?= $memPct ?>%; background-color: <?= $memColor ?>;"></div>
+                                    <span class="cm-bar-label"><span id="mem-pct"><?= round($memPct, 1) ?></span>%</span>
+                                </div>
+                                <span class="cm-size" id="mem-size"><?= $memPair ?></span>
+                            </div>
+                        </div>
+
+                        <!-- Network throughput meter -->
+                        <div class="health-tile net">
+                            <div class="tile-header-bar">
+                                <i class="bi bi-arrow-down-up"></i><span>Network</span>
+                            </div>
+                            <div class="net-rows">
+                                <div class="net-row">
+                                    <span class="net-dir"><i class="bi bi-arrow-down-short"></i></span>
+                                    <span class="net-text">
+                                        <span class="net-lbl">DOWN</span>
+                                        <span class="net-val" id="net-rx-label"><?= $netRxLabel ?></span>
+                                    </span>
+                                    <svg class="net-spark" id="net-rx-spark" viewBox="0 0 64 26" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg">
+                                        <polygon class="spark-fill" points=""/>
+                                        <polyline class="spark-line" points=""/>
+                                    </svg>
+                                </div>
+                                <div class="net-row">
+                                    <span class="net-dir"><i class="bi bi-arrow-up-short"></i></span>
+                                    <span class="net-text">
+                                        <span class="net-lbl">UP</span>
+                                        <span class="net-val" id="net-tx-label"><?= $netTxLabel ?></span>
+                                    </span>
+                                    <svg class="net-spark" id="net-tx-spark" viewBox="0 0 64 26" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg">
+                                        <polygon class="spark-fill" points=""/>
+                                        <polyline class="spark-line" points=""/>
+                                    </svg>
+                                </div>
                             </div>
                         </div>
 
@@ -1123,19 +1192,45 @@ document.addEventListener('DOMContentLoaded', function () {
     <?php if ($isAdmin): ?>
     (function () {
         const cpuArc    = document.getElementById('cpu-arc');
-        const cpuNeedle = document.getElementById('cpu-needle');
         const cpuPctNum = document.getElementById('cpu-pct-num');
         const cpuStatus = document.getElementById('cpu-status');
-        const memFill   = document.getElementById('mem-fill');
+        const memFill   = document.getElementById('mem-bar-fill');
         const memPctEl  = document.getElementById('mem-pct');
-        const memUsedEl = document.getElementById('mem-used');
-        const memTotalEl= document.getElementById('mem-total');
+        const memSizeEl = document.getElementById('mem-size');
+        const netRxEl   = document.getElementById('net-rx-label');
+        const netTxEl   = document.getElementById('net-tx-label');
+        const netRxSvg  = document.getElementById('net-rx-spark');
+        const netTxSvg  = document.getElementById('net-tx-spark');
         const diskPctEl = document.getElementById('disk-pct');
         const diskSize  = document.getElementById('disk-size');
         const diskFill  = document.getElementById('disk-fill');
         if (!cpuArc && !memFill && !diskFill) return;
 
         const ARC_LEN = 251.33;
+
+        // Sparkline buffers: last 20 samples ≈ a 5-minute window at the
+        // 15s poll. Rendering stretches to the SVG viewBox (64×26).
+        const SPARK_MAX = 20;
+        const netHist = { rx: [], tx: [] };
+        function renderSpark(svg, buf) {
+            if (!svg || buf.length < 2) return;
+            const W = 64, H = 26, PAD = 2;
+            const max = Math.max(1, ...buf);
+            const step = W / (buf.length - 1); // stretch the window across the full width
+            const pts = buf.map((v, i) =>
+                (i * step).toFixed(1) + ',' + (H - PAD - (v / max) * (H - PAD * 2)).toFixed(1)
+            );
+            svg.querySelector('.spark-line').setAttribute('points', pts.join(' '));
+            svg.querySelector('.spark-fill').setAttribute('points',
+                '0,' + H + ' ' + pts.join(' ') + ' ' + W + ',' + H);
+        }
+        function pushSample(key, svg, bps) {
+            if (bps === null || bps === undefined) return;
+            const buf = netHist[key];
+            buf.push(Number(bps) || 0);
+            if (buf.length > SPARK_MAX) buf.shift();
+            renderSpark(svg, buf);
+        }
 
         function cpuPalette(p) {
             return p > 80 ? ['#ef4444', 'High Usage']
@@ -1156,24 +1251,23 @@ document.addEventListener('DOMContentLoaded', function () {
                     const [color, status] = cpuPalette(p);
                     cpuArc.style.strokeDashoffset = String(ARC_LEN * (1 - p / 100));
                     cpuArc.setAttribute('stroke', color);
-                    if (cpuNeedle) {
-                        cpuNeedle.setAttribute('transform', 'rotate(' + (-90 + p * 1.8) + ' 100 110)');
-                        cpuNeedle.setAttribute('stroke', color);
-                    }
                     if (cpuPctNum) cpuPctNum.textContent = (Math.round(p * 10) / 10).toString();
                     if (cpuStatus) { cpuStatus.textContent = status; cpuStatus.style.color = color; }
                 }
 
                 if (d.memory && memFill) {
                     const p = Number(d.memory.percent) || 0;
-                    const color = memPalette(p);
-                    const h = 155 * (p / 100);
-                    memFill.setAttribute('y', String(170 - h));
-                    memFill.setAttribute('height', String(h));
-                    memFill.setAttribute('fill', color);
-                    if (memPctEl) memPctEl.textContent = (Math.round(p * 10) / 10) + '%';
-                    if (memUsedEl) memUsedEl.textContent = d.memory.used_label;
-                    if (memTotalEl) memTotalEl.textContent = d.memory.total_label;
+                    memFill.style.width = p + '%';
+                    memFill.style.backgroundColor = memPalette(p);
+                    if (memPctEl) memPctEl.textContent = (Math.round(p * 10) / 10).toString();
+                    if (memSizeEl && d.memory.pair_label) memSizeEl.textContent = d.memory.pair_label;
+                }
+
+                if (d.net) {
+                    if (netRxEl) netRxEl.textContent = d.net.rx_label;
+                    if (netTxEl) netTxEl.textContent = d.net.tx_label;
+                    pushSample('rx', netRxSvg, d.net.rx_bps);
+                    pushSample('tx', netTxSvg, d.net.tx_bps);
                 }
 
                 if (d.disk && diskFill) {
