@@ -1454,38 +1454,52 @@ $s3SyncServerBackups = ($settings['s3_sync_server_backups'] ?? '0') === '1';
     </div>
     <?php endif; ?>
 
-    <!-- Named S3 destination configs (per client). Repositories can
-         replicate to several of these at once. -->
-    <?php foreach ($s3Destinations ?? [] as $dest):
-        $destCfg = json_decode($dest['config'] ?? '{}', true) ?: [];
-        $usesGlobal = ($destCfg['credential_source'] ?? 'global') === 'global';
-    ?>
-    <div class="col-xl-4 col-lg-6">
-        <div class="card border-0 shadow-sm h-100">
-            <div class="card-body">
-                <div class="d-flex justify-content-between align-items-start mb-2">
-                    <h6 class="mb-0 text-truncate"><i class="bi bi-bucket me-1 text-info"></i> <?= htmlspecialchars($dest['name']) ?></h6>
-                    <a class="btn btn-sm btn-outline-secondary flex-shrink-0" href="/clients/<?= $dest['agent_id'] ?>?tab=plugins" title="Edit on the client's Plugins tab">
+</div>
+
+<?php if (!empty($s3Destinations)): ?>
+<!-- Sync configurations — a flat list, not location cards: several of
+     these can point at the same S3 (Global credentials), and one repo
+     can sync to several of them. -->
+<h6 class="fw-semibold mt-4 mb-2">S3 Sync Configurations</h6>
+<div class="table-responsive">
+    <table class="table table-sm table-hover align-middle mb-0">
+        <thead>
+            <tr>
+                <th>Name</th>
+                <th>Client</th>
+                <th>Destination</th>
+                <th class="text-end">Repositories Syncing</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody>
+            <?php foreach ($s3Destinations as $dest):
+                $destCfg = json_decode($dest['config'] ?? '{}', true) ?: [];
+                $usesGlobal = ($destCfg['credential_source'] ?? (empty($destCfg['endpoint']) ? 'global' : 'custom')) === 'global';
+            ?>
+            <tr>
+                <td class="fw-semibold"><i class="bi bi-bucket me-1 text-info"></i><?= htmlspecialchars($dest['name']) ?></td>
+                <td><a href="/clients/<?= $dest['agent_id'] ?>"><?= htmlspecialchars($dest['agent_name']) ?></a></td>
+                <td class="text-truncate" style="max-width: 280px;">
+                    <?php if ($usesGlobal): ?>
+                    <span class="text-muted">Global S3</span><?php if (!empty($settings['s3_bucket'])): ?> <span class="small text-muted">(<?= htmlspecialchars($settings['s3_bucket']) ?>)</span><?php endif; ?>
+                    <?php else: ?>
+                    <?= htmlspecialchars($destCfg['endpoint'] ?? 'Custom') ?><?= !empty($destCfg['bucket']) ? ' / ' . htmlspecialchars($destCfg['bucket']) : '' ?>
+                    <?php endif; ?>
+                </td>
+                <td class="text-end"><?= (int) $dest['repo_count'] ?></td>
+                <td class="text-end">
+                    <a class="btn btn-sm btn-outline-secondary" href="/clients/<?= $dest['agent_id'] ?>?tab=plugins" title="Edit on the client's Plugins tab">
                         <i class="bi bi-gear"></i>
                     </a>
-                </div>
-                <div class="row g-1 small mb-2">
-                    <div class="col-5 text-muted">Client</div>
-                    <div class="col-7 text-truncate"><a href="/clients/<?= $dest['agent_id'] ?>"><?= htmlspecialchars($dest['agent_name']) ?></a></div>
-                    <div class="col-5 text-muted">Credentials</div>
-                    <div class="col-7 text-truncate"><?= $usesGlobal ? 'Global S3 Settings' : htmlspecialchars($destCfg['endpoint'] ?? 'Custom') ?></div>
-                    <?php if (!$usesGlobal && !empty($destCfg['bucket'])): ?>
-                    <div class="col-5 text-muted">Bucket</div>
-                    <div class="col-7 text-truncate"><?= htmlspecialchars($destCfg['bucket']) ?></div>
-                    <?php endif; ?>
-                    <div class="col-5 text-muted">Repositories</div>
-                    <div class="col-7"><?= (int) $dest['repo_count'] ?> syncing</div>
-                </div>
-            </div>
-        </div>
-    </div>
-    <?php endforeach; ?>
+                </td>
+            </tr>
+            <?php endforeach; ?>
+        </tbody>
+    </table>
 </div>
+<?php endif; ?>
+
 <div class="form-text mt-3">
     <i class="bi bi-info-circle me-1"></i>
     Repositories can replicate to <strong>multiple S3 destinations</strong>. To add one:
