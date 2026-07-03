@@ -263,6 +263,163 @@ case "$ACTION" in
         exit $?
         ;;
 
+    find-repos)
+        # Walk a storage path and list borg repositories as JSON lines:
+        #   {"path":"...","name":"...","size_bytes":N,"mtime":N,"key_in_repo":0|1,"device":"..."}
+        # A borg repo is a directory holding a `config` file with a
+        # [repository] section and a `data` subdirectory. key_in_repo=1
+        # means repokey-style encryption (key stored inside the repo);
+        # 0 means unencrypted OR keyfile mode (key lives elsewhere).
+        # Usage: bbs-ssh-helper find-repos <base_path>
+        BASE_PATH="${2:-}"
+
+        if [ -z "$BASE_PATH" ]; then
+            echo "Usage: bbs-ssh-helper find-repos <base_path>"
+            exit 1
+        fi
+        if ! is_allowed_path "$BASE_PATH"; then
+            echo "Error: base path must be under /var/bbs/ or a registered storage location"
+            exit 1
+        fi
+        if [ ! -d "$BASE_PATH" ]; then
+            echo "Error: base path does not exist: $BASE_PATH"
+            exit 1
+        fi
+
+        # -maxdepth 6 bounds the walk; repos normally sit 2 levels deep
+        # (<loc>/<agent_id>/<name>) but disaster-recovery copies can be
+        # nested under extra folders.
+        find "$BASE_PATH" -maxdepth 6 -type f -name config 2>/dev/null | while IFS= read -r CFG; do
+            REPO_DIR=$(dirname "$CFG")
+            [ -d "$REPO_DIR/data" ] || continue
+            grep -q '^\[repository\]' "$CFG" 2>/dev/null || continue
+
+            SIZE=$(du -sb "$REPO_DIR" 2>/dev/null | cut -f1)
+            MTIME=$(stat -c %Y "$REPO_DIR" 2>/dev/null || echo 0)
+            DEVICE=$(stat -c %d "$REPO_DIR" 2>/dev/null || echo 0)
+            KEY_IN_REPO=0
+            grep -q '^key = ' "$CFG" 2>/dev/null && KEY_IN_REPO=1
+            NAME=$(basename "$REPO_DIR")
+
+            printf '{"path":"%s","name":"%s","size_bytes":%s,"mtime":%s,"key_in_repo":%s,"device":"%s"}\n' \
+                "$REPO_DIR" "$NAME" "${SIZE:-0}" "${MTIME:-0}" "$KEY_IN_REPO" "$DEVICE"
+        done
+        exit 0
+        ;;
+
+    check-move)
+        # Report whether moving a repo from <src> to <dst> is a same-filesystem
+        # rename or a cross-filesystem copy, and whether space suffices.
+        # <dst> does not need to exist — the nearest existing ancestor is used
+        # for the filesystem/space check.
+        # Output JSON: {"src_bytes":N,"same_fs":0|1,"free_bytes":N,"fits":0|1}
+        # Usage: bbs-ssh-helper check-move <src> <dst>
+        SRC="${2:-}"
+        DST="${3:-}"
+
+        if [ -z "$SRC" ] || [ -z "$DST" ]; then
+            echo "Usage: bbs-ssh-helper check-move <src> <dst>"
+            exit 1
+        fi
+        if ! is_allowed_path "$SRC" || ! is_allowed_path "$DST"; then
+            echo "Error: paths must be under /var/bbs/ or a registered storage location"
+            exit 1
+        fi
+        if [ ! -d "$SRC" ]; then
+            echo "Error: source does not exist: $SRC"
+            exit 1
+        fi
+
+        DST_CHECK=$(readlink -m "$DST")
+        while [ ! -d "$DST_CHECK" ] && [ "$DST_CHECK" != "/" ]; do
+            DST_CHECK=$(dirname "$DST_CHECK")
+        done
+
+        SRC_BYTES=$(du -sb "$SRC" 2>/dev/null | cut -f1)
+        SRC_DEV=$(stat -c %d "$SRC")
+        DST_DEV=$(stat -c %d "$DST_CHECK")
+        FREE_BYTES=$(df -P -B1 "$DST_CHECK" | awk 'NR==2 {print $4}')
+
+        SAME_FS=0
+        [ "$SRC_DEV" = "$DST_DEV" ] && SAME_FS=1
+
+        # A rename needs no space; a copy needs the full repo size plus 2%
+        # slack for filesystem overhead.
+        FITS=1
+        if [ "$SAME_FS" = "0" ]; then
+            REQUIRED=$(( SRC_BYTES + SRC_BYTES / 50 ))
+            [ "$FREE_BYTES" -lt "$REQUIRED" ] && FITS=0
+        fi
+
+        printf '{"src_bytes":%s,"same_fs":%s,"free_bytes":%s,"fits":%s}\n' \
+            "${SRC_BYTES:-0}" "$SAME_FS" "${FREE_BYTES:-0}" "$FITS"
+        exit 0
+        ;;
+
+    move-repo)
+        # Move a borg repository into its canonical location. Same-filesystem
+        # moves are an instant rename; cross-filesystem moves copy first and
+        # delete the source only after the copy fully succeeds, so a failure
+        # can never lose the original repo.
+        # Usage: bbs-ssh-helper move-repo <src> <dst>
+        SRC="${2:-}"
+        DST="${3:-}"
+
+        if [ -z "$SRC" ] || [ -z "$DST" ]; then
+            echo "Usage: bbs-ssh-helper move-repo <src> <dst>"
+            exit 1
+        fi
+        if ! is_allowed_path "$SRC" || ! is_allowed_path "$DST"; then
+            echo "Error: paths must be under /var/bbs/ or a registered storage location"
+            exit 1
+        fi
+        if [ ! -d "$SRC" ]; then
+            echo "Error: source does not exist: $SRC"
+            exit 1
+        fi
+        if [ ! -f "$SRC/config" ] || ! grep -q '^\[repository\]' "$SRC/config" 2>/dev/null; then
+            echo "Error: source is not a borg repository: $SRC"
+            exit 1
+        fi
+        SRC_NORM=$(readlink -m "$SRC")
+        DST_NORM=$(readlink -m "$DST")
+        if [ "$SRC_NORM" = "$DST_NORM" ]; then
+            echo "Error: source and destination are the same path"
+            exit 1
+        fi
+        if [ -e "$DST_NORM" ]; then
+            echo "Error: destination already exists: $DST_NORM"
+            exit 1
+        fi
+
+        mkdir -p "$(dirname "$DST_NORM")"
+
+        SRC_DEV=$(stat -c %d "$SRC_NORM")
+        DST_DEV=$(stat -c %d "$(dirname "$DST_NORM")")
+
+        if [ "$SRC_DEV" = "$DST_DEV" ]; then
+            mv "$SRC_NORM" "$DST_NORM"
+            echo "moved (rename): $SRC_NORM -> $DST_NORM"
+        else
+            # Re-check space right before the copy
+            SRC_BYTES=$(du -sb "$SRC_NORM" | cut -f1)
+            FREE_BYTES=$(df -P -B1 "$(dirname "$DST_NORM")" | awk 'NR==2 {print $4}')
+            REQUIRED=$(( SRC_BYTES + SRC_BYTES / 50 ))
+            if [ "$FREE_BYTES" -lt "$REQUIRED" ]; then
+                echo "Error: not enough space at destination (need ${REQUIRED} bytes, have ${FREE_BYTES})"
+                exit 1
+            fi
+            if ! cp -a "$SRC_NORM" "$DST_NORM"; then
+                rm -rf "$DST_NORM"
+                echo "Error: copy failed — destination cleaned up, source untouched"
+                exit 1
+            fi
+            rm -rf "$SRC_NORM"
+            echo "moved (copy): $SRC_NORM -> $DST_NORM"
+        fi
+        exit 0
+        ;;
+
     borg-list)
         # Run borg list as the repo-owning user
         # Usage: bbs-ssh-helper borg-list <username> <passphrase|-> <repo_path>

@@ -135,6 +135,9 @@ class App
         $this->router->map('POST', '/clients/[i:id]/restore-orphan', 'RepositoryController@restoreOrphan');
         $this->router->map('POST', '/repositories/import/verify', 'RepositoryController@verifyImport');
         $this->router->map('POST', '/repositories/import', 'RepositoryController@import');
+        $this->router->map('POST', '/repositories/scan', 'RepositoryController@scanRepos');
+        $this->router->map('POST', '/repositories/adopt/verify', 'RepositoryController@verifyAdopt');
+        $this->router->map('POST', '/repositories/adopt', 'RepositoryController@adopt');
 
         // Backup Plans
         $this->router->map('POST', '/plans/create', 'BackupPlanController@store');

@@ -627,6 +627,270 @@ $sizeDisplay = $totalSize > 0 ? \BBS\Services\ServerStats::formatBytes((int) $to
         if (grid) grid.style.display = '';
         if (solo) solo.style.display = '';
         if (imp) imp.style.display = 'none';
+        cancelAdopt();
+    }
+
+    // --- Scan & adopt: find borg repos on storage and move them into place ---
+    var scanCandidates = [];
+
+    function scanForRepos() {
+        var btn = document.getElementById('scanReposBtn');
+        var results = document.getElementById('scan-results');
+        var errDiv = document.getElementById('scan-error');
+        errDiv.classList.add('d-none');
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> Scanning...';
+
+        fetch('/repositories/scan', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+            body: '',
+            credentials: 'same-origin'
+        })
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="bi bi-search me-1"></i> Scan Storage for Repositories';
+            if (data.status !== 'ok') {
+                errDiv.textContent = data.error || 'Scan failed.';
+                errDiv.classList.remove('d-none');
+                return;
+            }
+            scanCandidates = data.candidates || [];
+            renderScanResults();
+        })
+        .catch(function() {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="bi bi-search me-1"></i> Scan Storage for Repositories';
+            errDiv.textContent = 'Scan request failed.';
+            errDiv.classList.remove('d-none');
+        });
+    }
+
+    function renderScanResults() {
+        var results = document.getElementById('scan-results');
+        results.innerHTML = '';
+        results.style.display = '';
+
+        if (!scanCandidates.length) {
+            var p = document.createElement('div');
+            p.className = 'alert alert-secondary small mb-0';
+            p.textContent = 'No unregistered borg repositories were found in the configured storage locations.';
+            results.appendChild(p);
+            return;
+        }
+
+        var table = document.createElement('table');
+        table.className = 'table table-sm table-hover align-middle';
+        table.innerHTML = '<thead><tr>' +
+            '<th>Found Repository</th><th>Size</th><th>Modified</th><th>Encryption Key</th><th></th>' +
+            '</tr></thead>';
+        var tbody = document.createElement('tbody');
+
+        scanCandidates.forEach(function(c, idx) {
+            var tr = document.createElement('tr');
+
+            var tdPath = document.createElement('td');
+            tdPath.className = 'font-monospace small';
+            tdPath.style.wordBreak = 'break-all';
+            tdPath.textContent = c.path;
+            tr.appendChild(tdPath);
+
+            var tdSize = document.createElement('td');
+            tdSize.className = 'text-nowrap';
+            tdSize.textContent = c.size_label;
+            tr.appendChild(tdSize);
+
+            var tdMod = document.createElement('td');
+            tdMod.className = 'text-nowrap small';
+            tdMod.textContent = c.modified;
+            tr.appendChild(tdMod);
+
+            var tdKey = document.createElement('td');
+            var badge = document.createElement('span');
+            if (c.key_in_repo) {
+                badge.className = 'badge text-bg-success';
+                badge.textContent = 'Key in repo';
+            } else {
+                badge.className = 'badge text-bg-secondary';
+                badge.textContent = 'None / keyfile';
+                badge.title = 'Either unencrypted, or keyfile encryption (key stored outside the repo). Verification will confirm which.';
+            }
+            tdKey.appendChild(badge);
+            tr.appendChild(tdKey);
+
+            var tdBtn = document.createElement('td');
+            tdBtn.className = 'text-end';
+            var btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'btn btn-sm btn-primary';
+            btn.innerHTML = '<i class="bi bi-box-arrow-in-down me-1"></i>Import';
+            btn.onclick = function() { startAdopt(idx); };
+            tdBtn.appendChild(btn);
+            tr.appendChild(tdBtn);
+
+            tbody.appendChild(tr);
+        });
+        table.appendChild(tbody);
+
+        var wrap = document.createElement('div');
+        wrap.className = 'table-responsive';
+        wrap.appendChild(table);
+        results.appendChild(wrap);
+    }
+
+    function startAdopt(idx) {
+        var c = scanCandidates[idx];
+        if (!c) return;
+        document.getElementById('adopt-scan-block').style.display = 'none';
+        document.getElementById('import-verify-form').style.display = 'none';
+        document.getElementById('import-confirm-section').style.display = 'none';
+        document.getElementById('adopt-confirm-section').style.display = 'none';
+        var sec = document.getElementById('adopt-verify-section');
+        sec.style.display = '';
+        sec.dataset.locationId = c.storage_location_id || '';
+        document.getElementById('adoptSourcePath').value = c.path;
+        // Prefill with the directory name, trimmed to BBS's naming rules
+        document.getElementById('adoptName').value = (c.name || '').replace(/[^a-zA-Z0-9_-]/g, '').substring(0, 20);
+        document.getElementById('adoptPassphrase').value = '';
+        document.getElementById('adopt-verify-error').classList.add('d-none');
+    }
+
+    function cancelAdopt() {
+        var sec = document.getElementById('adopt-verify-section');
+        var confirmSec = document.getElementById('adopt-confirm-section');
+        var scanBlock = document.getElementById('adopt-scan-block');
+        var verifyForm = document.getElementById('import-verify-form');
+        if (sec) sec.style.display = 'none';
+        if (confirmSec) confirmSec.style.display = 'none';
+        if (scanBlock) scanBlock.style.display = '';
+        if (verifyForm) verifyForm.style.display = '';
+    }
+
+    function verifyAdoptRepo() {
+        var btn = document.getElementById('adoptVerifyBtn');
+        var errDiv = document.getElementById('adopt-verify-error');
+        errDiv.classList.add('d-none');
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> Verifying...';
+
+        var sec = document.getElementById('adopt-verify-section');
+        var formData = new URLSearchParams();
+        formData.append('agent_id', '<?= $agent['id'] ?>');
+        formData.append('name', document.getElementById('adoptName').value);
+        formData.append('passphrase', document.getElementById('adoptPassphrase').value);
+        formData.append('source_path', document.getElementById('adoptSourcePath').value);
+        formData.append('storage_location_id', sec.dataset.locationId || '');
+
+        fetch('/repositories/adopt/verify', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+            body: formData.toString(),
+            credentials: 'same-origin'
+        })
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="bi bi-search me-1"></i> Verify & Preview Move';
+            if (data.status !== 'ok') {
+                errDiv.textContent = data.error || 'Verification failed.';
+                errDiv.classList.remove('d-none');
+                return;
+            }
+            showAdoptConfirm(data);
+        })
+        .catch(function() {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="bi bi-search me-1"></i> Verify & Preview Move';
+            errDiv.textContent = 'Verification request failed.';
+            errDiv.classList.remove('d-none');
+        });
+    }
+
+    function showAdoptConfirm(data) {
+        var sec = document.getElementById('adopt-verify-section');
+        var name = document.getElementById('adoptName').value;
+
+        document.getElementById('adopt-confirm-name').textContent = name;
+        document.getElementById('adopt-confirm-encryption').textContent = data.encryption;
+        document.getElementById('adopt-confirm-archives').textContent = data.archive_count;
+        document.getElementById('adoptConfirmName').value = name;
+        document.getElementById('adoptConfirmSourcePath').value = data.move.from;
+        document.getElementById('adoptConfirmLocationId').value = sec.dataset.locationId || '';
+        document.getElementById('adoptConfirmPassphrase').value = document.getElementById('adoptPassphrase').value;
+        document.getElementById('adoptConfirmEncryption').value = data.encryption;
+
+        // Plain statement of exactly what will happen on disk
+        var stmt = document.getElementById('adopt-move-statement');
+        stmt.innerHTML = '';
+        var submitBtn = document.getElementById('adoptSubmitBtn');
+        var submitLabel = document.getElementById('adopt-submit-label');
+        var m = data.move;
+
+        function addLine(html, mono) {
+            var div = document.createElement('div');
+            if (mono) div.className = 'font-monospace small';
+            div.style.wordBreak = 'break-all';
+            if (typeof html === 'string') div.textContent = html; else div.appendChild(html);
+            stmt.appendChild(div);
+        }
+        function addPathLine(label, path) {
+            var div = document.createElement('div');
+            div.className = 'font-monospace small';
+            div.style.wordBreak = 'break-all';
+            var b = document.createElement('strong');
+            b.textContent = label + ' ';
+            div.appendChild(b);
+            div.appendChild(document.createTextNode(path));
+            stmt.appendChild(div);
+        }
+
+        if (!m.required) {
+            stmt.className = 'alert alert-primary mb-3';
+            addLine('The repository is already at its correct location — no files will be moved.');
+            addPathLine('Path:', m.to);
+            submitBtn.disabled = false;
+            submitLabel.textContent = 'Import Repository';
+        } else if (m.same_fs) {
+            stmt.className = 'alert alert-primary mb-3';
+            addLine('This will move the repository on the server:');
+            addPathLine('From:', m.from);
+            addPathLine('To:', m.to);
+            var note = document.createElement('div');
+            note.className = 'small mt-1';
+            note.textContent = 'Both paths are on the same filesystem, so this is an instant rename — no data is copied.';
+            stmt.appendChild(note);
+            submitBtn.disabled = false;
+            submitLabel.textContent = 'Move & Import Repository';
+        } else if (m.fits) {
+            stmt.className = 'alert alert-warning mb-3';
+            addLine('This will move the repository to a different filesystem:');
+            addPathLine('From:', m.from);
+            addPathLine('To:', m.to);
+            var note2 = document.createElement('div');
+            note2.className = 'small mt-1';
+            note2.textContent = m.size_label + ' of data will be copied (the destination has ' + m.free_label +
+                ' free). Large repositories can take a long time — keep this page open. ' +
+                'The original is deleted only after the copy completes successfully.';
+            stmt.appendChild(note2);
+            submitBtn.disabled = false;
+            submitLabel.textContent = 'Move & Import Repository';
+        } else {
+            stmt.className = 'alert alert-danger mb-3';
+            addLine('There is not enough free space to move this repository.');
+            addPathLine('From:', m.from);
+            addPathLine('To:', m.to);
+            var note3 = document.createElement('div');
+            note3.className = 'small mt-1';
+            note3.textContent = 'The repository is ' + m.size_label + ', but the destination filesystem only has ' +
+                m.free_label + ' free. Free up space, then verify again.';
+            stmt.appendChild(note3);
+            submitBtn.disabled = true;
+            submitLabel.textContent = 'Move & Import Repository';
+        }
+
+        sec.style.display = 'none';
+        document.getElementById('adopt-confirm-section').style.display = '';
     }
     function toggleImportRemoteSshConfig() {
         var sel = document.getElementById('importStorageType');
@@ -1005,6 +1269,26 @@ $sizeDisplay = $totalSize > 0 ? \BBS\Services\ServerStats::formatBytes((int) $to
             <button type="button" class="btn btn-sm btn-outline-secondary" onclick="hideImportRepo()"><i class="bi bi-arrow-left me-1"></i>Back</button>
         </div>
         <div class="card-body">
+            <?php if ($this->isAdmin()): ?>
+            <!-- Scan for unregistered repositories (admin only) -->
+            <div id="adopt-scan-block" class="mb-4">
+                <div class="d-flex align-items-start gap-2 flex-wrap">
+                    <button type="button" class="btn btn-outline-primary" id="scanReposBtn" onclick="scanForRepos()">
+                        <i class="bi bi-search me-1"></i> Scan Storage for Repositories
+                    </button>
+                    <span class="form-text mb-0" style="flex-basis: 300px; flex-grow: 1;">
+                        Finds borg repositories on this server's storage that BBS doesn't know about —
+                        e.g. copied over from an old server. Found repos can be imported here; they are
+                        moved into this client's storage folder as part of the import.
+                    </span>
+                </div>
+                <div id="scan-results" class="mt-3" style="display:none;"></div>
+                <div id="scan-error" class="alert alert-danger d-none mt-3"></div>
+                <hr class="mt-4">
+                <p class="text-muted small mb-3">Or, if the repository is already in the expected folder, import it directly:</p>
+            </div>
+            <?php endif; ?>
+
             <!-- Step 1: Verify form -->
             <div id="import-verify-form">
                 <div class="row mb-3">
@@ -1119,6 +1403,73 @@ $sizeDisplay = $totalSize > 0 ? \BBS\Services\ServerStats::formatBytes((int) $to
                     </div>
                 </form>
             </div>
+
+            <?php if ($this->isAdmin()): ?>
+            <!-- Adopt step 1: found repo — name + passphrase, then preview the move -->
+            <div id="adopt-verify-section" style="display:none;">
+                <h6 class="fw-semibold mb-3"><i class="bi bi-box-arrow-in-down me-1"></i>Import Found Repository</h6>
+                <div class="row mb-3">
+                    <label class="col-md-3 col-form-label fw-semibold">Found at</label>
+                    <div class="col-md-9">
+                        <input type="text" class="form-control font-monospace" id="adoptSourcePath" readonly>
+                    </div>
+                </div>
+                <div class="row mb-3">
+                    <label class="col-md-3 col-form-label fw-semibold">Name</label>
+                    <div class="col-md-6">
+                        <input type="text" class="form-control" id="adoptName" maxlength="20">
+                    </div>
+                    <div class="col-md-3 form-text pt-2">The repository's name in BBS — also its folder name after the move.</div>
+                </div>
+                <div class="row mb-3">
+                    <label class="col-md-3 col-form-label fw-semibold">Passphrase</label>
+                    <div class="col-md-6">
+                        <input type="password" class="form-control" id="adoptPassphrase" placeholder="Enter repository passphrase (blank if unencrypted)">
+                    </div>
+                    <div class="col-md-3 form-text pt-2">The passphrase used when the repo was created.</div>
+                </div>
+                <div id="adopt-verify-error" class="alert alert-danger d-none"></div>
+                <div class="d-flex gap-2">
+                    <button type="button" class="btn btn-primary" id="adoptVerifyBtn" onclick="verifyAdoptRepo()">
+                        <i class="bi bi-search me-1"></i> Verify &amp; Preview Move
+                    </button>
+                    <button type="button" class="btn btn-outline-secondary" onclick="cancelAdopt()">Cancel</button>
+                </div>
+            </div>
+
+            <!-- Adopt step 2: confirmation with an explicit move statement -->
+            <div id="adopt-confirm-section" style="display:none;">
+                <h6 class="fw-semibold mb-3">Repository Verified</h6>
+                <table class="table table-sm mb-3" style="max-width:500px;">
+                    <tr><th style="width:150px;">Repository</th><td id="adopt-confirm-name"></td></tr>
+                    <tr><th>Encryption</th><td id="adopt-confirm-encryption"></td></tr>
+                    <tr><th>Recovery Points</th><td id="adopt-confirm-archives"></td></tr>
+                </table>
+                <div class="alert alert-primary mb-3" id="adopt-move-statement"></div>
+                <div class="alert alert-warning small mb-3">
+                    <i class="bi bi-exclamation-triangle me-1"></i>
+                    After the move, file permissions will be changed to what BBS requires for backup
+                    operations and a catalog rebuild task will be queued.
+                </div>
+                <form method="POST" action="/repositories/adopt" onsubmit="var b=this.querySelector('button[type=submit]'); b.disabled=true; b.innerHTML='<span class=\'spinner-border spinner-border-sm me-1\'></span> Moving...';">
+                    <input type="hidden" name="csrf_token" value="<?= $this->csrfToken() ?>">
+                    <input type="hidden" name="agent_id" value="<?= $agent['id'] ?>">
+                    <input type="hidden" name="name" id="adoptConfirmName">
+                    <input type="hidden" name="source_path" id="adoptConfirmSourcePath">
+                    <input type="hidden" name="storage_location_id" id="adoptConfirmLocationId">
+                    <input type="hidden" name="passphrase" id="adoptConfirmPassphrase">
+                    <input type="hidden" name="encryption" id="adoptConfirmEncryption">
+                    <div class="d-flex gap-2">
+                        <button type="submit" class="btn btn-success" id="adoptSubmitBtn">
+                            <i class="bi bi-check-circle me-1"></i> <span id="adopt-submit-label">Move &amp; Import Repository</span>
+                        </button>
+                        <button type="button" class="btn btn-outline-secondary" onclick="document.getElementById('adopt-confirm-section').style.display='none'; document.getElementById('adopt-verify-section').style.display='';">
+                            Back
+                        </button>
+                    </div>
+                </form>
+            </div>
+            <?php endif; ?>
         </div>
     </div>
     </div>

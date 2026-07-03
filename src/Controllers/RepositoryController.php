@@ -1848,4 +1848,323 @@ class RepositoryController extends Controller
         $this->flash('success', "Repository \"{$name}\" imported from {$config['remote_host']}. A catalog sync has been queued.");
         $this->redirect("/clients/{$agentId}?tab=repos");
     }
+
+    /**
+     * Resolve a local storage location with the same fallback chain used by
+     * repo creation and import: explicit id → default row → storage_path setting.
+     */
+    private function resolveLocalLocation(?int $storageLocationId): array
+    {
+        $location = null;
+        if ($storageLocationId) {
+            $location = $this->db->fetchOne("SELECT * FROM storage_locations WHERE id = ?", [$storageLocationId]);
+        }
+        if (!$location) {
+            $location = $this->db->fetchOne("SELECT * FROM storage_locations WHERE is_default = 1");
+        }
+        if (!$location) {
+            $storageSetting = $this->db->fetchOne("SELECT `value` FROM settings WHERE `key` = 'storage_path'");
+            $location = ['id' => null, 'path' => $storageSetting['value'] ?? '/var/bbs', 'is_default' => 1];
+        }
+        return $location;
+    }
+
+    /**
+     * Run a bbs-ssh-helper command, returning [exitCode, stdout, stderr].
+     */
+    private function runHelper(array $args, ?string $stdin = null): array
+    {
+        $cmd = array_merge(['sudo', '/usr/local/bin/bbs-ssh-helper'], $args);
+        $proc = proc_open($cmd, [
+            0 => ['pipe', 'r'],
+            1 => ['pipe', 'w'],
+            2 => ['pipe', 'w'],
+        ], $pipes);
+        if (!is_resource($proc)) {
+            return [-1, '', 'failed to start helper'];
+        }
+        if ($stdin !== null) {
+            fwrite($pipes[0], $stdin);
+        }
+        fclose($pipes[0]);
+        $stdout = stream_get_contents($pipes[1]);
+        $stderr = stream_get_contents($pipes[2]);
+        fclose($pipes[1]);
+        fclose($pipes[2]);
+        $exit = proc_close($proc);
+        return [$exit, $stdout, $stderr];
+    }
+
+    /**
+     * All canonical local-repo directories currently registered, so scans
+     * can hide repos BBS already knows about.
+     */
+    private function registeredLocalRepoPaths(): array
+    {
+        $default = $this->resolveLocalLocation(null);
+        $rows = $this->db->fetchAll(
+            "SELECT r.agent_id, r.name, sl.path AS loc_path
+             FROM repositories r
+             LEFT JOIN storage_locations sl ON sl.id = r.storage_location_id
+             WHERE r.storage_type = 'local'"
+        );
+        $paths = [];
+        foreach ($rows as $r) {
+            $base = rtrim($r['loc_path'] ?: $default['path'], '/');
+            $paths[] = "{$base}/{$r['agent_id']}/{$r['name']}";
+        }
+        return $paths;
+    }
+
+    /**
+     * Validate that a scan/adopt source path is inside a configured storage
+     * location (or the default storage path) and free of traversal tricks.
+     * Returns the normalized path, or null if invalid.
+     */
+    private function validateSourcePath(string $path): ?string
+    {
+        $path = rtrim(trim($path), '/');
+        if ($path === '' || $path[0] !== '/' || str_contains($path, '..')) {
+            return null;
+        }
+        $bases = array_map(
+            fn($l) => rtrim($l['path'], '/'),
+            $this->db->fetchAll("SELECT path FROM storage_locations")
+        );
+        $bases[] = rtrim($this->resolveLocalLocation(null)['path'], '/');
+        foreach ($bases as $base) {
+            if ($base !== '' && str_starts_with($path . '/', $base . '/')) {
+                return $path;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * AJAX: Scan storage locations for borg repositories BBS doesn't know about.
+     * POST /repositories/scan
+     */
+    public function scanRepos(): void
+    {
+        $this->requireAuth();
+        if (!$this->isAdmin()) {
+            $this->json(['status' => 'error', 'error' => 'Admin access required.'], 403);
+            return;
+        }
+
+        $locations = $this->db->fetchAll("SELECT * FROM storage_locations ORDER BY is_default DESC, label");
+        if (empty($locations)) {
+            $locations = [$this->resolveLocalLocation(null) + ['label' => 'Default storage']];
+        }
+
+        $registered = $this->registeredLocalRepoPaths();
+        $candidates = [];
+
+        foreach ($locations as $loc) {
+            [$exit, $out, ] = $this->runHelper(['find-repos', rtrim($loc['path'], '/')]);
+            if ($exit !== 0) {
+                continue; // location missing on disk etc. — skip silently
+            }
+            foreach (explode("\n", trim($out)) as $line) {
+                if ($line === '') continue;
+                $repo = json_decode($line, true);
+                if (!is_array($repo) || empty($repo['path'])) continue;
+                $normalized = rtrim($repo['path'], '/');
+                if (in_array($normalized, $registered, true)) continue;
+
+                $candidates[] = [
+                    'path' => $normalized,
+                    'name' => $repo['name'] ?? basename($normalized),
+                    'size_bytes' => (int) ($repo['size_bytes'] ?? 0),
+                    'size_label' => \BBS\Services\ServerStats::formatBytes((int) ($repo['size_bytes'] ?? 0)),
+                    'modified' => !empty($repo['mtime']) ? date('Y-m-d H:i', (int) $repo['mtime']) : '',
+                    'key_in_repo' => (int) ($repo['key_in_repo'] ?? 0) === 1,
+                    'storage_location_id' => $loc['id'] ?? null,
+                    'location_label' => $loc['label'] ?? '',
+                ];
+            }
+        }
+
+        $this->json(['status' => 'ok', 'candidates' => $candidates]);
+    }
+
+    /**
+     * AJAX: Verify an adoption candidate and preview the move it requires.
+     * Returns a plain-language statement of exactly what will happen —
+     * source path, destination path, rename vs copy, sizes, free space.
+     * POST /repositories/adopt/verify
+     */
+    public function verifyAdopt(): void
+    {
+        $this->requireAuth();
+        if (!$this->isAdmin()) {
+            $this->json(['status' => 'error', 'error' => 'Admin access required.'], 403);
+            return;
+        }
+
+        $agentId = (int) ($_POST['agent_id'] ?? 0);
+        $name = $this->sanitizePathName(trim($_POST['name'] ?? ''));
+        $passphrase = $_POST['passphrase'] ?? '';
+        $storageLocationId = !empty($_POST['storage_location_id']) ? (int) $_POST['storage_location_id'] : null;
+        $sourcePath = $this->validateSourcePath($_POST['source_path'] ?? '');
+
+        if (empty($name) || empty($agentId)) {
+            $this->json(['status' => 'error', 'error' => 'Repository name and client are required. Names can only contain letters, numbers, hyphens, and underscores.']);
+            return;
+        }
+        if ($sourcePath === null) {
+            $this->json(['status' => 'error', 'error' => 'Source path must be inside a configured storage location.']);
+            return;
+        }
+
+        $agent = $this->db->fetchOne("SELECT * FROM agents WHERE id = ?", [$agentId]);
+        if (!$agent || !$this->canAccessAgent($agentId)) {
+            $this->json(['status' => 'error', 'error' => 'Access denied.']);
+            return;
+        }
+
+        $existing = $this->db->fetchOne(
+            "SELECT id FROM repositories WHERE agent_id = ? AND name = ?",
+            [$agentId, $name]
+        );
+        if ($existing) {
+            $this->json(['status' => 'error', 'error' => "A repository named \"{$name}\" already exists for this client."]);
+            return;
+        }
+
+        // Verify it's a real borg repo and the passphrase works
+        [$exit, $out, $err] = $this->runHelper(['verify-repo', '-', $sourcePath], $passphrase . "\n");
+        if ($exit !== 0) {
+            $errorMsg = trim($err ?: $out);
+            if (str_contains($errorMsg, 'passphrase') || str_contains($errorMsg, 'Passphrase')) {
+                $errorMsg = 'Incorrect passphrase for this repository.';
+            } elseif (stripos($errorMsg, 'key file') !== false || stripos($errorMsg, 'keyfile') !== false) {
+                $errorMsg = 'This repository uses keyfile encryption — its key is stored outside the repository '
+                    . '(in ~/.config/borg/keys on the machine that created it) and was not found. '
+                    . 'Migrate the key file first, or export/import the key with borg key export/import.';
+            } elseif (str_contains($errorMsg, 'not a valid repository') || str_contains($errorMsg, 'does not exist')) {
+                $errorMsg = "No valid borg repository found at: {$sourcePath}";
+            }
+            $this->json(['status' => 'error', 'error' => $errorMsg ?: 'Failed to verify repository.']);
+            return;
+        }
+
+        $infoData = json_decode($out, true);
+        if (!$infoData) {
+            $this->json(['status' => 'error', 'error' => 'Failed to parse repository info. Is this a valid borg repository?']);
+            return;
+        }
+        $encryption = $infoData['encryption']['mode'] ?? 'unknown';
+        if (str_starts_with($encryption, 'keyfile')) {
+            $this->json(['status' => 'error', 'error' => 'This repository uses keyfile encryption — the key lives outside the repository, so backups and restores would fail after adoption. Convert it to repokey (borg key change-location) before importing.']);
+            return;
+        }
+        $archiveCount = count($infoData['archives'] ?? []);
+
+        // Destination and move preview
+        $location = $this->resolveLocalLocation($storageLocationId);
+        $destPath = rtrim($location['path'], '/') . '/' . $agentId . '/' . $name;
+
+        $move = [
+            'from' => $sourcePath,
+            'to' => $destPath,
+            'required' => $sourcePath !== $destPath,
+            'same_fs' => true,
+            'fits' => true,
+            'size_label' => '',
+            'free_label' => '',
+        ];
+
+        if ($move['required']) {
+            [$mExit, $mOut, $mErr] = $this->runHelper(['check-move', $sourcePath, $destPath]);
+            $check = $mExit === 0 ? json_decode(trim($mOut), true) : null;
+            if (!is_array($check)) {
+                $this->json(['status' => 'error', 'error' => 'Could not check the move: ' . trim($mErr ?: $mOut)]);
+                return;
+            }
+            $move['same_fs'] = (int) $check['same_fs'] === 1;
+            $move['fits'] = (int) $check['fits'] === 1;
+            $move['size_label'] = \BBS\Services\ServerStats::formatBytes((int) $check['src_bytes']);
+            $move['free_label'] = \BBS\Services\ServerStats::formatBytes((int) $check['free_bytes']);
+        }
+
+        $this->json([
+            'status' => 'ok',
+            'encryption' => $encryption,
+            'archive_count' => $archiveCount,
+            'move' => $move,
+        ]);
+    }
+
+    /**
+     * Adopt a repository found by scan: move it into the canonical
+     * <storage location>/<agent_id>/<name> spot, then register it exactly
+     * like a normal import (perms, ssh-gate paths, catalog sync).
+     * POST /repositories/adopt
+     */
+    public function adopt(): void
+    {
+        $this->requireAuth();
+        $this->verifyCsrf();
+
+        $agentId = (int) ($_POST['agent_id'] ?? 0);
+        $name = $this->sanitizePathName(trim($_POST['name'] ?? ''));
+        $encryption = $_POST['encryption'] ?? 'unknown';
+        $passphrase = $_POST['passphrase'] ?? '';
+        $storageLocationId = !empty($_POST['storage_location_id']) ? (int) $_POST['storage_location_id'] : null;
+        $sourcePath = $this->validateSourcePath($_POST['source_path'] ?? '');
+
+        if (!$this->isAdmin()) {
+            $this->flash('danger', 'Admin access required.');
+            $this->redirect("/clients/{$agentId}?tab=repos");
+            return;
+        }
+        if (empty($name) || empty($agentId) || $sourcePath === null) {
+            $this->flash('danger', 'Repository name, client, and a valid source path are required.');
+            $this->redirect("/clients/{$agentId}?tab=repos");
+            return;
+        }
+
+        $agent = $this->db->fetchOne("SELECT * FROM agents WHERE id = ?", [$agentId]);
+        if (!$agent || !$this->canAccessAgent($agentId)) {
+            $this->flash('danger', 'Access denied.');
+            $this->redirect('/clients');
+            return;
+        }
+        $this->requirePermission(PermissionService::MANAGE_REPOS, $agentId);
+
+        $existing = $this->db->fetchOne(
+            "SELECT id FROM repositories WHERE agent_id = ? AND name = ?",
+            [$agentId, $name]
+        );
+        if ($existing) {
+            $this->flash('warning', "Repository \"{$name}\" already exists.");
+            $this->redirect("/clients/{$agentId}?tab=repos");
+            return;
+        }
+
+        $location = $this->resolveLocalLocation($storageLocationId);
+        $destPath = rtrim($location['path'], '/') . '/' . $agentId . '/' . $name;
+
+        if ($sourcePath !== $destPath) {
+            // Cross-filesystem moves copy the whole repo — don't let PHP's
+            // execution limit kill it halfway.
+            set_time_limit(0);
+            [$exit, $out, $err] = $this->runHelper(['move-repo', $sourcePath, $destPath]);
+            if ($exit !== 0) {
+                $this->flash('danger', 'Move failed — repository was NOT imported: ' . trim($err ?: $out));
+                $this->redirect("/clients/{$agentId}?tab=repos");
+                return;
+            }
+            $this->db->insert('server_log', [
+                'agent_id' => $agentId,
+                'level' => 'info',
+                'message' => "Repository \"{$name}\" moved for adoption: {$sourcePath} -> {$destPath}",
+            ]);
+        }
+
+        // From here the repo sits at the canonical path — register it through
+        // the standard import path (DB row, perms, ssh-gate paths, catalog sync).
+        $this->importLocal($agentId, $agent, $name, $encryption, $passphrase, $storageLocationId);
+    }
 }
