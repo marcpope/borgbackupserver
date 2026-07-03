@@ -78,6 +78,17 @@ class PluginConfigController extends Controller
 
         $config = $this->sanitizeHostedConfig($pluginId, $config);
 
+        // Duplicate names hit the unique_agent_config_name key — catch it
+        // up front instead of surfacing a raw PDOException
+        $duplicate = $this->db->fetchOne(
+            "SELECT id FROM plugin_configs WHERE agent_id = ? AND plugin_id = ? AND name = ?",
+            [$id, $pluginId, $name]
+        );
+        if ($duplicate) {
+            $this->flash('danger', "A configuration named \"{$name}\" already exists for this plugin. Choose a different name.");
+            $this->redirect("/clients/{$id}?tab=plugins");
+        }
+
         $pluginManager = new PluginManager();
         $pluginManager->savePluginConfig($id, $pluginId, $name, $config);
 
@@ -118,6 +129,19 @@ class PluginConfigController extends Controller
         }
 
         $config = $this->sanitizeHostedConfigByConfigId($configId, $config);
+
+        // Renaming to another config's name would hit the same unique key
+        $duplicate = $this->db->fetchOne(
+            "SELECT pc.id FROM plugin_configs pc
+             JOIN plugin_configs self ON self.id = ?
+             WHERE pc.agent_id = self.agent_id AND pc.plugin_id = self.plugin_id
+               AND pc.name = ? AND pc.id != self.id",
+            [$configId, $name]
+        );
+        if ($duplicate) {
+            $this->flash('danger', "A configuration named \"{$name}\" already exists for this plugin. Choose a different name.");
+            $this->redirect("/clients/{$id}?tab=plugins");
+        }
 
         $pluginManager = new PluginManager();
         $pluginManager->updatePluginConfig($configId, $name, $config);

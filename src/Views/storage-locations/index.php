@@ -1406,12 +1406,13 @@ $s3SyncServerBackups = ($settings['s3_sync_server_backups'] ?? '0') === '1';
     </div>
     <div class="card-body">
 
-<?php if (!$s3Configured): ?>
+<?php if (!$s3Configured && empty($s3Destinations)): ?>
 <div class="alert alert-info mb-0">S3 offsite sync is not configured. <a href="/storage-locations?section=s3">Configure it</a> to replicate local repos to S3-compatible storage.</div>
 <?php else: ?>
 <div class="row g-3">
+    <?php if ($s3Configured): ?>
     <div class="col-xl-4 col-lg-6">
-        <div class="card border-0 shadow-sm">
+        <div class="card border-0 shadow-sm h-100">
             <div class="card-body">
                 <div class="d-flex justify-content-between align-items-start mb-2">
                     <h6 class="mb-0"><i class="bi bi-cloud-arrow-up me-1 text-primary"></i> Global S3</h6>
@@ -1447,9 +1448,50 @@ $s3SyncServerBackups = ($settings['s3_sync_server_backups'] ?? '0') === '1';
                     </div>
                 </div>
                 <span class="badge bg-success"><i class="bi bi-check-circle me-1"></i>Configured</span>
+                <div class="form-text mt-1">Shared credentials — S3 configs below can reference these.</div>
             </div>
         </div>
     </div>
+    <?php endif; ?>
+
+    <!-- Named S3 destination configs (per client). Repositories can
+         replicate to several of these at once. -->
+    <?php foreach ($s3Destinations ?? [] as $dest):
+        $destCfg = json_decode($dest['config'] ?? '{}', true) ?: [];
+        $usesGlobal = ($destCfg['credential_source'] ?? 'global') === 'global';
+    ?>
+    <div class="col-xl-4 col-lg-6">
+        <div class="card border-0 shadow-sm h-100">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-start mb-2">
+                    <h6 class="mb-0 text-truncate"><i class="bi bi-bucket me-1 text-info"></i> <?= htmlspecialchars($dest['name']) ?></h6>
+                    <a class="btn btn-sm btn-outline-secondary flex-shrink-0" href="/clients/<?= $dest['agent_id'] ?>?tab=plugins" title="Edit on the client's Plugins tab">
+                        <i class="bi bi-gear"></i>
+                    </a>
+                </div>
+                <div class="row g-1 small mb-2">
+                    <div class="col-5 text-muted">Client</div>
+                    <div class="col-7 text-truncate"><a href="/clients/<?= $dest['agent_id'] ?>"><?= htmlspecialchars($dest['agent_name']) ?></a></div>
+                    <div class="col-5 text-muted">Credentials</div>
+                    <div class="col-7 text-truncate"><?= $usesGlobal ? 'Global S3 Settings' : htmlspecialchars($destCfg['endpoint'] ?? 'Custom') ?></div>
+                    <?php if (!$usesGlobal && !empty($destCfg['bucket'])): ?>
+                    <div class="col-5 text-muted">Bucket</div>
+                    <div class="col-7 text-truncate"><?= htmlspecialchars($destCfg['bucket']) ?></div>
+                    <?php endif; ?>
+                    <div class="col-5 text-muted">Repositories</div>
+                    <div class="col-7"><?= (int) $dest['repo_count'] ?> syncing</div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <?php endforeach; ?>
+</div>
+<div class="form-text mt-3">
+    <i class="bi bi-info-circle me-1"></i>
+    Repositories can replicate to <strong>multiple S3 destinations</strong>. To add one:
+    create an <em>S3 Offsite Sync</em> configuration on the client's Plugins tab (with custom
+    credentials for a second provider), then attach it on the repository's page under
+    <em>S3 Offsite Mirror &rarr; Add Destination</em>.
 </div>
 <?php endif; ?>
     </div>

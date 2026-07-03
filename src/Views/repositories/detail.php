@@ -130,6 +130,15 @@ $sizeLabel = $totalSize > 0 ? \BBS\Services\ServerStats::formatBytes((int) $tota
                 <?php endforeach; ?>
                 <?php endif; ?>
 
+                <?php if (empty($s3PluginConfigs) && !empty($s3SyncConfigs)): ?>
+                <div class="form-text mt-2">
+                    <i class="bi bi-info-circle me-1"></i>
+                    To replicate to another S3 destination, create another <em>S3 Offsite Sync</em>
+                    configuration on the <a href="/clients/<?= $agentId ?>?tab=plugins">client's Plugins tab</a>
+                    (e.g. with a second provider's credentials), then attach it here.
+                </div>
+                <?php endif; ?>
+
                 <?php if (!empty($s3PluginConfigs)): ?>
                 <!-- Add a(nother) destination -->
                 <form method="POST" action="/clients/<?= $agentId ?>/repo/<?= $repo['id'] ?>/s3-config" class="<?= !empty($s3SyncConfigs) ? 'mt-3' : '' ?>">
