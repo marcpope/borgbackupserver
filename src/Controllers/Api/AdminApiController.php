@@ -275,7 +275,10 @@ class AdminApiController extends Controller
                     COALESCE(rsc.enabled, 0) AS s3_sync_enabled,
                     rsc.last_sync_at AS s3_last_sync_at
              FROM repositories r
-             LEFT JOIN repository_s3_configs rsc ON rsc.repository_id = r.id
+             LEFT JOIN (
+                 SELECT repository_id, MAX(enabled) AS enabled, MAX(last_sync_at) AS last_sync_at
+                 FROM repository_s3_configs GROUP BY repository_id
+             ) rsc ON rsc.repository_id = r.id
              WHERE r.agent_id = ? ORDER BY r.name", [$id]
         );
         foreach ($repos as &$r) {
@@ -1685,15 +1688,15 @@ class AdminApiController extends Controller
             $this->json(['error' => 'Repository not found'], 404);
         }
 
-        $existing = $this->db->fetchOne("SELECT id FROM repository_s3_configs WHERE repository_id = ?", [$repoId]);
-        if ($existing) {
-            $this->db->update('repository_s3_configs', ['enabled' => $enabled ? 1 : 0], 'repository_id = ?', [$repoId]);
-        } else {
-            $this->db->insert('repository_s3_configs', [
-                'repository_id' => $repoId,
-                'enabled' => $enabled ? 1 : 0,
-            ]);
+        // Toggles every destination this repo replicates to. A destination
+        // link must already exist — creating one needs a plugin_config_id,
+        // which this endpoint doesn't take (the old insert-without-config
+        // branch violated the NOT NULL foreign key anyway).
+        $existing = $this->db->fetchOne("SELECT id FROM repository_s3_configs WHERE repository_id = ? LIMIT 1", [$repoId]);
+        if (!$existing) {
+            $this->json(['error' => 'Repository has no S3 destination configured'], 400);
         }
+        $this->db->update('repository_s3_configs', ['enabled' => $enabled ? 1 : 0], 'repository_id = ?', [$repoId]);
 
         $this->json([
             'id' => $repo['id'],
@@ -1728,7 +1731,10 @@ class AdminApiController extends Controller
                     rsc.last_sync_at AS s3_last_sync_at
              FROM repositories r
              LEFT JOIN agents a ON a.id = r.agent_id
-             LEFT JOIN repository_s3_configs rsc ON rsc.repository_id = r.id
+             LEFT JOIN (
+                 SELECT repository_id, MAX(enabled) AS enabled, MAX(last_sync_at) AS last_sync_at
+                 FROM repository_s3_configs GROUP BY repository_id
+             ) rsc ON rsc.repository_id = r.id
              ORDER BY a.name, r.name"
         );
 

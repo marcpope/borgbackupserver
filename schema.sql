@@ -434,7 +434,7 @@ CREATE TABLE repository_s3_configs (
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (repository_id) REFERENCES repositories(id) ON DELETE CASCADE,
     FOREIGN KEY (plugin_config_id) REFERENCES plugin_configs(id) ON DELETE RESTRICT,
-    UNIQUE KEY unique_repo_s3 (repository_id)
+    UNIQUE KEY unique_repo_s3_dest (repository_id, plugin_config_id)
 ) ENGINE=InnoDB;
 
 INSERT INTO plugins (slug, name, description, plugin_type) VALUES

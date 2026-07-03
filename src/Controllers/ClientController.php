@@ -406,54 +406,59 @@ class ClientController extends Controller
         $globalS3Bucket = $this->db->fetchOne("SELECT `value` FROM settings WHERE `key` = 's3_bucket'");
         $globalS3Configured = !empty($globalS3Bucket['value']);
 
-        // Repos with S3 sync enabled (via repository_s3_configs)
+        // Repos with S3 sync enabled (via repository_s3_configs) — a repo can
+        // replicate to several destinations, so aggregate per repo
         $s3SyncRepos = $this->db->fetchAll("
-            SELECT rsc.repository_id, rsc.plugin_config_id, rsc.last_sync_at as last_s3_sync, rsc.enabled
+            SELECT rsc.repository_id,
+                   COUNT(*) AS destinations,
+                   MAX(rsc.last_sync_at) AS last_s3_sync,
+                   MAX(rsc.enabled) AS enabled
             FROM repository_s3_configs rsc
             JOIN repositories r ON r.id = rsc.repository_id
             WHERE r.agent_id = ?
+            GROUP BY rsc.repository_id
         ", [$id]);
         $s3SyncByRepo = [];
         foreach ($s3SyncRepos as $sr) {
             $s3SyncByRepo[$sr['repository_id']] = [
                 'last_sync' => $sr['last_s3_sync'],
-                'plugin_config_id' => $sr['plugin_config_id'],
+                'destinations' => (int) $sr['destinations'],
                 'enabled' => $sr['enabled'],
             ];
         }
 
-        // Detect orphaned S3 repos (exist in S3 but not locally)
-        $s3Orphans = [];
-        $s3PluginConfigId = null;
-        // Get any S3 plugin config for this agent (for orphan detection)
-        $s3PluginConfig = $this->db->fetchOne("
+        // Detect orphaned S3 repos (exist in S3 but not locally). Checks every
+        // S3 destination config for this agent; an orphan remembers which
+        // destination it was found in so restore pulls from the right one.
+        $s3Orphans = []; // name => plugin_config_id
+        $agentS3Configs = $this->db->fetchAll("
             SELECT pc.id as plugin_config_id, pc.config
             FROM plugin_configs pc
             JOIN plugins p ON p.id = pc.plugin_id
             WHERE p.slug = 's3_sync' AND pc.agent_id = ?
-            LIMIT 1
         ", [$id]);
 
-        if ($s3PluginConfig) {
-            $s3PluginConfigId = $s3PluginConfig['plugin_config_id'];
-            $config = json_decode($s3PluginConfig['config'] ?? '{}', true) ?: [];
+        if (!empty($agentS3Configs)) {
             $s3Service = new S3SyncService();
-            $creds = $s3Service->resolveCredentials($config);
+            // Local repo names, sanitized the same way as S3
+            $localRepoNames = array_map(
+                fn($r) => preg_replace('/[^a-zA-Z0-9_-]/', '_', $r['name']),
+                $repositories
+            );
 
-            if (!empty($creds['bucket'])) {
+            foreach ($agentS3Configs as $s3PluginConfig) {
+                $config = json_decode($s3PluginConfig['config'] ?? '{}', true) ?: [];
+                $creds = $s3Service->resolveCredentials($config);
+                if (empty($creds['bucket'])) {
+                    continue;
+                }
                 $remoteResult = $s3Service->listRemoteRepos($agent['name'], $creds);
-                if ($remoteResult['success'] && !empty($remoteResult['repos'])) {
-                    // Get local repo names (sanitized the same way as S3)
-                    $localRepoNames = array_map(
-                        fn($r) => preg_replace('/[^a-zA-Z0-9_-]/', '_', $r['name']),
-                        $repositories
-                    );
-
-                    // Find repos that exist in S3 but not locally
-                    foreach ($remoteResult['repos'] as $remoteName) {
-                        if (!in_array($remoteName, $localRepoNames)) {
-                            $s3Orphans[] = $remoteName;
-                        }
+                if (!$remoteResult['success'] || empty($remoteResult['repos'])) {
+                    continue;
+                }
+                foreach ($remoteResult['repos'] as $remoteName) {
+                    if (!in_array($remoteName, $localRepoNames) && !isset($s3Orphans[$remoteName])) {
+                        $s3Orphans[$remoteName] = $s3PluginConfig['plugin_config_id'];
                     }
                 }
             }
@@ -482,7 +487,6 @@ class ClientController extends Controller
             'pluginConfigs' => $pluginConfigs,
             's3SyncByRepo' => $s3SyncByRepo,
             's3Orphans' => $s3Orphans,
-            's3PluginConfigId' => $s3PluginConfigId,
             'globalS3Configured' => $globalS3Configured,
             'remoteSshConfigs' => (new \BBS\Services\RemoteSshService())->getAll(),
             'storageLocations' => $this->db->fetchAll("SELECT * FROM storage_locations ORDER BY is_default DESC, label"),

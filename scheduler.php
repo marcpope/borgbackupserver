@@ -444,11 +444,19 @@ foreach ($serverJobs as $sj) {
             'message' => $logMessage,
         ]);
 
-        // Update last_sync_at in repository_s3_configs after successful sync
+        // Update last_sync_at in repository_s3_configs after successful sync —
+        // scoped to this job's destination when it has one (multi-destination
+        // repos track each destination's sync time separately)
         if ($s3Result === 'completed' && !empty($sj['repository_id'])) {
-            $db->update('repository_s3_configs', [
-                'last_sync_at' => $now,
-            ], 'repository_id = ?', [$sj['repository_id']]);
+            if (!empty($sj['plugin_config_id'])) {
+                $db->update('repository_s3_configs', [
+                    'last_sync_at' => $now,
+                ], 'repository_id = ? AND plugin_config_id = ?', [$sj['repository_id'], $sj['plugin_config_id']]);
+            } else {
+                $db->update('repository_s3_configs', [
+                    'last_sync_at' => $now,
+                ], 'repository_id = ?', [$sj['repository_id']]);
+            }
         }
 
         // Send notifications for S3 sync results
@@ -1896,45 +1904,50 @@ foreach ($serverJobs as $sj) {
         }
     }
 
-    // Auto-queue S3 sync after successful prune (skip for remote SSH — already offsite)
+    // Auto-queue S3 sync after successful prune (skip for remote SSH — already offsite).
+    // A repo can replicate to several S3 destinations (#263): queue one sync
+    // job per enabled destination config.
     if ($result === 'completed' && $sj['task_type'] === 'prune' && !empty($sj['repository_id']) && !$isRemoteSsh) {
-        // Check repository_s3_configs for S3 sync configuration
-        $repoS3Config = $db->fetchOne(
-            "SELECT rsc.plugin_config_id
+        $repoS3Configs = $db->fetchAll(
+            "SELECT rsc.plugin_config_id, pc.name AS config_name
              FROM repository_s3_configs rsc
+             JOIN plugin_configs pc ON pc.id = rsc.plugin_config_id
              WHERE rsc.repository_id = ? AND rsc.enabled = 1",
             [$sj['repository_id']]
         );
 
-        if ($repoS3Config) {
-            // Check if s3_sync is already queued or running for this repo
+        foreach ($repoS3Configs as $repoS3Config) {
+            // Dedupe per destination — another destination's pending sync
+            // must not block this one
             $existingS3 = $db->fetchOne(
                 "SELECT id FROM backup_jobs
-                 WHERE repository_id = ? AND task_type = 's3_sync' AND status IN ('queued', 'sent', 'running')
+                 WHERE repository_id = ? AND task_type = 's3_sync' AND plugin_config_id = ?
+                   AND status IN ('queued', 'sent', 'running')
                  LIMIT 1",
-                [$sj['repository_id']]
+                [$sj['repository_id'], $repoS3Config['plugin_config_id']]
             );
             if ($existingS3) {
-                echo date('Y-m-d H:i:s') . " Skipped: S3 sync already queued/running (job #{$existingS3['id']}) for repo #{$sj['repository_id']}\n";
-            } else {
-                $s3JobId = $db->insert('backup_jobs', [
-                    'agent_id' => $sj['agent_id'],
-                    'repository_id' => $sj['repository_id'],
-                    'task_type' => 's3_sync',
-                    'plugin_config_id' => $repoS3Config['plugin_config_id'],
-                    'status' => 'queued',
-                ]);
-
-                $db->insert('server_log', [
-                    'agent_id' => $sj['agent_id'],
-                    'backup_job_id' => $s3JobId,
-                    'level' => 'info',
-                    'message' => "S3 sync queued (job #{$s3JobId}) after prune job #{$sj['id']}",
-                ]);
-
-                // Update last_sync_at will happen when the job completes
-                echo date('Y-m-d H:i:s') . " Queued: S3 sync job #{$s3JobId} after prune #{$sj['id']}\n";
+                echo date('Y-m-d H:i:s') . " Skipped: S3 sync to \"{$repoS3Config['config_name']}\" already queued/running (job #{$existingS3['id']}) for repo #{$sj['repository_id']}\n";
+                continue;
             }
+
+            $s3JobId = $db->insert('backup_jobs', [
+                'agent_id' => $sj['agent_id'],
+                'repository_id' => $sj['repository_id'],
+                'task_type' => 's3_sync',
+                'plugin_config_id' => $repoS3Config['plugin_config_id'],
+                'status' => 'queued',
+            ]);
+
+            $db->insert('server_log', [
+                'agent_id' => $sj['agent_id'],
+                'backup_job_id' => $s3JobId,
+                'level' => 'info',
+                'message' => "S3 sync to \"{$repoS3Config['config_name']}\" queued (job #{$s3JobId}) after prune job #{$sj['id']}",
+            ]);
+
+            // Update last_sync_at will happen when the job completes
+            echo date('Y-m-d H:i:s') . " Queued: S3 sync job #{$s3JobId} (\"{$repoS3Config['config_name']}\") after prune #{$sj['id']}\n";
         }
     }
 }

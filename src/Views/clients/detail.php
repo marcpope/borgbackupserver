@@ -1043,7 +1043,7 @@ $sizeDisplay = $totalSize > 0 ? \BBS\Services\ServerStats::formatBytes((int) $to
                     </div>
                 </div>
                 <div class="repo-status-bar">
-                    <?= $sizeLabel ?> &middot; <?= $repo['archive_count'] ?> archives<?php if (isset($s3SyncByRepo[$repo['id']])): ?> &middot; <i class="bi bi-cloud text-info" title="Replicated to S3<?= !empty($s3SyncByRepo[$repo['id']]['last_sync']) ? ' (last: ' . \BBS\Core\TimeHelper::ago($s3SyncByRepo[$repo['id']]['last_sync']) . ')' : '' ?>"></i> S3 Sync<?php endif; ?>
+                    <?= $sizeLabel ?> &middot; <?= $repo['archive_count'] ?> archives<?php if (isset($s3SyncByRepo[$repo['id']])): ?> &middot; <i class="bi bi-cloud text-info" title="Replicated to S3<?= !empty($s3SyncByRepo[$repo['id']]['last_sync']) ? ' (last: ' . \BBS\Core\TimeHelper::ago($s3SyncByRepo[$repo['id']]['last_sync']) . ')' : '' ?>"></i> S3 Sync<?= ($s3SyncByRepo[$repo['id']]['destinations'] ?? 1) > 1 ? ' &times;' . $s3SyncByRepo[$repo['id']]['destinations'] : '' ?><?php endif; ?>
                 </div>
             </div>
         </div>
@@ -1083,9 +1083,8 @@ $sizeDisplay = $totalSize > 0 ? \BBS\Services\ServerStats::formatBytes((int) $to
                         <p class="text-danger fw-bold">This action is NOT reversible.</p>
                         <div class="form-check mt-3 p-3 bg-body-secondary rounded">
                             <input class="form-check-input" type="checkbox" name="delete_from_s3" id="deleteFromS3_<?= $repo['id'] ?>" value="1">
-                            <input type="hidden" name="plugin_config_id" value="<?= $s3SyncByRepo[$repo['id']]['plugin_config_id'] ?>">
                             <label class="form-check-label" for="deleteFromS3_<?= $repo['id'] ?>">
-                                <i class="bi bi-cloud text-info me-1"></i>Also delete from S3 offsite storage
+                                <i class="bi bi-cloud text-info me-1"></i>Also delete from S3 offsite storage<?= ($s3SyncByRepo[$repo['id']]['destinations'] ?? 1) > 1 ? ' (all ' . $s3SyncByRepo[$repo['id']]['destinations'] . ' destinations)' : '' ?>
                             </label>
                             <div class="form-text">If unchecked, the S3 copy will remain and can be restored later.</div>
                         </div>
@@ -1487,7 +1486,7 @@ $sizeDisplay = $totalSize > 0 ? \BBS\Services\ServerStats::formatBytes((int) $to
                 You can restore them to recover data or re-enable backups.
             </p>
             <div class="row g-3">
-                <?php foreach ($s3Orphans as $orphanName): ?>
+                <?php foreach ($s3Orphans as $orphanName => $orphanConfigId): ?>
                 <div class="col-md-6 col-lg-4">
                     <div class="card border h-100" style="border-style: dashed !important;">
                         <div class="card-body p-3">
@@ -1505,7 +1504,7 @@ $sizeDisplay = $totalSize > 0 ? \BBS\Services\ServerStats::formatBytes((int) $to
                             <form method="POST" action="/clients/<?= $agent['id'] ?>/restore-orphan" class="mt-2" data-confirm="Restore repository &quot;<?= htmlspecialchars($orphanName) ?>&quot; from S3?&#10;&#10;This will create the repository and download data from S3.">
                                 <input type="hidden" name="csrf_token" value="<?= $this->csrfToken() ?>">
                                 <input type="hidden" name="repo_name" value="<?= htmlspecialchars($orphanName) ?>">
-                                <input type="hidden" name="plugin_config_id" value="<?= $s3PluginConfigId ?>">
+                                <input type="hidden" name="plugin_config_id" value="<?= $orphanConfigId ?>">
                                 <button type="submit" class="btn btn-sm btn-outline-info w-100">
                                     <i class="bi bi-cloud-download me-1"></i>Restore from S3
                                 </button>
