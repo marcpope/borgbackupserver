@@ -21,7 +21,7 @@
 ## Version Numbers
 - **Server version:** `VERSION` file in project root.
 - **Agent version:** `AGENT_VERSION` constant in `agent/bbs-agent.py`.
-- **Always synchronized.** As of `2.53.0` the agent and server share the same version number. When cutting a release, bump both to the same value, regardless of whether the agent code changed.
+- **Agent version bumps only when agent code changes.** Point releases bump `VERSION` alone; leave `AGENT_VERSION` at its last value so agents don't self-update for nothing. On major feature releases (or whenever the agent actually changed), bring both to the same number to re-sync.
 
 ## Server Installation Path
 Software is installed at `/var/www/bbs/` on all servers. Config lives at `/var/www/bbs/config/.env`.
