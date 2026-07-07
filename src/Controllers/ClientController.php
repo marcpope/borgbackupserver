@@ -276,6 +276,13 @@ class ClientController extends Controller
             'message' => "Client created. SSH provisioned: user {$sshResult['unix_user']}, home {$sshResult['home_dir']}",
         ]);
 
+        // The owner gets access and all permissions on their client by
+        // default; an admin can back individual permissions off in the
+        // user's profile (#337)
+        if ($userId) {
+            (new PermissionService())->grantOwnerDefaults($userId, $id);
+        }
+
         $this->flash('success', 'Client created. To install, copy the Install Agent code and run it in a terminal on the client machine.');
         $this->redirect("/clients/{$id}?tab=install");
     }
@@ -1627,6 +1634,13 @@ class ClientController extends Controller
 
         if (!empty($data)) {
             $this->db->update('agents', $data, 'id = ?', [$id]);
+
+            // A newly assigned owner gets access and all permissions by
+            // default, revocable in the user's profile (#337)
+            if (!empty($data['user_id']) && $data['user_id'] !== (int) ($agent['user_id'] ?? 0)) {
+                (new PermissionService())->grantOwnerDefaults($data['user_id'], $id);
+            }
+
             $this->flash('success', 'Client updated.');
         }
 
@@ -1635,13 +1649,20 @@ class ClientController extends Controller
 
     public function delete(int $id): void
     {
-        $this->requireAdmin();
+        $this->requireAuth();
         $this->verifyCsrf();
 
         $agent = $this->getAgent($id);
         if (!$agent) {
             $this->flash('danger', 'Client not found.');
             $this->redirect('/clients');
+        }
+
+        // Admins, or the client's owner — owners manage the full lifecycle
+        // of their own clients (#337)
+        if (!$this->isAdmin() && (int) ($agent['user_id'] ?? 0) !== (int) ($_SESSION['user_id'] ?? 0)) {
+            $this->flash('danger', 'Only an admin or the client\'s owner can delete it.');
+            $this->redirect("/clients/{$id}");
         }
 
         // Deprovision SSH user

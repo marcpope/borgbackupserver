@@ -139,6 +139,26 @@ class PermissionService
     }
 
     /**
+     * Grant a client's owner the default full access: visibility plus all
+     * five permissions on that agent (#337). Rows are materialized (not
+     * implicit) so an admin can back individual permissions off afterward
+     * in the user's profile. Idempotent — existing rows are left alone.
+     */
+    public function grantOwnerDefaults(int $userId, int $agentId): void
+    {
+        $this->db->query(
+            "INSERT IGNORE INTO user_agents (user_id, agent_id) VALUES (?, ?)",
+            [$userId, $agentId]
+        );
+        foreach (self::ALL_PERMISSIONS as $permission) {
+            $this->db->query(
+                "INSERT IGNORE INTO user_permissions (user_id, permission, agent_id) VALUES (?, ?, ?)",
+                [$userId, $permission, $agentId]
+            );
+        }
+    }
+
+    /**
      * Assign user to agents.
      */
     public function assignAgents(int $userId, array $agentIds): void

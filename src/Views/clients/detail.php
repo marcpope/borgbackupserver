@@ -239,7 +239,12 @@ $sizeDisplay = $totalSize > 0 ? \BBS\Services\ServerStats::formatBytes((int) $to
             <i class="bi bi-arrow-counterclockwise me-1"></i><span class="tab-label">Restore</span>
         </a>
     </li>
-    <?php if ($this->isAdmin()): ?>
+    <?php
+    // Install and Delete: admins, or the client's owner — owners manage
+    // the full lifecycle of their own clients (#337)
+    $isOwnerOrAdmin = $this->isAdmin() || (int) ($agent['user_id'] ?? 0) === (int) ($_SESSION['user_id'] ?? 0);
+    ?>
+    <?php if ($isOwnerOrAdmin): ?>
     <li class="nav-item">
         <a class="nav-link <?= $tab === 'install' ? 'active' : '' ?>" href="?tab=install">
             <i class="bi bi-download me-1"></i><span class="tab-label">Install</span>
@@ -3556,7 +3561,7 @@ GRANT ALL PRIVILEGES ON DATABASE mydb TO <span id="pgUser2g">bbs_backup</span>;<
 
     <?php endif; ?>
 
-<?php elseif ($tab === 'install'): ?>
+<?php elseif ($tab === 'install' && $isOwnerOrAdmin): ?>
     <h5 class="mb-3">Install Agent</h5>
 
     <?php $appUrl = rtrim(\BBS\Core\Config::get('APP_URL', 'https://' . $serverHost), '/'); ?>
@@ -3640,7 +3645,7 @@ GRANT ALL PRIVILEGES ON DATABASE mydb TO <span id="pgUser2g">bbs_backup</span>;<
         </div>
     </div>
 
-<?php elseif ($tab === 'delete'): ?>
+<?php elseif ($tab === 'delete' && $isOwnerOrAdmin): ?>
     <h5 class="mb-3">Delete Client : <?= htmlspecialchars($agent['name']) ?></h5>
 
     <p class="text-muted">You have selected to delete a client from Borg Backup Server. When you delete a client, all backup data will be deleted including schedules and repositories. The client machine will be un-affected.</p>
