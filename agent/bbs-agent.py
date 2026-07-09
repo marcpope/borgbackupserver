@@ -1699,19 +1699,21 @@ def execute_plugin_pg_dump(config):
     pg_env["PGPASSWORD"] = password
 
     if isinstance(databases, str) and databases.strip() == "*":
-        # List all databases via psql
-        list_cmd = ["psql", "-h", host, "-p", port, "-U", user, "-l", "-t", "-A"]
+        # List databases via a catalog query. Parsing `psql -l` is unsafe: DBs with
+        # GRANTed privileges have a multi-line "Access privileges" column whose
+        # continuation lines (e.g. "<grantee>=<privs>/<grantor>") get mis-parsed as names.
+        list_cmd = ["psql", "-h", host, "-p", port, "-U", user, "-tAc",
+                    "SELECT datname FROM pg_database WHERE datallowconn AND NOT datistemplate"]
         result = subprocess.run(list_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=pg_env)
         if result.returncode != 0:
             raise Exception("Failed to list databases: {}".format(result.stderr.decode('utf-8', errors='replace').strip()))
         if isinstance(exclude, str):
             exclude = [x.strip() for x in exclude.split(",")]
-        # psql -l -t -A outputs: dbname|owner|encoding|collate|ctype|access
         databases = []
         for line in result.stdout.decode("utf-8", errors="replace").strip().split("\n"):
-            parts = line.split("|")
-            if parts and parts[0].strip() and parts[0].strip() not in exclude:
-                databases.append(parts[0].strip())
+            name = line.strip()
+            if name and name not in exclude:
+                databases.append(name)
     elif isinstance(databases, str):
         databases = [d.strip() for d in databases.split(",") if d.strip()]
 
@@ -1798,13 +1800,14 @@ def test_plugin_pg_dump(config):
         raise Exception("Connection failed: {}".format(result.stderr.decode('utf-8', errors='replace').strip()))
 
     # List databases
-    cmd2 = ["psql", "-h", host, "-p", port, "-U", user, "-l", "-t", "-A"]
+    cmd2 = ["psql", "-h", host, "-p", port, "-U", user, "-tAc",
+            "SELECT datname FROM pg_database WHERE datallowconn AND NOT datistemplate"]
     result2 = subprocess.run(cmd2, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=pg_env, timeout=15)
     dbs = []
     for line in result2.stdout.decode("utf-8", errors="replace").strip().split("\n"):
-        parts = line.split("|")
-        if parts and parts[0].strip():
-            dbs.append(parts[0].strip())
+        name = line.strip()
+        if name:
+            dbs.append(name)
     return "Connection successful. Found {} database(s): {}".format(len(dbs), ', '.join(dbs[:10]))
 
 
