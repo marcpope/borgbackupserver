@@ -1764,10 +1764,13 @@ class AdminApiController extends Controller
 
         $storage = ['used_bytes' => 0, 'total_bytes' => 0, 'locations' => 0];
         $storage['locations'] = (int) ($this->db->fetchOne("SELECT COUNT(*) AS c FROM storage_locations")['c'] ?? 0);
-        $defaultLoc = $this->db->fetchOne("SELECT path FROM storage_locations WHERE is_default = 1");
+        $defaultLoc = $this->db->fetchOne("SELECT id, path, capacity_bytes FROM storage_locations WHERE is_default = 1");
         if ($defaultLoc) {
-            $disk = \BBS\Services\ServerStats::getDiskUsage($defaultLoc['path']);
-            if ($disk) {
+            // capacityForLocation(), so a default location on a mount that
+            // can't report its own size shows nothing rather than the local
+            // cache disk's figures (#415).
+            $disk = \BBS\Services\ServerStats::capacityForLocation($defaultLoc);
+            if ($disk && $disk['used'] !== null) {
                 $storage['used_bytes'] = (int) $disk['used'];
                 $storage['total_bytes'] = (int) $disk['total'];
             }
@@ -2165,18 +2168,25 @@ class AdminApiController extends Controller
         // widget shows every signed-in user, so no admin gate.
         $this->requireApiAuth();
 
-        $loc = $this->db->fetchOne("SELECT path FROM storage_locations WHERE is_default = 1");
+        $loc = $this->db->fetchOne("SELECT id, path, capacity_bytes FROM storage_locations WHERE is_default = 1");
         if (!$loc) {
             $this->json(['error' => 'No default storage location configured'], 404);
         }
-        $disk = \BBS\Services\ServerStats::getDiskUsage($loc['path']);
-        if (!$disk) {
-            $this->json(['error' => 'Could not read disk usage for default storage'], 500);
+        $disk = \BBS\Services\ServerStats::capacityForLocation($loc);
+        if (!$disk || $disk['used'] === null) {
+            // A mount that can't report its own size and hasn't been told it:
+            // say why rather than returning the cache disk's numbers (#415).
+            $this->json([
+                'error' => 'Capacity is unknown for the default storage location',
+                'reason' => \BBS\Services\ServerStats::capacityUnknownReason($loc)
+                    ?: 'Could not read disk usage for default storage',
+            ], 409);
         }
         $this->json([
             'provisioned_bytes' => (int) $disk['total'],
             'used_bytes' => (int) $disk['used'],
             'free_bytes' => (int) $disk['free'],
+            'capacity_source' => $disk['source'],
         ]);
     }
 
