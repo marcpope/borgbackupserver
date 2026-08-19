@@ -2801,12 +2801,21 @@ if ($cleaned > 0) {
 // would cut them off. So the script waits: once nothing is left running for
 // that repository, the client is sent a job to run it.
 //
-// Candidates are completed backups whose repository is now idle and which have
-// no post-script job already. The 24-hour window keeps this from trawling all
-// of history every minute; a repository busy for longer than that has bigger
-// problems than a deferred hook.
+// Candidates are completed backups whose repository is now idle and whose
+// post-script hasn't already been covered. The 24-hour window keeps this from
+// trawling all of history every minute; a repository busy for longer than that
+// has bigger problems than a deferred hook.
+//
+// "Covered" is per plan and by time, not per job. Keying it to each backup
+// meant that several backups of one repository inside the window each got
+// their own post-script the moment the repository fell idle — one backup, one
+// script, but three backups queued three scripts back to back (#422). A
+// deferred script runs against the repository as it stands rather than against
+// one archive, so a script already queued after this backup finished has
+// covered it. Newest first, so the job that carries the context is the most
+// recent one.
 $deferredHooks = $db->fetchAll("
-    SELECT bj.id, bj.agent_id, bj.backup_plan_id, bj.repository_id, a.name AS agent_name
+    SELECT bj.id, bj.agent_id, bj.backup_plan_id, bj.repository_id, bj.completed_at, a.name AS agent_name
     FROM backup_jobs bj
     JOIN agents a ON a.id = bj.agent_id
     WHERE bj.task_type = 'backup'
@@ -2816,7 +2825,9 @@ $deferredHooks = $db->fetchAll("
       AND bj.completed_at > DATE_SUB(NOW(), INTERVAL 24 HOUR)
       AND NOT EXISTS (
           SELECT 1 FROM backup_jobs c
-          WHERE c.parent_job_id = bj.id AND c.task_type = 'plugin_post'
+          WHERE c.task_type = 'plugin_post'
+            AND c.backup_plan_id = bj.backup_plan_id
+            AND c.queued_at >= bj.completed_at
       )
       AND NOT EXISTS (
           SELECT 1 FROM backup_jobs busy
@@ -2824,11 +2835,18 @@ $deferredHooks = $db->fetchAll("
             AND busy.status IN ('queued', 'sent', 'running')
             AND busy.task_type <> 'plugin_post'
       )
+    ORDER BY bj.completed_at DESC
 ");
 
 if (!empty($deferredHooks)) {
     $hookPluginManager = new \BBS\Services\PluginManager();
+    // Two backups of the same plan can both be candidates in this pass; the
+    // subquery above can't see a row this loop inserted a moment ago.
+    $hookedPlans = [];
     foreach ($deferredHooks as $dh) {
+        if (isset($hookedPlans[(int) $dh['backup_plan_id']])) {
+            continue;
+        }
         // Read the timing off the resolved config rather than the stored JSON:
         // a plan may use a named plugin config, in which case the row on the
         // plan holds nothing useful.
@@ -2874,6 +2892,7 @@ if (!empty($deferredHooks)) {
                 'level' => 'info',
                 'message' => "Repository work finished — queued post-script for \"{$cfgLabel}\" on client \"{$dh['agent_name']}\" (job #{$hookJobId})",
             ]);
+            $hookedPlans[(int) $dh['backup_plan_id']] = true;
             echo date('Y-m-d H:i:s') . " Queued deferred post-script job #{$hookJobId} for plan {$dh['backup_plan_id']}\n";
         }
     }

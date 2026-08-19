@@ -349,14 +349,7 @@ class QueueManager
                     'plugin' => $testPayload,
                 ];
             } elseif ($job['task_type'] === 'plugin_post') {
-                // Deferred shell-hook post-script: the same config the backup
-                // ran, sent back once the repository's own work is finished.
-                $pluginManager = new PluginManager();
-                $taskPayload = [
-                    'task' => 'plugin_post',
-                    'job_id' => $job['id'],
-                    'plugin' => $pluginManager->buildTestPayload((int) $job['plugin_config_id']),
-                ];
+                $taskPayload = $this->buildPluginPostPayload($job);
             } elseif ($job['task_type'] === 'list_dir') {
                 // Browse-filesystem requests from the plan-create modal.
                 // Params (path / depth / show_hidden / show_all / follow_symlinks)
@@ -573,12 +566,7 @@ class QueueManager
                     'plugin' => $testPayload,
                 ];
             } elseif ($job['task_type'] === 'plugin_post') {
-                $pluginManager = new PluginManager();
-                $tasks[] = [
-                    'task' => 'plugin_post',
-                    'job_id' => $job['id'],
-                    'plugin' => $pluginManager->buildTestPayload((int) $job['plugin_config_id']),
-                ];
+                $tasks[] = $this->buildPluginPostPayload($job);
             } elseif ($job['task_type'] === 'list_dir') {
                 // Browse-filesystem request from the plan-create modal.
                 // Params (path / depth / show_hidden / show_all) were
@@ -1065,6 +1053,74 @@ class QueueManager
      * Build an update_borg task payload with download URL and version info.
      * Uses the new two-mode system: 'official' or 'server'.
      */
+    /**
+     * Deferred shell-hook post-script: the same config the backup ran, sent
+     * back once the repository's own work is finished (#402).
+     *
+     * The context has to be carried explicitly. This job has no repository_id
+     * — deliberately, so the repo doesn't look busy and hold up other work —
+     * and no archive of its own, so the fields the agent turns into BBS_*
+     * variables have to come from the backup that triggered it. Without them
+     * every script saw BBS_REPO_PATH, BBS_ARCHIVE_NAME, BBS_CLIENT_NAME and
+     * BBS_BACKUP_PLAN as empty strings (#422).
+     */
+    private function buildPluginPostPayload(array $job): array
+    {
+        $pluginManager = new PluginManager();
+
+        $payload = [
+            'task' => 'plugin_post',
+            'job_id' => $job['id'],
+            'plugin' => $pluginManager->buildTestPayload((int) $job['plugin_config_id']),
+            // These two come off the job's own joins and are already correct.
+            'plan_name' => $job['plan_name'] ?? '',
+            'client_name' => $job['agent_name'] ?? '',
+            'directories' => $job['directories'] ?? '',
+            'archive_name' => '',
+            'repo_path' => '',
+        ];
+
+        $parentId = (int) ($job['parent_job_id'] ?? 0);
+        if ($parentId <= 0) {
+            return $payload;
+        }
+
+        $parent = $this->db->fetchOne("
+            SELECT bj.repository_id, r.path AS repo_path, r.passphrase_encrypted
+            FROM backup_jobs bj
+            LEFT JOIN repositories r ON r.id = bj.repository_id
+            WHERE bj.id = ?
+        ", [$parentId]);
+        if (!$parent) {
+            return $payload;
+        }
+
+        $payload['repo_path'] = $parent['repo_path'] ?? '';
+
+        // The archive the parent backup wrote, which is what a post-script
+        // syncing or verifying "the backup that just ran" needs to name.
+        $archive = $this->db->fetchOne(
+            "SELECT archive_name FROM archives WHERE backup_job_id = ? ORDER BY id DESC LIMIT 1",
+            [$parentId]
+        );
+        $payload['archive_name'] = $archive['archive_name'] ?? '';
+
+        // Only when the config asks for it: the agent writes the passphrase to
+        // a mode-0600 file and points BORG_PASSCOMMAND at it, so a hook can run
+        // borg against the repository it just filled.
+        $cfg = $payload['plugin']['config'] ?? [];
+        if (!empty($cfg['expose_passphrase']) && !empty($parent['passphrase_encrypted'])) {
+            try {
+                $payload['env'] = ['BORG_PASSPHRASE' => Encryption::decrypt($parent['passphrase_encrypted'])];
+            } catch (\Exception $e) {
+                // A repo whose passphrase won't decrypt is a bigger problem
+                // than this hook; let the script run without it.
+            }
+        }
+
+        return $payload;
+    }
+
     private function buildBorgUpdatePayload(array $job): array
     {
         $borgService = new BorgVersionService();
