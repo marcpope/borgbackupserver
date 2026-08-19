@@ -28,6 +28,31 @@ class SchedulerService
 
         $now = date('Y-m-d H:i:s');
 
+        // An enabled schedule with no next_run can never be selected below, and
+        // nothing else fills it in, so it is silently dead: shown as active,
+        // never queued, and only a manual run works. Give it one before the
+        // due-query runs (#420).
+        //
+        // Deliberately the *next* occurrence rather than "now" — a schedule
+        // that has been dead for a week should resume tonight, not fire a
+        // week's worth of catch-up backups the moment it is repaired.
+        $orphans = $this->db->fetchAll("
+            SELECT s.* FROM schedules s
+            JOIN backup_plans bp ON bp.id = s.backup_plan_id
+            WHERE s.enabled = 1 AND bp.enabled = 1 AND s.next_run IS NULL
+        ");
+        foreach ($orphans as $orphan) {
+            $repaired = $this->calculateNextRun($orphan);
+            if ($repaired === null) {
+                continue;
+            }
+            $this->db->update('schedules', ['next_run' => $repaired], 'id = ?', [$orphan['id']]);
+            $this->db->insert('server_log', [
+                'level' => 'warning',
+                'message' => "Schedule #{$orphan['id']} had no next run time and would never have fired; set to {$repaired}",
+            ]);
+        }
+
         // Find schedules that are due
         $notificationService = new NotificationService();
 
@@ -143,7 +168,14 @@ class SchedulerService
         return $created;
     }
 
-    private function calculateNextRun(array $schedule): ?string
+    /**
+     * The next time a schedule should fire, in UTC.
+     *
+     * Public because anything that rewrites a schedule's frequency, times or
+     * timezone has to recompute this at the same moment — leaving it stale is
+     * merely wrong, but leaving it NULL stops the schedule forever (#420).
+     */
+    public function calculateNextRun(array $schedule): ?string
     {
         $scheduleTz = new \DateTimeZone($schedule['timezone'] ?? 'UTC');
         $utcTz = new \DateTimeZone('UTC');

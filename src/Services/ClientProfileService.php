@@ -221,12 +221,13 @@ class ClientProfileService
         }
 
         $scheduleCount = 0;
+        $scheduler = new SchedulerService();
         foreach ($plans as $p) {
             $this->db->update('backup_plans', $planUpdate, 'id = ?', [$p['id']]);
 
-            $schedules = $this->db->fetchAll("SELECT id FROM schedules WHERE backup_plan_id = ?", [$p['id']]);
+            $schedules = $this->db->fetchAll("SELECT * FROM schedules WHERE backup_plan_id = ?", [$p['id']]);
             foreach ($schedules as $sch) {
-                $this->db->update('schedules', [
+                $newSchedule = [
                     'frequency'    => $profile['frequency'],
                     'times'        => $profile['times'],
                     // The zone goes with the time. Without this the same
@@ -236,11 +237,17 @@ class ClientProfileService
                     'timezone'     => $this->timezoneFor($profile),
                     'day_of_week'  => $profile['day_of_week'],
                     'day_of_month' => $profile['day_of_month'],
-                    // next_run is recalculated by the scheduler on its next
-                    // pass; clearing it stops a stale time from firing under
-                    // the new frequency.
-                    'next_run'     => null,
-                ], 'id = ?', [$sch['id']]);
+                ];
+                // Recompute rather than clear. Clearing looked safe — a stale
+                // time can't fire under the new frequency — but the scheduler
+                // selects on `next_run <= now` and skips NULL, and nothing
+                // refills it, so applying a profile silently stopped every
+                // schedule it touched: still shown as active, never queued,
+                // and only a manual run worked (#420).
+                $newSchedule['next_run'] = $scheduler->calculateNextRun(
+                    array_merge($sch, $newSchedule)
+                );
+                $this->db->update('schedules', $newSchedule, 'id = ?', [$sch['id']]);
                 $scheduleCount++;
             }
         }
