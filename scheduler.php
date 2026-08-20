@@ -31,6 +31,33 @@ $db->query(
     [date('Y-m-d H:i:s')]
 );
 
+// A server-side job can take hours — a 300 GB offsite sync, a full catalog
+// rebuild — and it used to run inline here, inside the flock the cron entry
+// holds. For as long as it ran, every following minute's cron fire was
+// skipped: no backups scheduled, no offline detection, no notifications, no
+// reports, and the heartbeat above went stale so the dashboard reported the
+// scheduler as dead. One slow repository stopped the whole server (#424).
+//
+// So the scheduler no longer runs those jobs itself. It hands each one to its
+// own detached process — `scheduler.php --job=N` — and moves on, which keeps
+// a pass to seconds and releases the lock. The worker executes exactly that
+// job and exits; several can run at once, bounded by the same queue limit
+// that decides how many jobs are promoted at all.
+$onlyJobId = null;
+foreach (array_slice($argv ?? [], 1) as $arg) {
+    if (preg_match('/^--job=(\d+)$/', $arg, $m)) {
+        $onlyJobId = (int) $m[1];
+    }
+}
+$isWorker = $onlyJobId !== null;
+
+// The worker needs this for getServerSideJobs(); everything else in steps 1-4
+// is scheduling work that belongs to the scheduling pass alone.
+$queueManager = new QueueManager();
+
+// Steps 1-4 are the scheduling pass. A worker skips straight to its job.
+if (!$isWorker):
+
 // Step 1: Mark agents offline if no heartbeat in 3x poll interval
 $pollInterval = $db->fetchOne("SELECT `value` FROM settings WHERE `key` = 'agent_poll_interval'");
 $threshold = ((int)($pollInterval['value'] ?? 30)) * 3;
@@ -469,15 +496,47 @@ try {
 }
 
 // Step 4: Process queue - promote queued jobs to sent
-$queueManager = new QueueManager();
 $promoted = $queueManager->processQueue();
 
 foreach ($promoted as $job) {
     echo date('Y-m-d H:i:s') . " Sent: job #{$job['id']} ({$job['task_type']}) to agent #{$job['agent_id']}\n";
 }
 
-// Step 4b: Execute server-side jobs (prune/compact) locally
-$serverJobs = $queueManager->getServerSideJobs();
+endif; // end of the scheduling pass
+
+// Step 4b: Execute server-side jobs (prune/compact/sync) — one process each.
+if ($isWorker) {
+    // Exactly the job this process was started for. If another worker already
+    // claimed it the claim below fails and we exit having done nothing, which
+    // is what makes a duplicate spawn harmless.
+    $serverJobs = array_values(array_filter(
+        $queueManager->getServerSideJobs(),
+        fn($j) => (int) $j['id'] === $onlyJobId
+    ));
+} else {
+    // Hand each job to its own process and carry on. Output goes to the
+    // scheduler log so the job's progress still reads in one place; if that
+    // isn't writable the worker still runs, it just logs to server_log only.
+    $serverJobs = [];
+    $schedulerLog = '/var/log/bbs-scheduler.log';
+    $redirect = (is_writable($schedulerLog) || (!file_exists($schedulerLog) && is_writable(dirname($schedulerLog))))
+        ? '>> ' . escapeshellarg($schedulerLog) . ' 2>&1'
+        : '> /dev/null 2>&1';
+    foreach ($queueManager->getServerSideJobs() as $pending) {
+        $cmd = sprintf(
+            'nohup %s %s --job=%d %s &',
+            escapeshellarg(PHP_BINARY),
+            escapeshellarg(__FILE__),
+            (int) $pending['id'],
+            $redirect
+        );
+        // Not sudo, and not the ssh helper: this is the same user the cron
+        // already runs as, starting the same script it is already running.
+        exec($cmd);
+        echo date('Y-m-d H:i:s') . " Dispatched server-side job #{$pending['id']} ({$pending['task_type']}) to its own process\n";
+    }
+}
+
 foreach ($serverJobs as $sj) {
     $repo = [
         'path' => $sj['repo_path'],
@@ -2165,6 +2224,12 @@ foreach ($serverJobs as $sj) {
             echo date('Y-m-d H:i:s') . " Queued: S3 sync job #{$s3JobId} (\"{$repoS3Config['config_name']}\") after prune #{$sj['id']}\n";
         }
     }
+}
+
+// A worker has finished its job. Everything below belongs to the scheduling
+// pass, which is running every minute in its own process.
+if ($isWorker) {
+    exit(0);
 }
 
 // Step 4c: Sweep stale download/restore staging directories (hourly).
