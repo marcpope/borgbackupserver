@@ -4526,12 +4526,16 @@ const csrfToken = '<?= $this->csrfToken() ?>';
         expand.textContent = '▼';
     }
 
-    async function fetchTree(path, depth, replaceChildren = false, anchorLi = null) {
+    async function fetchTree(path, depth, replaceChildren = false, anchorLi = null, forceRefresh = false) {
         const body = {
             path,
             depth,
             show_hidden: hiddenChk.checked,
             show_all: showAllChk.checked,
+            // Ask the client again instead of reusing the cached listing —
+            // for when a mount has just been added and the picker is showing
+            // what was there before it (#429).
+            refresh: forceRefresh,
         };
         // Delayed spinner: only show after 300ms so cache hits (which
         // complete in well under that) don't flash a loading state.
@@ -4699,7 +4703,11 @@ const csrfToken = '<?= $this->csrfToken() ?>';
         treeEl.innerHTML = '<div class="text-muted py-3 text-center"><span class="spinner-border spinner-border-sm me-2"></span>Refreshing…</div>';
         const rp = rootForCurrentAgent();
         rootPathEl.textContent = rootLabelForCurrentAgent();
-        fetchTree(rp, 2);
+        // Force a fresh listing. A button labelled Refresh that returned the
+        // cached tree — and, with the old sliding TTL, extended its life —
+        // was the one control someone hunting a newly added mount would keep
+        // pressing (#429).
+        fetchTree(rp, 2, false, null, true);
     });
     hiddenChk.addEventListener('change', () => refreshBtn.click());
     showAllChk.addEventListener('change', () => refreshBtn.click());

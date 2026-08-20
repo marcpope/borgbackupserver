@@ -418,7 +418,25 @@ class AgentApiController extends Controller
         if (isset($input['bytes_total']))     $data['bytes_total'] = (int) $input['bytes_total'];
         if (isset($input['bytes_processed'])) $data['bytes_processed'] = (int) $input['bytes_processed'];
         if (!empty($input['error_log']))      $data['error_log'] = $input['error_log'];
-        if (!empty($input['had_warnings']))   $data['had_warnings'] = 1;
+
+        // A backup that stored nothing is almost always a source that isn't
+        // there. borg warns about a path that doesn't exist (#203) but an
+        // empty directory is perfectly valid to it, and a bind mount that
+        // failed to come up leaves exactly that behind — so the job went
+        // green with zero files and nobody found out for weeks (#429).
+        $hadWarnings = !empty($input['had_warnings']);
+        $storedFiles = (int) ($input['files_processed'] ?? 0) ?: (int) ($input['files_total'] ?? 0);
+        if ($job['task_type'] === 'backup'
+            && ($input['result'] ?? '') === 'completed'
+            && $storedFiles === 0
+        ) {
+            $hadWarnings = true;
+            if (empty($data['error_log'])) {
+                $data['error_log'] = 'Backup stored no files — every configured directory was empty or fully excluded. '
+                    . 'Check the source paths still hold data; a mount that did not come up leaves an empty directory behind.';
+            }
+        }
+        if ($hadWarnings) $data['had_warnings'] = 1;
 
         // Dry runs return their would-backup/excluded summary as task_result
         // JSON for the job detail page (#257)
@@ -557,7 +575,7 @@ class AgentApiController extends Controller
                         "Backup failed for plan \"{$planName}\" on client \"{$agent['name']}\" — " . ($input['error_log'] ?? 'unknown error'),
                         'critical'
                     );
-                } elseif ($result === 'completed' && !empty($input['had_warnings'])) {
+                } elseif ($result === 'completed' && $hadWarnings) {
                     // borg returned a warning — most commonly a configured
                     // source path that didn't exist (#203). Resolve any
                     // prior backup_failed and fire a warning-level event so
@@ -565,8 +583,8 @@ class AgentApiController extends Controller
                     if ($job['backup_plan_id']) {
                         $notificationService->resolve('backup_failed', $agent['id'], (int)$job['backup_plan_id']);
                     }
-                    $warningTail = !empty($input['error_log'])
-                        ? ' — ' . trim(substr($input['error_log'], 0, 300))
+                    $warningTail = !empty($data['error_log'])
+                        ? ' — ' . trim(substr($data['error_log'], 0, 300))
                         : '';
                     $notificationService->notify(
                         'backup_warning',

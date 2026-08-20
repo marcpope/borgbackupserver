@@ -1765,10 +1765,14 @@ class ClientController extends Controller
             $id,
             md5("{$path}|{$depth}|" . ($showHidden ? '1' : '0') . '|' . ($showAll ? '1' : '0'))
         );
-        $cached = $cache->get($cacheKey);
+        // Absolute TTL, not sliding. This caches what another machine's
+        // filesystem looked like, and re-setting it on every read meant it
+        // never expired while anyone was looking — so someone who had just
+        // added a mount and kept reopening the picker to find it was, each
+        // time, extending the life of the listing that didn't have it (#429).
+        // Fifteen minutes from the moment it was fetched, and no longer.
+        $cached = !empty($input['refresh']) ? null : $cache->get($cacheKey);
         if (is_array($cached)) {
-            // Sliding TTL — every access resets the clock
-            $cache->set($cacheKey, $cached, 900);
             $this->json(['status' => 'completed', 'tree' => $cached, 'cached' => true]);
             return;
         }
