@@ -6,6 +6,7 @@
 #   bbs-ssh-helper create-user <username> <home_dir> <public_key>
 #   bbs-ssh-helper create-repo-dir <repo_dir>
 #   bbs-ssh-helper borg-init <repo_path> <encryption> [passphrase]
+#   bbs-ssh-helper borg-passphrase <username> <repo_path>   (old/new on stdin)
 #   bbs-ssh-helper delete-user <username>
 #   bbs-ssh-helper cert-status [domain]
 #   bbs-ssh-helper cert-renew [domain] [--force]
@@ -604,6 +605,59 @@ case "$ACTION" in
             BORG_BASE_DIR="$BORG_DIR" \
             HOME="$BORG_DIR" \
             borg "$SUBCMD" "${BORG_EXTRA_OPTS[@]}" "$@" 2>&1
+
+        exit $?
+        ;;
+
+    borg-passphrase)
+        # Change a repository's passphrase (#412).
+        # Usage: bbs-ssh-helper borg-passphrase <username> <repo_path>
+        #        old and new passphrases on stdin, one per line.
+        #
+        # Not part of borg-cmd: that wrapper takes a single passphrase and an
+        # allow-list this subcommand is deliberately absent from, and passing a
+        # second secret through it would widen an interface used by everything
+        # else.
+        USERNAME="${2:-}"
+        REPO_PATH="${3:-}"
+
+        if [ -z "$USERNAME" ] || [ -z "$REPO_PATH" ]; then
+            echo "Usage: bbs-ssh-helper borg-passphrase <username> <repo_path>  (passphrases on stdin)"
+            exit 1
+        fi
+        if [[ ! "$USERNAME" =~ ^bbs-[a-z0-9_-]+$ ]]; then
+            echo "Error: username must match bbs-[a-z0-9_-]+"
+            exit 1
+        fi
+        if ! is_allowed_path "$REPO_PATH"; then
+            echo "Error: repo path must be under /var/bbs/ or a registered storage location"
+            exit 1
+        fi
+
+        # Read both secrets from stdin so neither appears in argv or `ps`.
+        IFS= read -r OLD_PP || OLD_PP=""
+        IFS= read -r NEW_PP || NEW_PP=""
+        if [ -z "$NEW_PP" ]; then
+            echo "Error: new passphrase is empty"
+            exit 1
+        fi
+
+        BORG_DIR="/var/bbs/cache/$USERNAME"
+        mkdir -p "$BORG_DIR"
+        chown "$USERNAME":"$USERNAME" "$BORG_DIR"
+
+        # --lock-wait is short on purpose. The caller has already checked that
+        # no job is using this repository; if something took the lock in the
+        # meantime, failing quickly is better than holding the request open for
+        # ten minutes while a backup runs.
+        sudo -u "$USERNAME" \
+            BORG_PASSPHRASE="$OLD_PP" \
+            BORG_NEW_PASSPHRASE="$NEW_PP" \
+            BORG_UNKNOWN_UNENCRYPTED_REPO_ACCESS_IS_OK=yes \
+            BORG_RELOCATED_REPO_ACCESS_IS_OK=yes \
+            BORG_BASE_DIR="$BORG_DIR" \
+            HOME="$BORG_DIR" \
+            borg key change-passphrase -v --lock-wait 30 "$REPO_PATH" 2>&1
 
         exit $?
         ;;

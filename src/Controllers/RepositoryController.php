@@ -469,6 +469,43 @@ class RepositoryController extends Controller
         $this->redirect("/clients/{$agentId}?tab=repos");
     }
 
+    /**
+     * POST /repositories/{id}/passphrase — {passphrase}
+     *
+     * borg re-encrypts the repository key in place, so every archive stays
+     * where it is and clients need no change: they are handed the passphrase
+     * with each job (#412).
+     */
+    public function changePassphrase(int $id): void
+    {
+        $this->requireAuth();
+        $this->verifyCsrf();
+
+        $repo = $this->db->fetchOne("
+            SELECT r.*, a.id as agent_id
+            FROM repositories r
+            JOIN agents a ON a.id = r.agent_id
+            WHERE r.id = ?
+        ", [$id]);
+
+        if (!$repo || !$this->canAccessAgent($repo['agent_id'])) {
+            $this->json(['error' => 'Repository not found'], 404);
+        }
+        $this->requirePermission(PermissionService::MANAGE_REPOS, (int) $repo['agent_id']);
+
+        $svc = new \BBS\Services\RepositoryPassphraseService();
+        $result = $svc->change($repo, (string) ($_POST['passphrase'] ?? ''));
+
+        $this->json([
+            'status' => $result['success'] ? 'ok' : 'error',
+            'message' => $result['message'],
+            'output' => $result['output'],
+            // The caller must show this one rather than a toast that scrolls
+            // away: the repository is open and its passphrase is unrecorded.
+            'orphaned' => $result['orphaned'],
+        ], $result['success'] ? 200 : 422);
+    }
+
     public function rename(int $id): void
     {
         $this->requireAuth();

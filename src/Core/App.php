@@ -125,6 +125,7 @@ class App
         $this->router->map('POST', '/repositories/[i:id]/delete', 'RepositoryController@delete');
         $this->router->map('POST', '/repositories/[i:id]/maintenance', 'RepositoryController@maintenance');
         $this->router->map('POST', '/repositories/[i:id]/rename', 'RepositoryController@rename');
+        $this->router->map('POST', '/repositories/[i:id]/passphrase', 'RepositoryController@changePassphrase');
         $this->router->map('GET', '/clients/[i:agentId]/repo/[i:id]', 'RepositoryController@detail');
         $this->router->map('GET', '/clients/[i:agentId]/repo/[i:id]/archive/[i:archiveId]', 'RepositoryController@archiveDetail');
         $this->router->map('GET', '/clients/[i:agentId]/repo/[i:id]/archive/[i:archiveId]/files', 'RepositoryController@archiveFiles');
@@ -360,6 +361,7 @@ class App
         $this->router->map('POST', '/api/v1/ssl/renew', 'Api\\SslApiController@renew');
         $this->router->map('PUT',  '/api/v1/ssl/email', 'Api\\SslApiController@setEmail');
         $this->router->map('POST', '/api/v1/clients/[i:id]/rotate-key', 'Api\\AdminApiController@rotateClientKey');
+        $this->router->map('POST', '/api/v1/repositories/[i:repoId]/passphrase', 'Api\\AdminApiController@changeRepositoryPassphrase');
         $this->router->map('GET', '/api/v1/storage', 'Api\\AdminApiController@listStorageLocations');
         $this->router->map('POST', '/api/v1/storage', 'Api\\AdminApiController@createStorageLocation');
         $this->router->map('GET', '/api/v1/storage/capacity', 'Api\\AdminApiController@getStorageCapacity');

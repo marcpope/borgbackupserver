@@ -304,6 +304,28 @@ $sizeLabel = $totalSize > 0 ? \BBS\Services\ServerStats::formatBytes((int) $tota
                             <button type="button" class="btn btn-sm btn-link p-0 ms-1" id="copyPassphrase" title="Copy passphrase">
                                 <i class="bi bi-clipboard"></i>
                             </button>
+                            <button type="button" class="btn btn-sm btn-link p-0 ms-1" id="changePassphraseToggle" title="Change passphrase"
+                                    <?= $activeJob ? 'disabled' : '' ?>>
+                                <i class="bi bi-pencil"></i>
+                            </button>
+
+                            <div class="mt-2 d-none" id="changePassphraseBox">
+                                <div class="input-group input-group-sm" style="max-width: 420px;">
+                                    <input type="text" class="form-control font-monospace" id="newPassphrase" placeholder="New passphrase">
+                                    <button class="btn btn-outline-secondary" type="button" id="suggestPassphrase" title="Generate one">
+                                        <i class="bi bi-shuffle"></i>
+                                    </button>
+                                    <button class="btn btn-primary" type="button" id="savePassphrase">Change</button>
+                                    <button class="btn btn-outline-secondary" type="button" id="cancelPassphrase">Cancel</button>
+                                </div>
+                                <div class="form-text">
+                                    borg re-encrypts the repository key in place. Archives are untouched and clients need no change — they are given the passphrase with each job.
+                                    <?php if ($activeJob): ?>
+                                    <br><span class="text-warning"><i class="bi bi-exclamation-triangle me-1"></i>Not while a job is running on this repository.</span>
+                                    <?php endif; ?>
+                                </div>
+                                <div id="passphraseResult" class="mt-2"></div>
+                            </div>
                         </td>
                     </tr>
                     <?php endif; ?>
@@ -706,3 +728,84 @@ if (renameToggle && renameForm) {
 }
 </script>
 <?php endif; ?>
+
+<script>
+(function () {
+    const toggle = document.getElementById('changePassphraseToggle');
+    if (!toggle) return;
+    const box     = document.getElementById('changePassphraseBox');
+    const input   = document.getElementById('newPassphrase');
+    const result  = document.getElementById('passphraseResult');
+    const repoId  = <?= (int) $repo['id'] ?>;
+    const csrf    = '<?= $this->csrfToken() ?>';
+
+    function randomPassphrase() {
+        const b = new Uint8Array(16);
+        crypto.getRandomValues(b);
+        return Array.from(b).map(x => x.toString(16).padStart(2, '0')).join('');
+    }
+
+    toggle.addEventListener('click', function () {
+        box.classList.toggle('d-none');
+        if (!box.classList.contains('d-none') && !input.value) {
+            input.value = randomPassphrase();
+            input.focus();
+            input.select();
+        }
+    });
+    document.getElementById('cancelPassphrase').addEventListener('click', function () {
+        box.classList.add('d-none');
+        result.innerHTML = '';
+    });
+    document.getElementById('suggestPassphrase').addEventListener('click', function () {
+        input.value = randomPassphrase();
+        input.focus();
+        input.select();
+    });
+
+    document.getElementById('savePassphrase').addEventListener('click', async function () {
+        const value = input.value.trim();
+        if (!value) { input.focus(); return; }
+        if (!confirm('Change the passphrase for this repository?\n\nThe current passphrase stops working. Make sure you have a copy of the new one before continuing.')) return;
+
+        const btn = this;
+        btn.disabled = true;
+        const label = btn.textContent;
+        btn.textContent = 'Changing…';
+        result.innerHTML = '<div class="text-muted small"><span class="spinner-border spinner-border-sm me-1"></span>borg is re-encrypting the repository key…</div>';
+        try {
+            const body = new URLSearchParams({ csrf_token: csrf, passphrase: value });
+            const r = await fetch('/repositories/' + repoId + '/passphrase', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-CSRF-Token': csrf },
+                credentials: 'same-origin',
+                body,
+            });
+            const d = await r.json();
+            if (d.status === 'ok') {
+                // Update the row in place so the copy button hands out the
+                // new one rather than the passphrase that no longer opens it.
+                const code = document.getElementById('repoPassphrase');
+                if (code) {
+                    code.dataset.passphrase = value;
+                    if (code.textContent !== '*****') code.textContent = value;
+                }
+                result.innerHTML = '<div class="alert alert-success py-2 px-3 mb-0 small">' + d.message + '</div>';
+                input.value = '';
+                setTimeout(() => box.classList.add('d-none'), 2500);
+            } else if (d.orphaned) {
+                // borg took it, we could not store it. Do not auto-dismiss.
+                result.innerHTML = '<div class="alert alert-danger py-2 px-3 mb-0 small"><strong>Write this down now.</strong><br>' + d.message + '</div>';
+            } else {
+                result.innerHTML = '<div class="alert alert-warning py-2 px-3 mb-0 small">' + (d.message || d.error || 'Failed') +
+                    (d.output ? '<pre class="mt-2 mb-0 small" style="white-space:pre-wrap;">' + d.output.replace(/</g, '&lt;') + '</pre>' : '') + '</div>';
+            }
+        } catch (e) {
+            result.innerHTML = '<div class="alert alert-danger py-2 px-3 mb-0 small">Request failed: ' + e.message + '</div>';
+        } finally {
+            btn.disabled = false;
+            btn.textContent = label;
+        }
+    });
+})();
+</script>

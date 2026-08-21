@@ -164,7 +164,12 @@ class RemoteSshService
      * @param array  $borgArgs  Borg subcommand args (e.g. ['prune', '--keep-daily=7', $repoPath])
      * @param string $passphrase Repository passphrase (already decrypted)
      */
-    public function runBorgCommand(array $config, string $repoPath, array $borgArgs, string $passphrase = ''): array
+    /**
+     * @param array $extraEnv Additional borg env vars. Used for
+     *                        BORG_NEW_PASSPHRASE, which `key change-passphrase`
+     *                        reads instead of prompting (#412).
+     */
+    public function runBorgCommand(array $config, string $repoPath, array $borgArgs, string $passphrase = '', array $extraEnv = []): array
     {
         $borgRemotePath = $config['borg_remote_path'] ?? null;
 
@@ -175,8 +180,20 @@ class RemoteSshService
         // rather than failing immediately when a concurrent backup or
         // another server-side task is still holding it. break-lock is the
         // one case where --lock-wait is meaningless, so skip it there.
+        // Skip injection when the caller has already placed one. The index
+        // below assumes a one-word subcommand, so a two-word one such as
+        // `key change-passphrase` would have --lock-wait spliced between the
+        // two halves and borg would reject it (#412).
+        $hasLockWait = false;
+        foreach ($borgArgs as $a) {
+            if (str_starts_with((string) $a, '--lock-wait')) {
+                $hasLockWait = true;
+                break;
+            }
+        }
+
         $subcmd = $borgArgs[0] ?? '';
-        if ($subcmd !== '' && $subcmd !== 'break-lock') {
+        if (!$hasLockWait && $subcmd !== '' && $subcmd !== 'break-lock') {
             array_splice($cmd, 2, 0, ['--lock-wait=600']);
         }
 
@@ -194,6 +211,9 @@ class RemoteSshService
         // Skip the interactive 'YES' prompt when running `check --repair`;
         // borg only reads this env var for that subcommand.
         $env['BORG_CHECK_I_KNOW_WHAT_I_AM_DOING'] = 'YES';
+        foreach ($extraEnv as $k => $v) {
+            $env[$k] = $v;
+        }
 
         return $this->runBorgWithKey($config, $cmd, $env);
     }

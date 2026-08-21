@@ -1523,6 +1523,52 @@ class AdminApiController extends Controller
      * cannot report until its own configuration carries the new key, so the
      * response says where that lives.
      */
+    /**
+     * POST /api/v1/repositories/{repoId}/passphrase
+     * Body: {"passphrase": "..."}  — omit to have one generated.
+     *
+     * Refuses while any job is queued, sent or running against the repository.
+     */
+    public function changeRepositoryPassphrase(int $repoId): void
+    {
+        $this->requireApiToken();
+        $input = $this->getJsonInput();
+
+        $repo = $this->db->fetchOne("SELECT * FROM repositories WHERE id = ?", [$repoId]);
+        if (!$repo) {
+            $this->json(['error' => 'Repository not found'], 404);
+        }
+
+        $svc = new \BBS\Services\RepositoryPassphraseService();
+        $passphrase = trim((string) ($input['passphrase'] ?? ''));
+        $generated = false;
+        if ($passphrase === '') {
+            $passphrase = $svc->suggest();
+            $generated = true;
+        }
+
+        $result = $svc->change($repo, $passphrase);
+
+        if (!$result['success']) {
+            $this->json([
+                'error' => $result['message'],
+                'output' => $result['output'],
+                // True means borg took the change but it was not saved. The
+                // passphrase is in the message and nowhere else.
+                'orphaned' => $result['orphaned'],
+            ], $result['orphaned'] ? 500 : 422);
+        }
+
+        $this->json([
+            'status' => 'ok',
+            'repository_id' => (int) $repo['id'],
+            // Returned only when we made it up — a caller that supplied one
+            // already has it.
+            'passphrase' => $generated ? $passphrase : null,
+            'message' => $result['message'],
+        ]);
+    }
+
     public function rotateClientKey(int $id): void
     {
         $this->requireApiToken();
