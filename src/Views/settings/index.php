@@ -3310,18 +3310,24 @@ docker compose up -d</pre>
 
         // Two limits, and the smaller wins. Matching the column beside it was
         // the request, but that column is often taller than the window, so on
-        // its own it left the page scrolling past everything — the notes were
-        // bounded by something the reader could not see.
+        // its own it left the page scrolling past everything.
         const besideCol = left.offsetHeight - headerH;
-        const inWindow = window.innerHeight - card.getBoundingClientRect().top - headerH - 24;
 
-        // Only ever shrink from the CSS cap. Growing after load is what made
-        // the scrollbar appear and vanish as the page settled.
+        // Measured from the notes element rather than its card. The card's
+        // position was read before the layout settled, so this came out too
+        // generous and the column limit won — the panel then hung below the
+        // fold, which is the thing it exists to prevent.
+        notes.style.maxHeight = '';
+        const inWindow = window.innerHeight - notes.getBoundingClientRect().top - 24;
+
         notes.style.maxHeight = Math.max(Math.min(besideCol, inWindow), 240) + 'px';
         notes.style.overflowY = 'auto';
     }
 
     fit();
+    // Again once fonts and images have settled — the first run measures a
+    // layout that is still moving.
+    window.addEventListener('load', fit);
     window.addEventListener('resize', fit);
     // The left column carries badges and counts that arrive after the update
     // check returns, and its height changes when they do.
