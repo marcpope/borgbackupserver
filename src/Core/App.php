@@ -104,6 +104,7 @@ class App
         $this->router->map('GET', '/clients/[i:id]/restore', 'ClientController@restore');
         $this->router->map('POST', '/clients/[i:id]/edit', 'ClientController@update');
         $this->router->map('POST', '/clients/[i:id]/delete', 'ClientController@delete');
+        $this->router->map('POST', '/clients/[i:id]/rotate-key', 'ClientController@rotateApiKey');
         $this->router->map('POST', '/clients/[i:id]/update-borg', 'ClientController@updateBorg');
         $this->router->map('POST', '/clients/[i:id]/update-agent', 'ClientController@updateAgent');
         $this->router->map('POST', '/clients/[i:id]/browse', 'ClientController@browse');
@@ -358,6 +359,7 @@ class App
         $this->router->map('GET',  '/api/v1/ssl', 'Api\\SslApiController@show');
         $this->router->map('POST', '/api/v1/ssl/renew', 'Api\\SslApiController@renew');
         $this->router->map('PUT',  '/api/v1/ssl/email', 'Api\\SslApiController@setEmail');
+        $this->router->map('POST', '/api/v1/clients/[i:id]/rotate-key', 'Api\\AdminApiController@rotateClientKey');
         $this->router->map('GET', '/api/v1/storage', 'Api\\AdminApiController@listStorageLocations');
         $this->router->map('POST', '/api/v1/storage', 'Api\\AdminApiController@createStorageLocation');
         $this->router->map('GET', '/api/v1/storage/capacity', 'Api\\AdminApiController@getStorageCapacity');

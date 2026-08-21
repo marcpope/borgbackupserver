@@ -1516,6 +1516,36 @@ class AdminApiController extends Controller
 
     // ── Client Edit ──────────────────────────────────────
 
+    /**
+     * POST /api/v1/clients/{id}/rotate-key
+     *
+     * Issues a new key and stops accepting the old one, at once. The client
+     * cannot report until its own configuration carries the new key, so the
+     * response says where that lives.
+     */
+    public function rotateClientKey(int $id): void
+    {
+        $this->requireApiToken();
+
+        $agent = $this->db->fetchOne("SELECT id, name, platform FROM agents WHERE id = ?", [$id]);
+        if (!$agent) {
+            $this->json(['error' => 'Client not found'], 404);
+        }
+
+        $svc = new \BBS\Services\AgentKeyService();
+        $key = $svc->rotate($id, 'API');
+        [$location, $instructions] = $svc->reconfigureHint($agent);
+
+        $this->json([
+            'status' => 'ok',
+            'client_id' => (int) $agent['id'],
+            'api_key' => $key,
+            'previous_key_revoked' => true,
+            'reconfigure_location' => $location,
+            'reconfigure_instructions' => $instructions,
+        ]);
+    }
+
     public function updateClient(int $id): void
     {
         $this->requireApiToken();

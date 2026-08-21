@@ -1672,6 +1672,36 @@ class ClientController extends Controller
         return $agent;
     }
 
+    /**
+     * POST /clients/{id}/rotate-key
+     *
+     * Returns the new key so the page can show it and rebuild the install
+     * command without a reload. It is shown in full because the admin has to
+     * copy it onto the client — unlike an API token, this one is recoverable
+     * from the client page afterwards, since the install command needs it.
+     */
+    public function rotateApiKey(int $id): void
+    {
+        $this->requireAuth();
+        $this->verifyCsrf();
+
+        $agent = $this->getAgent($id);
+        if (!$agent) {
+            $this->json(['error' => 'Client not found'], 404);
+        }
+
+        $svc = new \BBS\Services\AgentKeyService();
+        $key = $svc->rotate($id, $_SESSION['username'] ?? null);
+        [$location, $instructions] = $svc->reconfigureHint($agent);
+
+        $this->json([
+            'status' => 'ok',
+            'api_key' => $key,
+            'reconfigure_location' => $location,
+            'reconfigure_instructions' => $instructions,
+        ]);
+    }
+
     public function updateBorg(int $id): void
     {
         $this->requireAuth();
