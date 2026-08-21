@@ -3132,8 +3132,8 @@ $outdatedAgents = $bundledAgentVersion ? array_filter($allAgents, fn($a) => $a['
 $totalAgents = count($allAgents);
 $outdatedCount = count($outdatedAgents);
 ?>
-<div class="row g-4">
-    <div class="col-lg-6">
+<div class="row g-4" id="updates-row">
+    <div class="col-lg-6" id="updates-left-col">
         <div class="card border-0 shadow-sm">
             <div class="card-header fw-semibold">
                 Borg Backup Server Version
@@ -3268,9 +3268,9 @@ docker compose up -d</pre>
     </div>
 
     <?php if (!empty($latest['notes'])): ?>
-    <div class="col-lg-6">
-        <div class="card border-0 shadow-sm">
-            <div class="card-header fw-semibold">
+    <div class="col-lg-6" id="updates-notes-col">
+        <div class="card border-0 shadow-sm h-100 d-flex flex-column">
+            <div class="card-header fw-semibold flex-shrink-0">
                 <i class="bi bi-journal-text me-1"></i> Release Notes
                 <?php if (!empty($latest['url'])): ?>
                     <a href="<?= htmlspecialchars($latest['url']) ?>" target="_blank" class="float-end small text-decoration-none">
@@ -3278,14 +3278,78 @@ docker compose up -d</pre>
                     </a>
                 <?php endif; ?>
             </div>
-            <div class="card-body small release-notes-md">
-                <?php $converter = new \League\CommonMark\GithubFlavoredMarkdownConverter(['html_input' => 'strip']); echo $converter->convert($latest['notes']); ?>
+            <div class="card-body small release-notes-md" id="release-notes-body">
+                <?php
+                    // Raw HTML stays stripped: these notes come from the GitHub
+                    // API and are rendered into an admin page. Markdown links
+                    // and bare URLs are unaffected — CommonMark turns both into
+                    // anchors.
+                    $converter = new \League\CommonMark\GithubFlavoredMarkdownConverter(['html_input' => 'strip']);
+                    $notesHtml = (string) $converter->convert($latest['notes']);
+
+                    // GitHub linkifies "#424" in its own UI and markdown does
+                    // not, so notes that read fine there arrive here as plain
+                    // text. Done after conversion and only outside existing
+                    // anchors and code, so a "#1" inside a URL or a code span
+                    // is left alone.
+                    $notesHtml = preg_replace_callback(
+                        '~(<a\b[^>]*>.*?</a>|<code\b[^>]*>.*?</code>)|(^|[\s(\[])#(\d+)\b~is',
+                        function ($m) {
+                            if ($m[1] !== '') {
+                                return $m[1];
+                            }
+                            $url = 'https://github.com/marcpope/borgbackupserver/issues/' . $m[3];
+                            return $m[2] . '<a href="' . $url . '" target="_blank" rel="noopener">#' . $m[3] . '</a>';
+                        },
+                        $notesHtml
+                    );
+
+                    // Anything in here points somewhere else; keep the admin
+                    // page where it is.
+                    $notesHtml = preg_replace('~<a\s+href=~i', '<a target="_blank" rel="noopener" href=', $notesHtml);
+                    $notesHtml = preg_replace('~<a\s+target="_blank" rel="noopener"\s+(?=[^>]*\btarget=)~i', '<a ', $notesHtml);
+
+                    echo $notesHtml;
+                ?>
             </div>
         </div>
     </div>
     <?php endif; ?>
 </div>
 
+<script>
+(function () {
+    const left  = document.getElementById('updates-left-col');
+    const notes = document.getElementById('release-notes-body');
+    if (!left || !notes) return;
+
+    // Release notes grow with however much was written; the column beside them
+    // does not. Left alone the notes set the height of the row and the page
+    // runs on past everything else, so cap them at the height of that column
+    // and scroll the rest.
+    function fit() {
+        // Single column on small screens — a cap there would be a scrollbar
+        // inside a scrollbar for no gain.
+        if (window.innerWidth < 992) {
+            notes.style.maxHeight = '';
+            notes.style.overflowY = '';
+            return;
+        }
+        const card = notes.closest('.card');
+        const header = card ? card.querySelector('.card-header') : null;
+        const available = left.offsetHeight - (header ? header.offsetHeight : 0);
+        // Below this the panel is too short to read; let the page grow instead.
+        notes.style.maxHeight = Math.max(available, 240) + 'px';
+        notes.style.overflowY = 'auto';
+    }
+
+    fit();
+    window.addEventListener('resize', fit);
+    // The left column carries badges and counts that arrive after the update
+    // check returns, and its height changes when they do.
+    if (window.ResizeObserver) new ResizeObserver(fit).observe(left);
+})();
+</script>
 
 <?php if ($upgradeResult): ?>
 <div class="card border-0 shadow-sm mt-4">

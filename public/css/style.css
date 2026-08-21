@@ -1139,6 +1139,11 @@ body.bg-body-secondary {
 .release-notes-md pre { background: var(--bs-tertiary-bg); padding: 0.75rem; border-radius: 6px; font-size: 0.8rem; overflow-x: auto; }
 .release-notes-md pre code { background: none; padding: 0; }
 .release-notes-md *:last-child { margin-bottom: 0; }
+/* A cap before the script runs, so the panel never flashes at full height on
+   a long set of notes. JS then matches it to the column beside it. */
+@media (min-width: 992px) {
+    .release-notes-md { max-height: calc(100vh - 260px); overflow-y: auto; }
+}
 
 [data-bs-theme="dark"] .release-notes-md code { background: rgba(255,255,255,0.08); }
 
