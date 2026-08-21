@@ -187,25 +187,29 @@ fi
 BBS_HOSTNAME="$HOSTNAME_ARG"
 ok "Hostname: $BBS_HOSTNAME"
 
-# DNS check (only with SSL)
+# Certbot check (only with SSL)
 if [[ "$NO_SSL" == false ]]; then
-    if command -v dig &>/dev/null; then
-        DNS_IP=$(dig +short "$BBS_HOSTNAME" | tail -1)
-        PUBLIC_IP=$(curl -s --max-time 5 ifconfig.me || true)
-        if [[ -n "$DNS_IP" && -n "$PUBLIC_IP" && "$DNS_IP" != "$PUBLIC_IP" ]]; then
-            fail "DNS mismatch: $BBS_HOSTNAME resolves to $DNS_IP but this server's public IP is $PUBLIC_IP"
-            die "Fix DNS or use --no-ssl for LAN installs. Certbot will fail without correct DNS."
-        fi
-        if [[ -n "$DNS_IP" ]]; then
-            ok "DNS check passed ($DNS_IP)"
-        else
-            warn "Could not resolve $BBS_HOSTNAME — certbot may fail"
-        fi
+    certbot_check() {
+        certbot certonly --standalone --dry-run --agree-tos --register-unsafely-without-email --non-interactive -d "$BBS_HOSTNAME" >> "$LOG_FILE" 2>&1
+    }
+    info "Temporary installing Certbot, just for checking..."
+    apt-get install -y -qq certbot > /dev/null 2>&1
+    info "Checking if a certificate can be obtained for $BBS_HOSTNAME..."
+    if certbot_check; then
+        ok "Server setup is ok for certbot to issue an SSL certificate."
     else
-        warn "dig not available, skipping DNS check"
+        info "Certbot test failed, removing temporary installation..."
+        apt-get remove --purge -y certbot > /dev/null 2>&1
+        apt-get autoremove -y > /dev/null 2>&1
+        fail "Certificate cannot be issued for $BBS_HOSTNAME."
+        fail "Common failure causes:"
+        fail "- Port 80 blocked by firewall/NAT"
+        fail "- Domain not resolving to server's port-80 inbound IP"
+        fail "- Another process occupying port 80"
+        die "Please, check log for more info: $LOG_FILE"
     fi
 else
-    ok "SSL disabled — skipping DNS check"
+    ok "SSL disabled — skipping Certbot check"
 fi
 
 # MySQL credentials
@@ -535,7 +539,7 @@ if [[ "$NO_SSL" == true ]]; then
     PROTO="http"
 else
     PROTO="https"
-    if certbot --apache -d "$BBS_HOSTNAME" --non-interactive --agree-tos --email "admin@$BBS_HOSTNAME" 2>&1; then
+    if certbot --apache -d "$BBS_HOSTNAME" --non-interactive --agree-tos --register-unsafely-without-email 2>&1; then
         ok "SSL certificate obtained"
     else
         fail "Certbot failed — ensure DNS for $BBS_HOSTNAME points to this server"
