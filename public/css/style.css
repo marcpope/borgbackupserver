@@ -1142,7 +1142,9 @@ body.bg-body-secondary {
 /* A cap before the script runs, so the panel never flashes at full height on
    a long set of notes. JS then matches it to the column beside it. */
 @media (min-width: 992px) {
-    .release-notes-md { max-height: calc(100vh - 260px); overflow-y: auto; }
+    /* Close to what the script computes, so the panel only ever shrinks when
+       it runs — growing after load made the scrollbar flicker. */
+    .release-notes-md { max-height: calc(100vh - 230px); overflow-y: auto; }
 }
 /* Screenshots in release notes arrive at their original pixel size, which is
    wider than the panel. */

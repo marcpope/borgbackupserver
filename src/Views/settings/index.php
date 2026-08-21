@@ -3306,9 +3306,18 @@ docker compose up -d</pre>
         }
         const card = notes.closest('.card');
         const header = card ? card.querySelector('.card-header') : null;
-        const available = left.offsetHeight - (header ? header.offsetHeight : 0);
-        // Below this the panel is too short to read; let the page grow instead.
-        notes.style.maxHeight = Math.max(available, 240) + 'px';
+        const headerH = header ? header.offsetHeight : 0;
+
+        // Two limits, and the smaller wins. Matching the column beside it was
+        // the request, but that column is often taller than the window, so on
+        // its own it left the page scrolling past everything — the notes were
+        // bounded by something the reader could not see.
+        const besideCol = left.offsetHeight - headerH;
+        const inWindow = window.innerHeight - card.getBoundingClientRect().top - headerH - 24;
+
+        // Only ever shrink from the CSS cap. Growing after load is what made
+        // the scrollbar appear and vanish as the page settled.
+        notes.style.maxHeight = Math.max(Math.min(besideCol, inWindow), 240) + 'px';
         notes.style.overflowY = 'auto';
     }
 
