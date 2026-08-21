@@ -1623,6 +1623,7 @@ class AdminApiController extends Controller
             SELECT bj.id, bj.task_type, bj.status, bj.files_total, bj.files_processed,
                    bj.bytes_total, bj.bytes_processed, bj.duration_seconds,
                    bj.status_message, bj.queued_at, bj.started_at, bj.completed_at,
+                   bj.had_warnings,
                    bp.name as plan_name, r.name as repository_name
             FROM backup_jobs bj
             LEFT JOIN backup_plans bp ON bp.id = bj.backup_plan_id
@@ -1631,6 +1632,16 @@ class AdminApiController extends Controller
             ORDER BY bj.queued_at DESC
             LIMIT {$limit} OFFSET {$offset}
         ", $params);
+
+        // Cast, because PDO hands back "0" for a tinyint and a caller writing
+        // the obvious `if (job.had_warnings)` would treat that as true. This
+        // is the endpoint used to watch an install from outside, so a job that
+        // finished with warnings has to be visible without fetching each job
+        // on its own (#435). getJob() and the queue history already do this.
+        foreach ($jobs as &$job) {
+            $job['had_warnings'] = (int) $job['had_warnings'];
+        }
+        unset($job);
 
         $total = $this->db->fetchOne("SELECT COUNT(*) as cnt FROM backup_jobs bj WHERE {$where}", $params);
 
