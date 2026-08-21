@@ -9,7 +9,7 @@ class ServerStats
      */
     public static function getCpuLoad(): array
     {
-        $load = sys_getloadavg();
+        $load = self::getLoadAvg();
         if ($load === false) {
             return ['1min' => 0, '5min' => 0, '15min' => 0, 'cores' => 1, 'percent' => 0];
         }
@@ -24,6 +24,29 @@ class ServerStats
             'cores' => $cores,
             'percent' => min($percent, 100),
         ];
+    }
+
+    /**
+     * Load averages, read from /proc/loadavg where it exists.
+     *
+     * sys_getloadavg() calls glibc getloadavg(), which on Linux reads
+     * sysinfo(2). lxcfs can only rewrite files under /proc, so inside an LXC
+     * container the syscall returns the host's load while /proc/loadavg
+     * returns the container's — an idle container showed the hypervisor at
+     * 100% (#430). Memory already reads /proc/meminfo, so this makes the two
+     * agree about which machine they are describing.
+     *
+     * @return array{0:float,1:float,2:float}|false
+     */
+    private static function getLoadAvg(): array|false
+    {
+        $line = @file_get_contents('/proc/loadavg');
+        if ($line !== false && preg_match('/^([\d.]+)\s+([\d.]+)\s+([\d.]+)/', $line, $m)) {
+            return [(float) $m[1], (float) $m[2], (float) $m[3]];
+        }
+
+        // macOS, and anywhere /proc isn't mounted.
+        return @sys_getloadavg();
     }
 
     /**
