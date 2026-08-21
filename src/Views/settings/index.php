@@ -3279,38 +3279,7 @@ docker compose up -d</pre>
                 <?php endif; ?>
             </div>
             <div class="card-body small release-notes-md" id="release-notes-body">
-                <?php
-                    // Raw HTML stays stripped: these notes come from the GitHub
-                    // API and are rendered into an admin page. Markdown links
-                    // and bare URLs are unaffected — CommonMark turns both into
-                    // anchors.
-                    $converter = new \League\CommonMark\GithubFlavoredMarkdownConverter(['html_input' => 'strip']);
-                    $notesHtml = (string) $converter->convert($latest['notes']);
-
-                    // GitHub linkifies "#424" in its own UI and markdown does
-                    // not, so notes that read fine there arrive here as plain
-                    // text. Done after conversion and only outside existing
-                    // anchors and code, so a "#1" inside a URL or a code span
-                    // is left alone.
-                    $notesHtml = preg_replace_callback(
-                        '~(<a\b[^>]*>.*?</a>|<code\b[^>]*>.*?</code>)|(^|[\s(\[])#(\d+)\b~is',
-                        function ($m) {
-                            if ($m[1] !== '') {
-                                return $m[1];
-                            }
-                            $url = 'https://github.com/marcpope/borgbackupserver/issues/' . $m[3];
-                            return $m[2] . '<a href="' . $url . '" target="_blank" rel="noopener">#' . $m[3] . '</a>';
-                        },
-                        $notesHtml
-                    );
-
-                    // Anything in here points somewhere else; keep the admin
-                    // page where it is.
-                    $notesHtml = preg_replace('~<a\s+href=~i', '<a target="_blank" rel="noopener" href=', $notesHtml);
-                    $notesHtml = preg_replace('~<a\s+target="_blank" rel="noopener"\s+(?=[^>]*\btarget=)~i', '<a ', $notesHtml);
-
-                    echo $notesHtml;
-                ?>
+                <?php echo (new \BBS\Services\ReleaseNotes())->render((string) $latest['notes']); ?>
             </div>
         </div>
     </div>

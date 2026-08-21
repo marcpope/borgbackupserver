@@ -1144,6 +1144,16 @@ body.bg-body-secondary {
 @media (min-width: 992px) {
     .release-notes-md { max-height: calc(100vh - 260px); overflow-y: auto; }
 }
+/* Screenshots in release notes arrive at their original pixel size, which is
+   wider than the panel. */
+.release-notes-img {
+    max-width: 100%;
+    height: auto;
+    display: block;
+    margin: 0.5rem 0;
+    border: 1px solid var(--bs-border-color);
+    border-radius: 6px;
+}
 
 [data-bs-theme="dark"] .release-notes-md code { background: rgba(255,255,255,0.08); }
 
