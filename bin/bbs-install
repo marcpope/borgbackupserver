@@ -193,6 +193,25 @@ fi
 BBS_HOSTNAME="$HOSTNAME_ARG"
 ok "Hostname: $BBS_HOSTNAME"
 
+# Port 80 has to be free, or already Apache's, for the rest of this to work.
+# Apache cannot bind it while another server holds it, and a certificate cannot
+# be issued without it — but the symptom surfaces much later as a failed reload
+# or a confusing certbot error, so say it here instead (#431).
+PORT80_PROC=""
+if command -v ss &>/dev/null; then
+    PORT80_PROC=$(ss -lntpH 2>/dev/null | awk '$4 ~ /:80$/' | grep -oE '\(\("[^"]+' | sed 's/(("//' | sort -u | paste -sd, -)
+elif command -v lsof &>/dev/null; then
+    PORT80_PROC=$(lsof -nP -iTCP:80 -sTCP:LISTEN -Fc 2>/dev/null | sed -n 's/^c//p' | sort -u | paste -sd, -)
+fi
+
+if [[ -n "$PORT80_PROC" && "$PORT80_PROC" != *apache2* ]]; then
+    warn "Port 80 is already in use by: $PORT80_PROC"
+    warn "Apache will not start while another server holds port 80, and no certificate can be issued."
+    warn "Stop it or move it to another port, then re-run this installer."
+elif [[ -n "$PORT80_PROC" ]]; then
+    ok "Port 80 is served by Apache"
+fi
+
 # DNS check (only with SSL)
 #
 # Resolution only, and never fatal. Comparing the A record against this
