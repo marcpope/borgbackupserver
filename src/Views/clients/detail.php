@@ -3717,8 +3717,11 @@ GRANT ALL PRIVILEGES ON DATABASE mydb TO <span id="pgUser2g">bbs_backup</span>;<
             <?php if ($clickhouseAvailable): ?>
             <!-- Browse Panel -->
             <div id="browse-panel">
-                <div class="restore-panel-header">
-                    <i class="bi bi-folder2-open me-1"></i> Browse Archive
+                <div class="restore-panel-header d-flex align-items-center justify-content-between">
+                    <span><i class="bi bi-folder2-open me-1"></i> Browse Archive</span>
+                    <a href="#" class="text-white text-decoration-none small" style="display:none;" id="tree-select-all">
+                        <i class="bi bi-check2-square me-1"></i><span id="tree-select-all-label">Select all</span>
+                    </a>
                 </div>
                 <div class="restore-panel-body font-monospace small" id="tree-root"></div>
             </div>

@@ -37,6 +37,9 @@
     const manualPathInfo = document.getElementById('manual-path-info');
     const manualPathPlaceholder = document.getElementById('manual-path-placeholder');
     const manualEntireArchive = document.getElementById('manual-path-entire-archive');
+    // Ticking every top-level entry by hand was the only way to take a whole
+    // archive, and a full system backup has a lot of them (#437).
+    const treeSelectAll = document.getElementById('tree-select-all');
     let entireArchiveSelected = false;
 
     // State
@@ -82,6 +85,11 @@
     }
 
     function togglePath(path, checked) {
+        // Picking a path means the user no longer wants the whole archive.
+        if (checked && entireArchiveSelected) {
+            entireArchiveSelected = false;
+            if (manualEntireArchive) manualEntireArchive.checked = false;
+        }
         if (checked) {
             if (path.endsWith('/')) {
                 for (const sel of selectedPaths) {
@@ -96,6 +104,10 @@
     }
 
     function toggleVersion(path, archiveId, checked) {
+        if (checked && entireArchiveSelected) {
+            entireArchiveSelected = false;
+            if (manualEntireArchive) manualEntireArchive.checked = false;
+        }
         if (checked) {
             selectedVersions.set(path, archiveId);
         } else {
@@ -155,6 +167,7 @@
         const entireBtn = e.target.closest('[data-remove-entire]');
         if (entireBtn) {
             entireArchiveSelected = false;
+            if (manualEntireArchive) manualEntireArchive.checked = false;
             if (manualEntireArchive) manualEntireArchive.checked = false;
             updateSelectionUI();
             return;
@@ -329,6 +342,12 @@
         selectedVersions.clear();
         entireArchiveSelected = false;
         if (manualEntireArchive) manualEntireArchive.checked = false;
+        // Only offered once an archive is chosen — nothing to select before that.
+        if (treeSelectAll) {
+            treeSelectAll.style.display = this.value ? '' : 'none';
+            const lbl = document.getElementById('tree-select-all-label');
+            if (lbl) lbl.textContent = 'Select all';
+        }
         updateSelectionUI();
 
         if (clickhouseAvailable) {
@@ -522,6 +541,28 @@
         manualEntireArchive.addEventListener('change', function() {
             entireArchiveSelected = this.checked;
             updateSelectionUI();
+        });
+    }
+
+    // Select all / Clear all over the entries at the top level of the tree.
+    // Each one is added as its own path, so the list on the right stays
+    // editable — take everything, then drop the two directories you don't
+    // want, rather than ticking twenty by hand.
+    const treeSelectAllLabel = document.getElementById('tree-select-all-label');
+    if (treeSelectAll) {
+        treeSelectAll.addEventListener('click', function (e) {
+            e.preventDefault();
+            const boxes = Array.from(treeRoot.querySelectorAll(':scope > .tree-item > input.tree-cb'));
+            if (boxes.length === 0) return;
+
+            const selecting = boxes.some(cb => !cb.checked);
+            boxes.forEach(function (cb) {
+                cb.checked = selecting;
+                togglePath(cb.dataset.path, selecting);
+            });
+            if (treeSelectAllLabel) {
+                treeSelectAllLabel.textContent = selecting ? 'Clear all' : 'Select all';
+            }
         });
     }
 
