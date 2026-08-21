@@ -399,6 +399,69 @@ foreach ($wolJobs as $wj) {
     echo date('Y-m-d H:i:s') . " WoL: magic packet " . ($sent ? 'sent' : 'send FAILED') . " to {$mac} via {$broadcast} (job #{$wj['id']}, {$remaining}m left)\n";
 }
 
+// Step 2b-server: Fail server-side jobs whose worker is gone (#438).
+//
+// These run in their own process. If one dies — the container restarted, the
+// machine rebooted mid-prune, something killed it — the job stays 'running',
+// holds its repository, and every backup to that repository queues behind work
+// nobody is doing.
+//
+// The test is whether the process still exists, not how long the job has taken.
+// A 300 GB offsite sync and a catalog rebuild of half a million files are both
+// legitimately slow, and any timeout long enough not to kill them is too long
+// to be useful. Only jobs stamped by *this* host are considered, so a shared
+// database never has one machine judging another's processes.
+$thisHost = substr((string) gethostname(), 0, 64);
+$orphanedServerJobs = $db->fetchAll("
+    SELECT id, task_type, worker_pid, agent_id, repository_id, started_at
+    FROM backup_jobs
+    WHERE status = 'running'
+      AND worker_pid IS NOT NULL
+      AND worker_host = ?
+      AND task_type IN ('prune', 'compact', 's3_sync', 's3_restore', 'repo_check', 'repo_repair',
+                        'break_lock', 'catalog_sync', 'catalog_rebuild', 'catalog_rebuild_full',
+                        'archive_delete', 'archive_lock')
+      -- A grace period so a worker that has just claimed its job and not yet
+      -- been seen by /proc is never mistaken for a dead one.
+      AND started_at < DATE_SUB(NOW(), INTERVAL 2 MINUTE)
+", [$thisHost]);
+
+foreach ($orphanedServerJobs as $oj) {
+    // Read the process's command line rather than signalling it. posix_kill()
+    // with signal 0 answers "does it exist *and* may I signal it", so a process
+    // owned by another user comes back as dead — and PIDs are reused, so a
+    // number that exists again is not proof the job's worker does.
+    //
+    // /proc/<pid>/cmdline settles both: it is readable regardless of owner, and
+    // carrying this job's own --job=N means it is the process we started.
+    $pid = (int) $oj['worker_pid'];
+    $cmdline = @file_get_contents("/proc/{$pid}/cmdline");
+    $alive = $cmdline !== false
+        && str_contains($cmdline, 'scheduler.php')
+        && str_contains($cmdline, '--job=' . $oj['id']);
+
+    if ($alive) {
+        continue;
+    }
+
+    $db->update('backup_jobs', [
+        'status' => 'failed',
+        'completed_at' => date('Y-m-d H:i:s'),
+        'error_log' => "The process running this {$oj['task_type']} job stopped without reporting a result. "
+            . 'The server was most likely restarted while it was running. Nothing was left half-written — '
+            . 'borg and rclone are safe to interrupt — so running it again is the fix.',
+    ], 'id = ?', [$oj['id']]);
+
+    $db->insert('server_log', [
+        'agent_id' => $oj['agent_id'],
+        'backup_job_id' => $oj['id'],
+        'level' => 'warning',
+        'message' => "Server-side {$oj['task_type']} job #{$oj['id']} was released — the process running it (pid {$oj['worker_pid']}) is gone",
+    ]);
+
+    echo date('Y-m-d H:i:s') . " Released orphaned server-side job #{$oj['id']} ({$oj['task_type']}) — worker pid {$oj['worker_pid']} is gone\n";
+}
+
 // Step 2c: Fail stale management tasks (update_borg, update_agent) after 7 days
 // unpicked. These are excluded from Step 2 so they don't fail the moment the
 // client's laptop goes to sleep, but we still need a safety valve — if an agent
@@ -572,8 +635,8 @@ foreach ($serverJobs as $sj) {
     // is 0 and we skip this iteration.
     $startedAt = date('Y-m-d H:i:s');
     $claim = $db->query(
-        "UPDATE backup_jobs SET status='running', started_at=? WHERE id=? AND status='sent'",
-        [$startedAt, $sj['id']]
+        "UPDATE backup_jobs SET status='running', started_at=?, worker_pid=?, worker_host=? WHERE id=? AND status='sent'",
+        [$startedAt, getmypid(), substr((string) gethostname(), 0, 64), $sj['id']]
     );
     if ($claim->rowCount() === 0) {
         echo date('Y-m-d H:i:s') . " Skipped job #{$sj['id']} ({$sj['task_type']}) — already claimed by another scheduler run\n";

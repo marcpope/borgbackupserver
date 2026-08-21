@@ -268,6 +268,10 @@ CREATE TABLE backup_jobs (
     started_at DATETIME DEFAULT NULL,
     completed_at DATETIME DEFAULT NULL,
     last_progress_at DATETIME DEFAULT NULL,
+    -- The process running a server-side job, so a worker that died can be told
+    -- apart from one still working (#438).
+    worker_pid INT DEFAULT NULL,
+    worker_host VARCHAR(64) DEFAULT NULL,
     FOREIGN KEY (backup_plan_id) REFERENCES backup_plans(id) ON DELETE SET NULL,
     FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE
 );
