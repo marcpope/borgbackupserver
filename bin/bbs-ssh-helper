@@ -7,6 +7,9 @@
 #   bbs-ssh-helper create-repo-dir <repo_dir>
 #   bbs-ssh-helper borg-init <repo_path> <encryption> [passphrase]
 #   bbs-ssh-helper delete-user <username>
+#   bbs-ssh-helper cert-status [domain]
+#   bbs-ssh-helper cert-renew [domain] [--force]
+#   bbs-ssh-helper cert-email <address|--remove>
 #   bbs-ssh-helper install-gate
 #   bbs-ssh-helper update-all-keys
 #
@@ -1402,6 +1405,105 @@ SSHEOF
             find "$TMPDIR" -type f -exec chmod 660 {} +
         fi
         echo "OK"
+        ;;
+
+    cert-status)
+        # Report the Apache TLS certificate: domain, issuer, expiry.
+        # Usage: bbs-ssh-helper cert-status [domain]
+        # Reads certbot's own view first; falls back to the live cert file so a
+        # certificate issued by hand is still reported rather than shown as
+        # "none".
+        DOMAIN="${2:-}"
+
+        if command -v certbot >/dev/null 2>&1; then
+            certbot certificates ${DOMAIN:+--cert-name "$DOMAIN"} 2>/dev/null || true
+        fi
+
+        # A parseable block regardless of certbot's output format.
+        LIVE_DIR="/etc/letsencrypt/live"
+        if [ -n "$DOMAIN" ] && [ -f "$LIVE_DIR/$DOMAIN/cert.pem" ]; then
+            CERT="$LIVE_DIR/$DOMAIN/cert.pem"
+        else
+            CERT="$(ls -1 "$LIVE_DIR"/*/cert.pem 2>/dev/null | head -1 || true)"
+        fi
+
+        if [ -n "$CERT" ] && [ -f "$CERT" ]; then
+            echo "---BBS-CERT---"
+            echo "path=$CERT"
+            echo "subject=$(openssl x509 -in "$CERT" -noout -subject 2>/dev/null | sed 's/^subject=//')"
+            echo "issuer=$(openssl x509 -in "$CERT" -noout -issuer 2>/dev/null | sed 's/^issuer=//')"
+            echo "not_after=$(openssl x509 -in "$CERT" -noout -enddate 2>/dev/null | sed 's/^notAfter=//')"
+            echo "domains=$(openssl x509 -in "$CERT" -noout -ext subjectAltName 2>/dev/null | tr -d ' ' | grep -o 'DNS:[^,]*' | sed 's/DNS://' | paste -sd, -)"
+        else
+            echo "---BBS-CERT---"
+            echo "path="
+        fi
+
+        # The renewal timer is what actually keeps the certificate alive, so
+        # say whether it is armed rather than only when the cert expires.
+        if systemctl list-timers --all 2>/dev/null | grep -q certbot; then
+            echo "timer=active"
+        elif [ -f /etc/cron.d/certbot ]; then
+            echo "timer=cron"
+        else
+            echo "timer=none"
+        fi
+        ;;
+
+    cert-renew)
+        # Renew now. Usage: bbs-ssh-helper cert-renew [domain] [--force]
+        # Output is returned verbatim to the caller — certbot explains its own
+        # failures better than a summary would.
+        DOMAIN="${2:-}"
+        FORCE="${3:-}"
+
+        if ! command -v certbot >/dev/null 2>&1; then
+            echo "Error: certbot is not installed on this server"
+            exit 1
+        fi
+
+        ARGS="renew"
+        [ -n "$DOMAIN" ] && ARGS="$ARGS --cert-name $DOMAIN"
+        [ "$FORCE" = "--force" ] && ARGS="$ARGS --force-renewal"
+
+        # shellcheck disable=SC2086
+        certbot $ARGS --non-interactive 2>&1
+        RC=$?
+        if [ $RC -eq 0 ]; then
+            apache2ctl configtest >/dev/null 2>&1 && systemctl reload apache2 >/dev/null 2>&1 || true
+        fi
+        exit $RC
+        ;;
+
+    cert-email)
+        # Set the Let's Encrypt account contact address.
+        # Usage: bbs-ssh-helper cert-email <address|--remove>
+        # The installer runs before the admin account exists, so it registers
+        # with whatever it was given (often nothing). This is how the address
+        # collected later in the panel reaches the ACME account.
+        ADDR="${2:-}"
+
+        if [ -z "$ADDR" ]; then
+            echo "Usage: bbs-ssh-helper cert-email <address|--remove>"
+            exit 1
+        fi
+        if ! command -v certbot >/dev/null 2>&1; then
+            echo "Error: certbot is not installed on this server"
+            exit 1
+        fi
+
+        if [ "$ADDR" = "--remove" ]; then
+            certbot update_account --register-unsafely-without-email --non-interactive 2>&1
+            exit $?
+        fi
+
+        case "$ADDR" in
+            *@*.*) : ;;
+            *) echo "Error: '$ADDR' is not an email address"; exit 1 ;;
+        esac
+
+        certbot update_account --email "$ADDR" --non-interactive 2>&1
+        exit $?
         ;;
 
     *)

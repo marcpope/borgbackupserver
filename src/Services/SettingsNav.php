@@ -25,6 +25,7 @@ class SettingsNav
             ['tab' => 'templates',     'label' => 'Templates',          'icon' => 'bi-clipboard-check'],
             ['tab' => 'auth',          'label' => 'Authentication',     'icon' => 'bi-shield-lock'],
             ['tab' => 'branding',      'label' => 'Branding',           'icon' => 'bi-palette'],
+            ['tab' => 'ssl',           'label' => 'SSL Certificate',    'icon' => 'bi-lock'],
             ['tab' => 'api',           'label' => 'API',                'icon' => 'bi-key'],
             ['tab' => 'updates',       'label' => 'Updates',            'icon' => 'bi-arrow-repeat'],
         ];

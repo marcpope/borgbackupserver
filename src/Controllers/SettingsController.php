@@ -29,6 +29,13 @@ class SettingsController extends Controller
             $settings[$row['key']] = $row['value'];
         }
 
+        // Only for the SSL page — the status shells out to certbot and
+        // openssl, which no other page needs to pay for.
+        $certificate = null;
+        if ($activeTab === 'ssl') {
+            $certificate = (new \BBS\Services\CertificateService())->status();
+        }
+
         $templates = $this->db->fetchAll("SELECT * FROM backup_templates ORDER BY name");
         $clientProfiles = (new \BBS\Services\ClientProfileService())->all();
 
@@ -36,8 +43,8 @@ class SettingsController extends Controller
 
         // Exclude platform-kind tokens — those belong to the hosted platform,
         // not the customer, and must not appear on the user-facing list.
-        // Mobile tokens (phones signed in via the app) ARE shown so an admin
-        // can see and revoke devices from here.
+        // Device tokens minted by password/SSO sign-in ARE shown so an admin
+        // can see and revoke them from here.
         $apiTokens = $this->db->fetchAll("
             SELECT t.id, t.name, t.kind, t.device_name, t.last_seen_ip,
                    t.created_at, t.last_used_at, t.can_read_secrets, u.username
@@ -68,7 +75,65 @@ class SettingsController extends Controller
             'apiTokens' => $apiTokens,
             'oidcUsers' => $oidcUsers,
             'smtpWarning' => $smtpWarning,
+            'certificate' => $certificate,
         ]);
+    }
+
+    /**
+     * POST /settings/ssl/renew — the Renew button.
+     *
+     * certbot's own output comes back verbatim. It explains a refusal ("not
+     * due for renewal") and a failure better than a summary would, and the
+     * page shows it.
+     */
+    public function sslRenew(): void
+    {
+        $this->requireAdmin();
+        $this->verifyCsrf();
+
+        $force = !empty($_POST['force']);
+        $result = (new \BBS\Services\CertificateService())->renew(null, $force);
+
+        $this->db->insert('server_log', [
+            'level' => $result['success'] ? 'info' : 'warning',
+            'message' => 'Certificate renewal requested from Settings — '
+                . ($result['success'] ? 'completed' : 'failed'),
+        ]);
+
+        $this->json([
+            'status' => $result['success'] ? 'ok' : 'error',
+            'output' => $result['output'],
+        ]);
+    }
+
+    /** POST /settings/ssl/email — the Let's Encrypt contact address. */
+    public function sslEmail(): void
+    {
+        $this->requireAdmin();
+        $this->verifyCsrf();
+
+        $email = trim($_POST['ssl_email'] ?? '');
+        if ($email !== '' && !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            $this->flash('danger', 'That is not a valid email address.');
+            $this->redirect('/settings?tab=ssl');
+        }
+
+        $result = (new \BBS\Services\CertificateService())->setContactEmail($email);
+        if ($result['success']) {
+            // Remembered so the field shows what is set. certbot holds the
+            // authoritative copy on the ACME account; this is for display.
+            $this->db->query(
+                "INSERT INTO settings (`key`, `value`) VALUES ('ssl_contact_email', ?)
+                 ON DUPLICATE KEY UPDATE `value` = VALUES(`value`)",
+                [$email]
+            );
+            $this->flash('success', $email === ''
+                ? 'Contact address cleared. Let\'s Encrypt will not send expiry warnings.'
+                : "Expiry warnings will be sent to {$email}.");
+        } else {
+            $this->flash('danger', 'Could not update the contact address: ' . $result['output']);
+        }
+        $this->redirect('/settings?tab=ssl');
     }
 
     public function dockerSetup(): void

@@ -3,7 +3,7 @@
 # BBS Install Script — takes a fresh Ubuntu 22.04+ server to "open the wizard."
 #
 # Usage:
-#   sudo bash bbs-install [--hostname backups.example.com] [--no-ssl]
+#   sudo bash bbs-install [--hostname backups.example.com] [--no-ssl] [--email you@example.com]
 #
 set -euo pipefail
 
@@ -57,13 +57,19 @@ echo -e "${BOLD}═════════════════════�
 # ─── Parse arguments ─────────────────────────────────────────────────────────
 HOSTNAME_ARG=""
 NO_SSL=false
+# Let's Encrypt account contact. The setup wizard collects the admin address
+# after this script finishes, so there is nothing to read here — but expiry
+# warnings go to this address, so take it when offered and push the admin's
+# real one to the ACME account later (Settings -> SSL).
+SSL_EMAIL=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --hostname)  HOSTNAME_ARG="$2"; shift 2 ;;
         --no-ssl)    NO_SSL=true; shift ;;
+        --email)     SSL_EMAIL="$2"; shift 2 ;;
         -h|--help)
-            echo "Usage: sudo bash bbs-install [--hostname backups.example.com] [--no-ssl]"
+            echo "Usage: sudo bash bbs-install [--hostname backups.example.com] [--no-ssl] [--email you@example.com]"
             exit 0 ;;
         *) die "Unknown argument: $1" ;;
     esac
@@ -188,21 +194,27 @@ BBS_HOSTNAME="$HOSTNAME_ARG"
 ok "Hostname: $BBS_HOSTNAME"
 
 # DNS check (only with SSL)
+#
+# Resolution only, and never fatal. Comparing the A record against this
+# server's public IPv4 looked like a check on "can Let's Encrypt reach us" and
+# was not: it fails on IPv6-only hosts, behind NAT gateways, on round-robin
+# records and anything fronted by a CDN, and it aborted installs that would
+# have succeeded (#431). The certificate request itself is the real check, and
+# it runs as a dry run once Apache is up.
 if [[ "$NO_SSL" == false ]]; then
-    if command -v dig &>/dev/null; then
-        DNS_IP=$(dig +short "$BBS_HOSTNAME" | tail -1)
-        PUBLIC_IP=$(curl -s --max-time 5 ifconfig.me || true)
-        if [[ -n "$DNS_IP" && -n "$PUBLIC_IP" && "$DNS_IP" != "$PUBLIC_IP" ]]; then
-            fail "DNS mismatch: $BBS_HOSTNAME resolves to $DNS_IP but this server's public IP is $PUBLIC_IP"
-            die "Fix DNS or use --no-ssl for LAN installs. Certbot will fail without correct DNS."
-        fi
-        if [[ -n "$DNS_IP" ]]; then
-            ok "DNS check passed ($DNS_IP)"
-        else
-            warn "Could not resolve $BBS_HOSTNAME — certbot may fail"
-        fi
+    RESOLVED=""
+    if command -v getent &>/dev/null; then
+        # getent covers A and AAAA, and honours the resolver the machine
+        # actually uses rather than querying DNS directly.
+        RESOLVED=$(getent ahosts "$BBS_HOSTNAME" 2>/dev/null | awk '{print $1}' | sort -u | paste -sd' ' -)
+    elif command -v dig &>/dev/null; then
+        RESOLVED=$(dig +short "$BBS_HOSTNAME" | paste -sd' ' -)
+    fi
+
+    if [[ -n "$RESOLVED" ]]; then
+        ok "$BBS_HOSTNAME resolves to $RESOLVED"
     else
-        warn "dig not available, skipping DNS check"
+        warn "$BBS_HOSTNAME does not resolve yet — the certificate request will fail unless DNS is in place"
     fi
 else
     ok "SSL disabled — skipping DNS check"
@@ -535,7 +547,39 @@ if [[ "$NO_SSL" == true ]]; then
     PROTO="http"
 else
     PROTO="https"
-    if certbot --apache -d "$BBS_HOSTNAME" --non-interactive --agree-tos --email "admin@$BBS_HOSTNAME" 2>&1; then
+    # Register with a real address when one was given. The setup wizard has
+    # not run yet, so there is no admin account to read one from; whatever is
+    # entered there is pushed to the ACME account afterwards from
+    # Settings -> SSL. Guessing admin@$BBS_HOSTNAME only sent expiry warnings
+    # to a mailbox that usually does not exist.
+    if [[ -n "$SSL_EMAIL" ]]; then
+        CERTBOT_ACCOUNT=(--email "$SSL_EMAIL")
+        ok "Let's Encrypt contact: $SSL_EMAIL"
+    else
+        CERTBOT_ACCOUNT=(--register-unsafely-without-email)
+        info "No --email given; registering without a contact address. Set one later in Settings -> SSL so expiry warnings reach you."
+    fi
+
+    # Dry run first, against the same plugin the real request uses. Apache is
+    # already serving port 80 here, so this needs no temporary install and
+    # cannot collide with a running web server the way --standalone does.
+    info "Testing whether a certificate can be issued for $BBS_HOSTNAME..."
+    if certbot --apache -d "$BBS_HOSTNAME" --non-interactive --agree-tos "${CERTBOT_ACCOUNT[@]}" --dry-run >> "$LOG_FILE" 2>&1; then
+        ok "Certificate request test passed"
+    else
+        fail "A certificate cannot be issued for $BBS_HOSTNAME yet. Common causes:"
+        fail "  - Port 80 not reachable from the internet (firewall, NAT, security group)"
+        fail "  - $BBS_HOSTNAME does not point at this server"
+        fail "  - An AAAA record exists but port 80 is not served over IPv6"
+        fail "  - Another site on this server already answers for $BBS_HOSTNAME"
+        warn "Install continues over HTTP. Fix the above, then run: certbot --apache -d $BBS_HOSTNAME"
+        warn "Certbot's own output is in $LOG_FILE"
+        PROTO="http"
+    fi
+fi
+
+if [[ "$PROTO" == "https" ]]; then
+    if certbot --apache -d "$BBS_HOSTNAME" --non-interactive --agree-tos "${CERTBOT_ACCOUNT[@]}" 2>&1; then
         ok "SSL certificate obtained"
     else
         fail "Certbot failed — ensure DNS for $BBS_HOSTNAME points to this server"

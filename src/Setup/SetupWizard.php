@@ -190,6 +190,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $stmt = $pdo->prepare("INSERT INTO users (username, email, password_hash, role) VALUES (?, ?, ?, 'admin') ON DUPLICATE KEY UPDATE password_hash = VALUES(password_hash), email = VALUES(email)");
                 $stmt->execute([$setup['admin_username'], $setup['admin_email'], $passwordHash]);
 
+                // The installer ran certbot before this account existed, so
+                // the Let's Encrypt contact was a guess at best. Now that a
+                // real address is known, point the ACME account at it so
+                // expiry warnings reach someone (#431). Best effort — a server
+                // whose TLS is terminated elsewhere has no certbot, and that
+                // must not fail the wizard.
+                try {
+                    if ((new \BBS\Services\CertificateService())->syncContactEmail($setup['admin_email'])) {
+                        $stmt = $pdo->prepare("INSERT INTO settings (`key`, `value`) VALUES ('ssl_contact_email', ?) ON DUPLICATE KEY UPDATE `value` = VALUES(`value`)");
+                        $stmt->execute([$setup['admin_email']]);
+                    }
+                } catch (\Throwable $e) {
+                    // Recorded by certbot itself; the wizard carries on.
+                }
+
                 // 5. Set storage_path and server_host in settings
                 $stmt = $pdo->prepare("INSERT INTO settings (`key`, `value`) VALUES ('storage_path', ?) ON DUPLICATE KEY UPDATE `value` = VALUES(`value`)");
                 $stmt->execute([$setup['storage_path']]);

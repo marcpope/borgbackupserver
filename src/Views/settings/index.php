@@ -2396,6 +2396,177 @@ document.getElementById('appIconFileInput').addEventListener('change', function(
 <?php endif; ?>
 
 <!-- API Tab -->
+<?php if ($activeTab === 'ssl'): ?>
+<?php $c = $certificate ?? null; ?>
+<div class="settings-page-head">
+    <h1 class="settings-page-title">SSL Certificate</h1>
+    <p class="settings-page-lede mb-0">The certificate this server presents to browsers and agents. Renewal is automatic; this page is for checking it worked and stepping in when it didn't.</p>
+</div>
+<div>
+    <h5 class="settings-group">Status</h5>
+
+    <?php if (!$c || empty($c['installed'])): ?>
+    <div class="alert alert-secondary d-flex align-items-start">
+        <i class="bi bi-info-circle me-2 fs-5"></i>
+        <div>
+            <strong>No certificate found on this server.</strong>
+            <div class="small mt-1">
+                That is expected if TLS is terminated somewhere else — a reverse proxy, a load balancer, or a Docker setup that handles certificates outside the container. If this server is meant to hold its own certificate, run
+                <code>certbot --apache -d <?= htmlspecialchars($settings['server_host'] ?? 'your.hostname') ?></code> and reload this page.
+            </div>
+        </div>
+    </div>
+    <?php else: ?>
+
+    <?php
+        $days = $c['days_remaining'];
+        if (!empty($c['expired']))          { $band = 'danger';  $note = 'This certificate has expired.'; }
+        elseif (!empty($c['expiring_soon'])) { $band = 'warning'; $note = 'Renewal has not happened yet — check the schedule below.'; }
+        else                                 { $band = 'success'; $note = 'Renewal runs automatically before this date.'; }
+    ?>
+    <div class="alert alert-<?= $band ?> d-flex align-items-start">
+        <i class="bi bi-<?= $band === 'success' ? 'shield-check' : 'exclamation-triangle' ?> me-2 fs-5"></i>
+        <div>
+            <strong>
+                <?php if ($days === null): ?>Certificate installed
+                <?php elseif ($days < 0): ?>Expired <?= abs($days) ?> day<?= abs($days) === 1 ? '' : 's' ?> ago
+                <?php else: ?><?= $days ?> day<?= $days === 1 ? '' : 's' ?> remaining
+                <?php endif; ?>
+            </strong>
+            <div class="small mt-1"><?= htmlspecialchars($note) ?></div>
+        </div>
+    </div>
+
+    <div class="settings-row">
+        <div>
+            <div class="settings-row-label">Covers</div>
+            <p class="settings-row-help">The names this certificate is valid for. A browser reaching the server by any other name will warn.</p>
+        </div>
+        <div class="settings-row-control">
+            <span class="small"><?= $c['domains'] ? htmlspecialchars(implode(', ', $c['domains'])) : '—' ?></span>
+        </div>
+        <div class="settings-row-default"></div>
+    </div>
+
+    <div class="settings-row">
+        <div>
+            <div class="settings-row-label">Issued by</div>
+            <p class="settings-row-help"><?= !empty($c['self_signed']) ? 'Self-signed. Browsers will warn, and this cannot be renewed automatically.' : 'The certificate authority that signed it.' ?></p>
+        </div>
+        <div class="settings-row-control">
+            <span class="small"><?= htmlspecialchars($c['issuer'] ?? '—') ?></span>
+        </div>
+        <div class="settings-row-default"></div>
+    </div>
+
+    <div class="settings-row">
+        <div>
+            <div class="settings-row-label">Expires</div>
+            <p class="settings-row-help">Let's Encrypt certificates last 90 days and are renewed at 30 days remaining.</p>
+        </div>
+        <div class="settings-row-control">
+            <span class="small"><?= $c['expires_at'] ? \BBS\Core\TimeHelper::format($c['expires_at'], 'M j, Y g:ia') : '—' ?></span>
+        </div>
+        <div class="settings-row-default"></div>
+    </div>
+
+    <div class="settings-row">
+        <div>
+            <div class="settings-row-label">Automatic renewal</div>
+            <p class="settings-row-help">Certbot's own timer. If this says Not scheduled, nothing will renew the certificate and it will expire.</p>
+        </div>
+        <div class="settings-row-control">
+            <?php $timer = $c['auto_renewal'] ?? 'unknown'; ?>
+            <?php if ($timer === 'active' || $timer === 'cron'): ?>
+                <span class="badge bg-success-subtle text-success-emphasis">Scheduled<?= $timer === 'cron' ? ' (cron)' : '' ?></span>
+            <?php elseif ($timer === 'none'): ?>
+                <span class="badge bg-danger-subtle text-danger-emphasis">Not scheduled</span>
+            <?php else: ?>
+                <span class="badge bg-secondary-subtle text-secondary-emphasis">Unknown</span>
+            <?php endif; ?>
+        </div>
+        <div class="settings-row-default"></div>
+    </div>
+    <?php endif; ?>
+
+    <h5 class="settings-group mt-4">Expiry warnings</h5>
+    <form method="POST" action="/settings/ssl/email">
+        <input type="hidden" name="csrf_token" value="<?= $this->csrfToken() ?>">
+        <div class="settings-row">
+            <div>
+                <div class="settings-row-label">Contact address</div>
+                <p class="settings-row-help">Where Let's Encrypt sends a warning if the certificate is close to expiring and has not renewed. Installations before this page existed registered without one, or with a guessed address that does not receive mail. Leave blank to receive nothing.</p>
+            </div>
+            <div class="settings-row-control">
+                <input type="email" class="form-control" name="ssl_email" style="max-width:260px;"
+                       placeholder="you@example.com"
+                       value="<?= htmlspecialchars($settings['ssl_contact_email'] ?? '') ?>">
+            </div>
+            <div class="settings-row-default">
+                <button type="submit" class="btn btn-sm btn-primary">Save</button>
+            </div>
+        </div>
+    </form>
+
+    <?php if ($c && !empty($c['installed']) && empty($c['self_signed'])): ?>
+    <h5 class="settings-group mt-4">Renew now</h5>
+    <div class="settings-row">
+        <div>
+            <div class="settings-row-label">Renew the certificate</div>
+            <p class="settings-row-help">Certbot declines while more than 30 days remain and will say so. Use Force only after fixing something that broke renewal — Let's Encrypt limits how many certificates a domain may be issued per week.</p>
+        </div>
+        <div class="settings-row-control d-flex gap-2">
+            <button type="button" class="btn btn-sm btn-primary" id="sslRenewBtn">Renew</button>
+            <button type="button" class="btn btn-sm btn-outline-secondary" id="sslForceBtn">Force renew</button>
+        </div>
+        <div class="settings-row-default"></div>
+    </div>
+    <pre id="sslRenewOut" class="small bg-body-tertiary border rounded p-2 mt-2 d-none" style="max-height:320px;overflow:auto;white-space:pre-wrap;"></pre>
+    <?php endif; ?>
+</div>
+
+<script>
+(function () {
+    const out = document.getElementById('sslRenewOut');
+    if (!out) return;
+    const csrf = '<?= $this->csrfToken() ?>';
+
+    async function renew(force, btn) {
+        const label = btn.textContent;
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Working…';
+        out.classList.remove('d-none', 'text-danger');
+        out.textContent = 'Asking certbot…';
+        try {
+            const body = new URLSearchParams({ csrf_token: csrf });
+            if (force) body.set('force', '1');
+            const r = await fetch('/settings/ssl/renew', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-CSRF-Token': csrf },
+                credentials: 'same-origin',
+                body,
+            });
+            const d = await r.json();
+            out.textContent = d.output || '(no output)';
+            if (d.status !== 'ok') out.classList.add('text-danger');
+        } catch (e) {
+            out.textContent = 'Request failed: ' + e.message;
+            out.classList.add('text-danger');
+        } finally {
+            btn.disabled = false;
+            btn.textContent = label;
+        }
+    }
+
+    document.getElementById('sslRenewBtn').addEventListener('click', function () { renew(false, this); });
+    document.getElementById('sslForceBtn').addEventListener('click', function () {
+        if (!confirm('Force a new certificate even though the current one is still valid?\n\nLet\'s Encrypt limits certificates per domain per week.')) return;
+        renew(true, this);
+    });
+})();
+</script>
+<?php endif; ?>
+
 <?php if ($activeTab === 'api'): ?>
 <div class="settings-page-head">
     <h1 class="settings-page-title">API</h1>

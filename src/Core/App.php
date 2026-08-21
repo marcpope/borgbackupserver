@@ -202,6 +202,8 @@ class App
         // Storage Locations
         $this->router->map('GET', '/storage-locations', 'StorageLocationController@index');
         $this->router->map('POST', '/storage-locations', 'StorageLocationController@store');
+        $this->router->map('POST', '/settings/ssl/renew', 'SettingsController@sslRenew');
+        $this->router->map('POST', '/settings/ssl/email', 'SettingsController@sslEmail');
         $this->router->map('POST', '/storage-locations/[i:id]/update', 'StorageLocationController@update');
         $this->router->map('POST', '/storage-locations/[i:id]/delete', 'StorageLocationController@destroy');
         $this->router->map('POST', '/storage-locations/s3', 'StorageLocationController@saveS3');
@@ -352,6 +354,10 @@ class App
         $this->router->map('POST',   '/api/v1/clients/[i:id]/repositories/[i:repoId]/maintenance', 'Api\\AdminApiController@repositoryMaintenance');
         $this->router->map('POST',   '/api/v1/clients/[i:id]/repositories/[i:repoId]/catalog/sync', 'Api\\AdminApiController@syncRepositoryCatalog');
         $this->router->map('DELETE', '/api/v1/clients/[i:id]/repositories/[i:repoId]/archives/[i:archiveId]', 'Api\\AdminApiController@deleteArchive');
+        // TLS certificate — status, renew, contact address.
+        $this->router->map('GET',  '/api/v1/ssl', 'Api\\SslApiController@show');
+        $this->router->map('POST', '/api/v1/ssl/renew', 'Api\\SslApiController@renew');
+        $this->router->map('PUT',  '/api/v1/ssl/email', 'Api\\SslApiController@setEmail');
         $this->router->map('GET', '/api/v1/storage', 'Api\\AdminApiController@listStorageLocations');
         $this->router->map('POST', '/api/v1/storage', 'Api\\AdminApiController@createStorageLocation');
         $this->router->map('GET', '/api/v1/storage/capacity', 'Api\\AdminApiController@getStorageCapacity');
