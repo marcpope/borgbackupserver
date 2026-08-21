@@ -483,6 +483,31 @@ APP_KEY=$APP_KEY
 EOF
 fi
 
+# The container always serves HTTP on 80 and SSH on 22. WEB_PORT and SSH_PORT
+# are the *host* side of the published mapping, so if APP_URL names a different
+# port from the one the web UI is published on, browsers reach BBS but every
+# agent is handed a URL that goes nowhere — and nothing else reports it (#436).
+APP_URL_PORT="$(printf '%s' "${APP_URL:-}" | sed -nE 's|^https?://[^/:]+:([0-9]+).*|\1|p')"
+if [ -z "$APP_URL_PORT" ]; then
+    case "${APP_URL:-}" in
+        https://*) APP_URL_PORT=443 ;;
+        http://*)  APP_URL_PORT=80 ;;
+    esac
+fi
+# https means something is terminating TLS in front of this container, and its
+# port has no reason to match the one we publish — that setup is documented, so
+# it must not warn. Only a plain-http APP_URL should agree with WEB_PORT.
+case "${APP_URL:-}" in https://*) APP_URL_PORT="" ;; esac
+
+if [ -n "${WEB_PORT:-}" ] && [ -n "$APP_URL_PORT" ] && [ "$WEB_PORT" != "$APP_URL_PORT" ]; then
+    echo ""
+    echo "  WARNING: APP_URL says port ${APP_URL_PORT} but WEB_PORT is ${WEB_PORT}."
+    echo "  Agents are given APP_URL, so they will try ${APP_URL_PORT} and fail."
+    echo "  Set both to the port you publish, e.g. APP_URL=http://host:${WEB_PORT}"
+    echo "  (unless a reverse proxy in front of this container makes that correct)."
+    echo ""
+fi
+
 chown www-data:www-data "$ENV_VOLUME"
 chmod 600 "$ENV_VOLUME"
 
