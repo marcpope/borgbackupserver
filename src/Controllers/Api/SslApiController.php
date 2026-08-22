@@ -34,6 +34,14 @@ class SslApiController extends Controller
         $this->requireApiToken();
         $status = (new CertificateService())->status();
         unset($status['raw']);
+
+        // The contact address could be written but not read. It is an account
+        // setting rather than a property of the certificate, so it is merged
+        // here rather than pushed into CertificateService::status().
+        $status['email'] = $this->db->fetchOne(
+            "SELECT `value` FROM settings WHERE `key` = 'ssl_contact_email'"
+        )['value'] ?? '';
+
         $this->json($status);
     }
 

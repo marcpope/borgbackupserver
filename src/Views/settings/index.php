@@ -2495,7 +2495,7 @@ document.getElementById('appIconFileInput').addEventListener('change', function(
         <div class="settings-row">
             <div>
                 <div class="settings-row-label">Contact address</div>
-                <p class="settings-row-help">Where Let's Encrypt sends a warning if the certificate is close to expiring and has not renewed. Installations before this page existed registered without one, or with a guessed address that does not receive mail. Leave blank to receive nothing.</p>
+                <p class="settings-row-help">The contact address on the Let's Encrypt account, used for account and technical notices. Let's Encrypt stopped sending certificate expiry warnings in June 2025, so this address will not warn you about an expiring certificate — BBS does that itself. Leave blank to set none.</p>
             </div>
             <div class="settings-row-control">
                 <input type="email" class="form-control" name="ssl_email" style="max-width:260px;"
