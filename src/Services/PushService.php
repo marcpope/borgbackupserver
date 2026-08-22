@@ -125,6 +125,80 @@ class PushService
 
     // ── Circuit breaker ─────────────────────────────────────────────
 
+    /**
+     * Title, body and a deep link for one queued event.
+     *
+     * Everything is looked up at send time rather than stored on the queue row:
+     * a client renamed between the event and the send should read as its
+     * current name, and the queue stays a list of what happened rather than a
+     * copy of how it was worded.
+     *
+     * `deep_link` is a path, not a URL. The app already knows which server it
+     * is talking to, and a path cannot send anyone to a different one.
+     */
+    private function describe(string $event, int $jobId, int $clientId): array
+    {
+        $client = $clientId > 0
+            ? ($this->db->fetchOne("SELECT name FROM agents WHERE id = ?", [$clientId])['name'] ?? null)
+            : null;
+
+        $plan = null;
+        if ($jobId > 0) {
+            $row = $this->db->fetchOne("
+                SELECT bp.name AS plan_name, a.name AS client_name, bj.agent_id
+                FROM backup_jobs bj
+                LEFT JOIN backup_plans bp ON bp.id = bj.backup_plan_id
+                LEFT JOIN agents a ON a.id = bj.agent_id
+                WHERE bj.id = ?
+            ", [$jobId]);
+            $plan = $row['plan_name'] ?? null;
+            $client = $client ?: ($row['client_name'] ?? null);
+            if ($clientId <= 0 && !empty($row['agent_id'])) {
+                $clientId = (int) $row['agent_id'];
+            }
+        }
+
+        $on = $client !== null ? " on {$client}" : '';
+        $forPlan = $plan !== null ? " \"{$plan}\"" : '';
+
+        // Deepest thing the event is actually about: a job if there is one,
+        // otherwise the client, otherwise the page that lists them.
+        $deepLink = $jobId > 0 ? "/jobs/{$jobId}"
+            : ($clientId > 0 ? "/clients/{$clientId}" : '/dashboard');
+
+        switch ($event) {
+            case 'backup_failed':
+                return ['title' => $client !== null ? "Backup failed on {$client}" : 'Backup failed',
+                        'body' => trim("Plan{$forPlan} did not complete.") ,
+                        'deep_link' => $deepLink];
+            case 'backup_warning':
+                return ['title' => $client !== null ? "Backup warnings on {$client}" : 'Backup completed with warnings',
+                        'body' => trim("Plan{$forPlan} finished with warnings."),
+                        'deep_link' => $deepLink];
+            case 'agent_offline':
+                return ['title' => $client !== null ? "{$client} is offline" : 'Client offline',
+                        'body' => 'It has stopped checking in.',
+                        'deep_link' => $clientId > 0 ? "/clients/{$clientId}" : '/clients'];
+            case 'missed_schedule':
+                return ['title' => $client !== null ? "Missed backup on {$client}" : 'Scheduled backup missed',
+                        'body' => trim("Scheduled plan{$forPlan} did not run."),
+                        'deep_link' => $deepLink];
+            case 'storage_low':
+                return ['title' => 'Storage running low',
+                        'body' => 'A storage location passed your threshold.',
+                        'deep_link' => '/storage-locations'];
+            case 'certificate_expiring':
+                return ['title' => 'SSL certificate needs attention',
+                        'body' => 'The certificate is close to expiring and has not renewed.',
+                        'deep_link' => '/settings?tab=ssl'];
+            default:
+                $label = ucfirst(str_replace('_', ' ', $event));
+                return ['title' => $label . ($client !== null ? " on {$client}" : ''),
+                        'body' => 'Open for details.',
+                        'deep_link' => $deepLink];
+        }
+    }
+
     private function breakerOpen(): bool
     {
         $until = $this->setting('push_relay_cooldown_until');
@@ -381,6 +455,16 @@ class PushService
             ];
             if ($g['job_id'] > 0)    $payload['job_id'] = $g['job_id'];
             if ($g['client_id'] > 0) $payload['client_id'] = $g['client_id'];
+
+            // Name what happened and where. "A scheduled backup didn't run"
+            // tells nobody which machine to look at, and an alert that cannot
+            // be acted on without opening the app first is an alert people
+            // learn to swipe away. The text is composed here, where the names
+            // are, and carried to the transport as-is.
+            $detail = $this->describe($g['event'], $g['job_id'], $g['client_id']);
+            $payload['title'] = $detail['title'];
+            $payload['body']  = $detail['body'];
+            $payload['deep_link'] = $detail['deep_link'];
 
             $result = $this->request('POST', '/v1/send', $payload);
 
