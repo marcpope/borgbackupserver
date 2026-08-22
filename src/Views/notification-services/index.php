@@ -20,6 +20,7 @@ $eventGroups = [
     ],
     'Storage' => [
         'storage_low' => 'Storage Low',
+        'certificate_expiring' => 'SSL Certificate Expiring',
         's3_sync_failed' => 'S3 Sync Failed',
         's3_sync_done' => 'S3 Sync Done',
     ],
@@ -49,6 +50,7 @@ $eventColors = [
     'backup_warning' => 'warning',
     'agent_offline' => 'warning',
     'storage_low' => 'warning',
+    'certificate_expiring' => 'warning',
     'missed_schedule' => 'warning',
 ];
 ?>
@@ -162,7 +164,7 @@ $eventColors = [
                             <div class="form-check">
                                 <input class="form-check-input" type="checkbox" name="events[<?= $event ?>]"
                                        value="1" id="addEvent_<?= $event ?>"
-                                       <?= str_contains($event, 'failed') || $event === 'agent_offline' || $event === 'storage_low' || $event === 'missed_schedule' ? 'checked' : '' ?>>
+                                       <?= str_contains($event, 'failed') || $event === 'agent_offline' || $event === 'storage_low' || $event === 'certificate_expiring' || $event === 'missed_schedule' ? 'checked' : '' ?>>
                                 <label class="form-check-label" for="addEvent_<?= $event ?>">
                                     <?= htmlspecialchars($label) ?>
                                 </label>

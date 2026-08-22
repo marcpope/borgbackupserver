@@ -98,8 +98,29 @@ class CertificateService
             'expired'        => $daysRemaining !== null && $daysRemaining < 0,
             'auto_renewal'   => $block['timer'] ?? 'unknown',
             'self_signed'    => $selfSigned,
+            'last_error'     => $block['last_error'] ?? null,
             'raw'            => $raw,
         ];
+    }
+
+    /**
+     * Why renewal is not happening, as a clause to append to a warning.
+     *
+     * Null when nothing is known — a trailing "Reason: unknown" is worse than
+     * no clause at all.
+     */
+    public function stalledReason(array $status): ?string
+    {
+        if (($status['auto_renewal'] ?? '') === 'none') {
+            return 'nothing is scheduled to renew it (no certbot timer or cron job)';
+        }
+        if (!empty($status['self_signed'])) {
+            return 'the certificate is self-signed and cannot be renewed automatically';
+        }
+        if (!empty($status['last_error'])) {
+            return trim($status['last_error']);
+        }
+        return null;
     }
 
     /**

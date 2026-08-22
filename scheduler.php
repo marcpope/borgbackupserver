@@ -2418,6 +2418,93 @@ foreach ($users as $u) {
     }
 }
 
+// Step 6b: Warn about a certificate that is not renewing (#SSL).
+//
+// Let's Encrypt stopped sending expiry warnings in June 2025, so nothing tells
+// anyone a renewal has stalled until a browser does. That matters more here
+// than on an ordinary site: agents check in over this same certificate, so an
+// expiry stops backups fleet-wide rather than merely looking bad.
+//
+// certbot renews at 30 days remaining, so reaching 29 means renewal was due and
+// did not happen. That is the signal, and why the ladder starts there.
+//
+// Once a day: status() shells out to certbot and openssl, which is not
+// something to do every minute.
+$certCheckedOn = $db->fetchOne("SELECT `value` FROM settings WHERE `key` = 'certificate_checked_on'")['value'] ?? '';
+if ($certCheckedOn !== date('Y-m-d')) {
+    try {
+        $certSvc = new \BBS\Services\CertificateService();
+        $certStatus = $certSvc->status();
+
+        // An install behind a proxy that terminates TLS elsewhere has no
+        // certificate and must stay silent.
+        if (!empty($certStatus['installed']) && $certStatus['days_remaining'] !== null) {
+            $notificationService = $notificationService ?? new NotificationService();
+            $days = (int) $certStatus['days_remaining'];
+            $reason = $certSvc->stalledReason($certStatus);
+            $because = $reason !== null ? ' Reason: ' . $reason : '';
+
+            // reference_id carries the threshold. The dedup key is
+            // (type, agent_id, reference_id, user_id), so each rung is its own
+            // unresolved notification — without it, every step after the first
+            // would bump a counter and send nothing.
+            // Ascending, and the first rung the day count has reached wins.
+            // Descending picks 29 every time, because 1 day remaining is also
+            // "29 or fewer" — every rung would announce 29 days.
+            $ladder = [1, 2, 3, 7, 14, 29];
+            foreach ($ladder as $threshold) {
+                if ($days > $threshold) {
+                    continue;
+                }
+                $critical = $threshold <= 3;
+                $message = $critical
+                    ? sprintf(
+                        'URGENT: the SSL certificate expires %s. Backups will stop when it does.%s',
+                        $threshold === 1 ? 'tomorrow' : "in {$threshold} days",
+                        $because
+                    )
+                    : sprintf('Unable to renew the SSL certificate — it expires in %d days.%s', $threshold, $because);
+
+                $notificationService->notify(
+                    'certificate_expiring',
+                    null,
+                    $threshold,
+                    $message,
+                    $critical ? 'critical' : 'warning'
+                );
+                // Only the rung just reached; the ones below fire on their own day.
+                break;
+            }
+
+            if ($days <= 0) {
+                $notificationService->notify(
+                    'certificate_expiring',
+                    null,
+                    0,
+                    'The SSL certificate has expired. Agents can no longer check in.' . $because,
+                    'critical'
+                );
+            }
+
+            // Renewal worked — clear the whole ladder so the bell isn't left
+            // holding six stale entries.
+            if ($days > 30) {
+                foreach (array_merge($ladder, [0]) as $threshold) {
+                    $notificationService->resolve('certificate_expiring', null, $threshold);
+                }
+            }
+        }
+
+        $db->query(
+            "INSERT INTO settings (`key`, `value`) VALUES ('certificate_checked_on', ?)
+             ON DUPLICATE KEY UPDATE `value` = VALUES(`value`)",
+            [date('Y-m-d')]
+        );
+    } catch (\Throwable $e) {
+        echo date('Y-m-d H:i:s') . " Certificate check skipped: " . $e->getMessage() . "\n";
+    }
+}
+
 // Step 7: Cleanup old resolved notifications and server logs
 $notificationService->cleanup();
 

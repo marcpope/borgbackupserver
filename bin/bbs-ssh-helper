@@ -1506,6 +1506,16 @@ SSHEOF
             echo "path="
         fi
 
+        # Why the last renewal attempt failed, if it did. "DNS problem:
+        # NXDOMAIN looking up A for ..." tells an admin what to fix; a bare
+        # "expires in 7 days" does not.
+        LE_LOG="/var/log/letsencrypt/letsencrypt.log"
+        if [ -f "$LE_LOG" ]; then
+            LAST_ERR="$(grep -aiE '^[0-9-]+ [0-9:,]+ (ERROR|CRITICAL)|Domain: .*Detail:|Detail: ' "$LE_LOG" 2>/dev/null \
+                | tail -1 | sed -E 's/^[0-9-]+ [0-9:,]+ [A-Z]+ +//' | cut -c1-300)"
+            [ -n "$LAST_ERR" ] && echo "last_error=$LAST_ERR"
+        fi
+
         # The renewal timer is what actually keeps the certificate alive, so
         # say whether it is armed rather than only when the cert expires.
         if systemctl list-timers --all 2>/dev/null | grep -q certbot; then
