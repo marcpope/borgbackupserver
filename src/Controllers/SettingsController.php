@@ -86,6 +86,29 @@ class SettingsController extends Controller
      * due for renewal") and a failure better than a summary would, and the
      * page shows it.
      */
+    /**
+     * POST /settings/upgrade/cancel — stop waiting for the queue to drain.
+     *
+     * Only meaningful while an upgrade is queued behind running jobs. Once it
+     * has actually started there is nothing to cancel.
+     */
+    public function cancelUpgrade(): void
+    {
+        $this->requireAdmin();
+        $this->verifyCsrf();
+
+        $svc = new \BBS\Services\UpdateService();
+        $svc->cancelPendingUpgrade();
+
+        $this->db->insert('server_log', [
+            'level' => 'info',
+            'message' => 'Waiting upgrade cancelled',
+        ]);
+
+        $this->flash('success', 'Upgrade cancelled. The queue is running again.');
+        $this->redirect('/settings?tab=updates');
+    }
+
     public function sslRenew(): void
     {
         $this->requireAdmin();

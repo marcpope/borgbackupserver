@@ -236,6 +236,46 @@ class UpdateService
      *
      * @param string|null $branchOrTag  Pass 'main' for dev sync, null for latest release tag
      */
+    /**
+     * Work that must finish before the application can be replaced.
+     *
+     * Server-side task types are excluded here because they are counted
+     * separately below — they run on this machine and are interrupted by the
+     * restart, whereas an agent backup is writing to a repository.
+     */
+    public function countRunningWork(): int
+    {
+        $agentJobs = (int) ($this->db->fetchOne(
+            "SELECT COUNT(*) as cnt FROM backup_jobs
+             WHERE status IN ('sent', 'running')
+               AND task_type NOT IN ('update_borg', 'update_agent',
+                   'prune', 'compact', 's3_sync', 's3_restore',
+                   'repo_check', 'repo_repair', 'break_lock',
+                   'catalog_sync', 'catalog_rebuild', 'catalog_rebuild_full',
+                   'archive_delete', 'archive_lock')
+               AND (agent_id IS NULL
+                    OR agent_id IN (SELECT id FROM agents WHERE status = 'online'))"
+        )['cnt'] ?? 0);
+
+        $serverJobs = 0;
+        try {
+            $serverJobs = (int) ($this->db->fetchOne(
+                "SELECT COUNT(*) as cnt FROM server_jobs WHERE status IN ('queued', 'running')"
+            )['cnt'] ?? 0);
+        } catch (\Exception $e) { /* server_jobs table may not exist */ }
+
+        return $agentJobs + $serverJobs;
+    }
+
+    /** Stop waiting, and put maintenance back as it was. */
+    public function cancelPendingUpgrade(): void
+    {
+        if ($this->getSetting('upgrade_pending_restore_maintenance') !== '1') {
+            $this->setSetting('maintenance_mode', '0');
+        }
+        $this->setSetting('upgrade_pending', '0');
+    }
+
     public function startBackgroundUpgrade(?string $branchOrTag = null): array
     {
         // Already upgrading?
@@ -259,33 +299,28 @@ class UpdateService
         // offline agent (they'll stay stuck indefinitely and should never
         // block a server upgrade), and ignore management tasks like
         // update_borg/update_agent that aren't real backups (#184).
-        $activeJobs = $this->db->fetchOne(
-            "SELECT COUNT(*) as cnt FROM backup_jobs
-             WHERE status IN ('sent', 'running')
-               AND task_type NOT IN ('update_borg', 'update_agent',
-                   'prune', 'compact', 's3_sync', 's3_restore',
-                   'repo_check', 'repo_repair', 'break_lock',
-                   'catalog_sync', 'catalog_rebuild', 'catalog_rebuild_full',
-                   'archive_delete', 'archive_lock')
-               AND (agent_id IS NULL
-                    OR agent_id IN (SELECT id FROM agents WHERE status = 'online'))"
-        );
-        if ((int) $activeJobs['cnt'] > 0) {
-            return ['success' => false, 'error' => "{$activeJobs['cnt']} backup job(s) still running. Wait for them to complete or cancel them before upgrading."];
-        }
-
-        // Check for active server jobs (prune, compact, etc.)
-        try {
-            $activeServerJobs = $this->db->fetchOne(
-                "SELECT COUNT(*) as cnt FROM server_jobs WHERE status IN ('queued', 'running')"
-            );
-            if ((int) ($activeServerJobs['cnt'] ?? 0) > 0) {
-                return ['success' => false, 'error' => "{$activeServerJobs['cnt']} server job(s) still running. Wait for them to complete before upgrading."];
-            }
-        } catch (\Exception $e) { /* server_jobs table may not exist */ }
-
-        // Enable maintenance mode to suspend the queue
+        // Maintenance mode first, then count. The other way round leaves a gap:
+        // between counting and suspending the queue the scheduler can promote a
+        // queued job to 'sent', and the upgrade then runs while a backup is
+        // starting. Suspending first means anything counted after this is
+        // work already under way, and nothing new can join it.
+        $maintenanceWasOn = $this->getSetting('maintenance_mode') === '1';
         $this->setSetting('maintenance_mode', '1');
+
+        $running = $this->countRunningWork();
+        if ($running > 0) {
+            // Leave maintenance on and wait rather than refusing. The caller is
+            // told to come back; the scheduler starts the upgrade once the last
+            // job finishes, re-checking under maintenance before it does.
+            $this->setSetting('upgrade_pending', '1');
+            $this->setSetting('upgrade_pending_restore_maintenance', $maintenanceWasOn ? '1' : '0');
+            return [
+                'success' => false,
+                'waiting' => true,
+                'running' => $running,
+                'error' => "Waiting for {$running} running job(s) to finish. The queue is suspended and the upgrade will start on its own once they are done.",
+            ];
+        }
 
         // Set up log file
         $logFile = '/tmp/bbs-upgrade-' . getmypid() . '.log';

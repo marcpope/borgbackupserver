@@ -236,6 +236,7 @@ class App
         $this->router->map('GET', '/upgrade/status', 'UpgradeController@statusJson');
         $this->router->map('POST', '/upgrade/dismiss', 'UpgradeController@dismiss');
         $this->router->map('POST', '/settings/upgrade', 'SettingsController@upgrade');
+        $this->router->map('POST', '/settings/upgrade/cancel', 'SettingsController@cancelUpgrade');
         $this->router->map('POST', '/settings/sync', 'SettingsController@sync');
         $this->router->map('POST', '/settings/upgrade-agents', 'SettingsController@upgradeAgents');
         $this->router->map('GET', '/api/agent-updates', 'SettingsController@agentUpdatesJson');
@@ -442,6 +443,7 @@ class App
         $this->router->map('POST',   '/api/v1/updates/check', 'Api\\SettingsApiController@checkUpdates');
         $this->router->map('POST',   '/api/v1/updates/upgrade-agents', 'Api\\SettingsApiController@upgradeAgents');
         $this->router->map('POST',   '/api/v1/updates/upgrade-server', 'Api\\SettingsApiController@upgradeServer');
+        $this->router->map('DELETE', '/api/v1/updates/upgrade-server', 'Api\\SettingsApiController@cancelUpgradeServer');
         $this->router->map('POST',   '/api/v1/clients/[i:id]/upgrade-agent', 'Api\\SettingsApiController@upgradeAgent');
 
         // Push notification devices — per-user, not admin data

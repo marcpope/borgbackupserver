@@ -1233,6 +1233,26 @@ class SettingsApiController extends Controller
         ], 202);
     }
 
+    /**
+     * DELETE /api/v1/updates/upgrade-server — stop waiting for the queue.
+     */
+    public function cancelUpgradeServer(): void
+    {
+        $this->requireApiAdmin();
+
+        if ($this->settingValue('upgrade_pending') !== '1') {
+            $this->json(['error' => 'No upgrade is waiting to start.'], 422);
+        }
+
+        (new \BBS\Services\UpdateService())->cancelPendingUpgrade();
+        $this->db->insert('server_log', [
+            'level' => 'info',
+            'message' => 'Waiting upgrade cancelled via API',
+        ]);
+
+        $this->json(['status' => 'cancelled']);
+    }
+
     private function settingValue(string $key): ?string
     {
         return $this->db->fetchOne("SELECT `value` FROM settings WHERE `key` = ?", [$key])['value'] ?? null;

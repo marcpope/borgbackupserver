@@ -2505,6 +2505,45 @@ if ($certCheckedOn !== date('Y-m-d')) {
     }
 }
 
+// Step 6c: Start an upgrade that is waiting for the queue to drain.
+//
+// The queue is already suspended — maintenance mode went on when the upgrade
+// was requested — so nothing new can join. This waits for what was already
+// running, then checks once more before handing over, because the gap between
+// deciding and starting is the only place a job could still slip in.
+if (($db->fetchOne("SELECT `value` FROM settings WHERE `key` = 'upgrade_pending'")['value'] ?? '0') === '1') {
+    $upgradeSvc = new \BBS\Services\UpdateService();
+    $stillRunning = $upgradeSvc->countRunningWork();
+
+    if ($stillRunning > 0) {
+        echo date('Y-m-d H:i:s') . " Upgrade waiting on {$stillRunning} running job(s)\n";
+    } else {
+        // Second check, immediately before starting. startBackgroundUpgrade()
+        // counts again itself, so anything that arrives between here and there
+        // still stops it.
+        $db->query("UPDATE settings SET `value` = '0' WHERE `key` = 'upgrade_pending'");
+        $result = $upgradeSvc->startBackgroundUpgrade();
+
+        if (!empty($result['success'])) {
+            $db->insert('server_log', [
+                'level' => 'info',
+                'message' => 'Queue drained — starting the upgrade that was waiting',
+            ]);
+            echo date('Y-m-d H:i:s') . " Queue drained — starting deferred upgrade\n";
+        } elseif (!empty($result['waiting'])) {
+            // Something started in the gap. Keep waiting rather than giving up.
+            $db->query("UPDATE settings SET `value` = '1' WHERE `key` = 'upgrade_pending'");
+            echo date('Y-m-d H:i:s') . " Deferred upgrade held — work started while preparing\n";
+        } else {
+            $upgradeSvc->cancelPendingUpgrade();
+            $db->insert('server_log', [
+                'level' => 'warning',
+                'message' => 'Deferred upgrade abandoned: ' . ($result['error'] ?? 'unknown error'),
+            ]);
+        }
+    }
+}
+
 // Step 7: Cleanup old resolved notifications and server logs
 $notificationService->cleanup();
 
