@@ -198,10 +198,13 @@ ok "Hostname: $BBS_HOSTNAME"
 # be issued without it — but the symptom surfaces much later as a failed reload
 # or a confusing certbot error, so say it here instead (#431).
 PORT80_PROC=""
+# `|| true`: under set -o pipefail an empty grep result fails the pipeline,
+# and under set -e that killed the whole installer — on every machine where
+# port 80 was free, which is every fresh install.
 if command -v ss &>/dev/null; then
-    PORT80_PROC=$(ss -lntpH 2>/dev/null | awk '$4 ~ /:80$/' | grep -oE '\(\("[^"]+' | sed 's/(("//' | sort -u | paste -sd, -)
+    PORT80_PROC=$(ss -lntpH 2>/dev/null | awk '$4 ~ /:80$/' | grep -oE '\(\("[^"]+' | sed 's/(("//' | sort -u | paste -sd, - || true)
 elif command -v lsof &>/dev/null; then
-    PORT80_PROC=$(lsof -nP -iTCP:80 -sTCP:LISTEN -Fc 2>/dev/null | sed -n 's/^c//p' | sort -u | paste -sd, -)
+    PORT80_PROC=$(lsof -nP -iTCP:80 -sTCP:LISTEN -Fc 2>/dev/null | sed -n 's/^c//p' | sort -u | paste -sd, - || true)
 fi
 
 if [[ -n "$PORT80_PROC" && "$PORT80_PROC" != *apache2* ]]; then
