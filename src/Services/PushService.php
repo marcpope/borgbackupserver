@@ -138,9 +138,29 @@ class PushService
      */
     private function describe(string $event, int $jobId, int $clientId): array
     {
-        $client = $clientId > 0
-            ? ($this->db->fetchOne("SELECT name FROM agents WHERE id = ?", [$clientId])['name'] ?? null)
+        $agentRow = $clientId > 0
+            ? $this->db->fetchOne("SELECT name, last_heartbeat FROM agents WHERE id = ?", [$clientId])
             : null;
+        $client = $agentRow['name'] ?? null;
+
+        // How long the client has been quiet, for the offline body. Relative
+        // rather than a timestamp: "for 3 hours" reads the same in every
+        // timezone, which a lock screen cannot ask about.
+        $quietFor = null;
+        if (!empty($agentRow['last_heartbeat'])) {
+            $mins = (int) floor((time() - strtotime($agentRow['last_heartbeat'])) / 60);
+            if ($mins >= 1) {
+                if ($mins < 60) {
+                    $quietFor = $mins . ' minute' . ($mins === 1 ? '' : 's');
+                } elseif ($mins < 48 * 60) {
+                    $h = (int) round($mins / 60);
+                    $quietFor = $h . ' hour' . ($h === 1 ? '' : 's');
+                } else {
+                    $d = (int) round($mins / 1440);
+                    $quietFor = $d . ' day' . ($d === 1 ? '' : 's');
+                }
+            }
+        }
 
         $plan = null;
         if ($jobId > 0) {
@@ -177,7 +197,9 @@ class PushService
                         'deep_link' => $deepLink];
             case 'agent_offline':
                 return ['title' => $client !== null ? "{$client} is offline" : 'Client offline',
-                        'body' => 'It has stopped checking in.',
+                        'body' => $quietFor !== null
+                            ? "No check-in for {$quietFor}."
+                            : 'It has stopped checking in.',
                         'deep_link' => $clientId > 0 ? "/clients/{$clientId}" : '/clients'];
             case 'missed_schedule':
                 return ['title' => $client !== null ? "Missed backup on {$client}" : 'Scheduled backup missed',
