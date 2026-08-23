@@ -222,7 +222,7 @@ class PushService
 
         switch ($event) {
             case 'backup_failed':
-                return ['title' => $client !== null ? "Backup failed on {$client}" : 'Backup failed',
+                return ['title' => $client !== null ? "Backup Failed: {$client}" : 'Backup Failed',
                         'body' => trim("Plan{$forPlan} did not complete.") ,
                         'deep_link' => $deepLink];
             case 'backup_completed':
@@ -235,21 +235,23 @@ class PushService
                             : ($doneSecs >= 60 ? floor($doneSecs / 60) . 'm ' . ($doneSecs % 60) . 's' : $doneSecs . 's'));
                     }
                 }
-                return ['title' => $client !== null ? "Backup completed on {$client}" : 'Backup completed',
-                        'body' => trim("Plan{$forPlan} finished." . ($detail !== '' ? " {$detail}." : '')),
+                return ['title' => $client !== null ? "Backup Done: {$client}" : 'Backup Done',
+                        'body' => $detail !== ''
+                            ? trim("Plan{$forPlan} — {$detail}.")
+                            : trim("Plan{$forPlan}."),
                         'deep_link' => $deepLink];
             case 'backup_warning':
-                return ['title' => $client !== null ? "Backup warnings on {$client}" : 'Backup completed with warnings',
-                        'body' => trim("Plan{$forPlan} finished with warnings."),
+                return ['title' => $client !== null ? "Backup Warnings: {$client}" : 'Backup Warnings',
+                        'body' => trim("Plan{$forPlan} completed with warnings."),
                         'deep_link' => $deepLink];
             case 'agent_offline':
-                return ['title' => $client !== null ? "{$client} is offline" : 'Client offline',
+                return ['title' => $client !== null ? "Offline: {$client}" : 'Client Offline',
                         'body' => $quietFor !== null
                             ? "No check-in for {$quietFor}."
                             : 'It has stopped checking in.',
                         'deep_link' => $clientId > 0 ? "/clients/{$clientId}" : '/clients'];
             case 'missed_schedule':
-                return ['title' => $client !== null ? "Missed backup on {$client}" : 'Scheduled backup missed',
+                return ['title' => $client !== null ? "Missed Backup: {$client}" : 'Missed Backup',
                         'body' => trim("Scheduled plan{$forPlan} did not run — the client is offline."),
                         'deep_link' => $clientId > 0 ? "/clients/{$clientId}" : '/clients'];
             case 'storage_low':
