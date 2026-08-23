@@ -44,6 +44,9 @@ class PushService
     public const DEFAULT_EVENTS = [
         'backup_failed'    => true,
         'backup_warning'   => false,
+        // Off unless a device turns it on: a fleet backing up twice a day is
+        // dozens of pushes, a single home server is one welcome "it ran".
+        'backup_completed' => false,
         'agent_offline'    => true,
         'storage_low'      => true,
         'missed_schedule'  => false,
@@ -144,7 +147,7 @@ class PushService
         // for certificate_expiring, nothing for the rest. Treating it as a
         // job id for every event looked up unrelated jobs and could name the
         // wrong plan and link the wrong page.
-        $planEvents = ['backup_failed', 'backup_warning', 'missed_schedule'];
+        $planEvents = ['backup_failed', 'backup_warning', 'backup_completed', 'missed_schedule'];
         $planId = in_array($event, $planEvents, true) ? $refId : 0;
         $jobId = 0;
         $agentRow = $clientId > 0
@@ -187,7 +190,16 @@ class PushService
 
             // The job the failure or warning is about, for the deep link: the
             // plan's most recent job in that state.
-            if ($event === 'backup_failed') {
+            if ($event === 'backup_completed') {
+                $done = $this->db->fetchOne(
+                    "SELECT id, files_processed, duration_seconds FROM backup_jobs
+                     WHERE backup_plan_id = ? AND status = 'completed' ORDER BY id DESC LIMIT 1",
+                    [$planId]
+                );
+                $jobId = (int) ($done['id'] ?? 0);
+                $doneFiles = (int) ($done['files_processed'] ?? 0);
+                $doneSecs  = (int) ($done['duration_seconds'] ?? 0);
+            } elseif ($event === 'backup_failed') {
                 $jobId = (int) ($this->db->fetchOne(
                     "SELECT id FROM backup_jobs WHERE backup_plan_id = ? AND status = 'failed' ORDER BY id DESC LIMIT 1",
                     [$planId]
@@ -212,6 +224,19 @@ class PushService
             case 'backup_failed':
                 return ['title' => $client !== null ? "Backup failed on {$client}" : 'Backup failed',
                         'body' => trim("Plan{$forPlan} did not complete.") ,
+                        'deep_link' => $deepLink];
+            case 'backup_completed':
+                $detail = '';
+                if (!empty($doneFiles)) {
+                    $detail = number_format($doneFiles) . ' files';
+                    if (!empty($doneSecs)) {
+                        $detail .= ' in ' . ($doneSecs >= 3600
+                            ? floor($doneSecs / 3600) . 'h ' . floor(($doneSecs % 3600) / 60) . 'm'
+                            : ($doneSecs >= 60 ? floor($doneSecs / 60) . 'm ' . ($doneSecs % 60) . 's' : $doneSecs . 's'));
+                    }
+                }
+                return ['title' => $client !== null ? "Backup completed on {$client}" : 'Backup completed',
+                        'body' => trim("Plan{$forPlan} finished." . ($detail !== '' ? " {$detail}." : '')),
                         'deep_link' => $deepLink];
             case 'backup_warning':
                 return ['title' => $client !== null ? "Backup warnings on {$client}" : 'Backup completed with warnings',
