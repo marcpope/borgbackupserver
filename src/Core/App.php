@@ -441,6 +441,7 @@ class App
         $this->router->map('GET',    '/api/v1/updates', 'Api\\SettingsApiController@updates');
         $this->router->map('POST',   '/api/v1/updates/check', 'Api\\SettingsApiController@checkUpdates');
         $this->router->map('POST',   '/api/v1/updates/upgrade-agents', 'Api\\SettingsApiController@upgradeAgents');
+        $this->router->map('POST',   '/api/v1/updates/upgrade-server', 'Api\\SettingsApiController@upgradeServer');
         $this->router->map('POST',   '/api/v1/clients/[i:id]/upgrade-agent', 'Api\\SettingsApiController@upgradeAgent');
 
         // Push notification devices — per-user, not admin data

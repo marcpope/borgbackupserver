@@ -1190,6 +1190,54 @@ class SettingsApiController extends Controller
         ]);
     }
 
+    /**
+     * POST /api/v1/updates/upgrade-server
+     *
+     * The API twin of the web's upgrade button. No target is accepted: it
+     * upgrades to the latest release the update check found, the same as the
+     * web. The 'main' branch variant stays web-only — that is a developer
+     * action and does not belong on a remote control.
+     *
+     * The upgrade restarts the application, so this response races the restart.
+     * It returns as soon as the upgrade has been started rather than waiting
+     * for a result that may never arrive down this connection.
+     */
+    public function upgradeServer(): void
+    {
+        $this->requireApiAdmin();
+
+        $svc = new \BBS\Services\UpdateService();
+        $result = $svc->startBackgroundUpgrade();
+
+        if (empty($result['success'])) {
+            $error = (string) ($result['error'] ?? 'Upgrade could not be started.');
+            // Already running is a conflict; nothing to upgrade to is a bad
+            // request. Anything else is ours.
+            // "already in progress" and "jobs still running" are both "not
+            // now" rather than "never" — the spec named the first, and the
+            // second is the same class of answer, so it gets the same code.
+            $conflict = str_contains($error, 'already in progress') || str_contains($error, 'still running');
+            $badRequest = str_contains($error, 'No update information') || str_contains($error, 'Already up to date');
+            $code = $conflict ? 409 : ($badRequest ? 422 : 500);
+            $this->json(['error' => $error], $code);
+        }
+
+        $this->db->insert('server_log', [
+            'level' => 'info',
+            'message' => 'Server upgrade started via API',
+        ]);
+
+        $this->json([
+            'status' => 'started',
+            'target' => $result['tag'] ?? $result['version'] ?? $this->settingValue('latest_version'),
+        ], 202);
+    }
+
+    private function settingValue(string $key): ?string
+    {
+        return $this->db->fetchOne("SELECT `value` FROM settings WHERE `key` = ?", [$key])['value'] ?? null;
+    }
+
     public function upgradeAgents(): void
     {
         $this->requireApiAdmin();
