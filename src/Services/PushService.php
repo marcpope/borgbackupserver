@@ -136,8 +136,17 @@ class PushService
      * `deep_link` is a path, not a URL. The app already knows which server it
      * is talking to, and a path cannot send anyone to a different one.
      */
-    private function describe(string $event, int $jobId, int $clientId): array
+    private function describe(string $event, int $refId, int $clientId): array
     {
+        // The queue's job_id column carries the notification's reference id,
+        // and what that means depends on the event: a backup plan for
+        // backup_failed / backup_warning / missed_schedule, a day-threshold
+        // for certificate_expiring, nothing for the rest. Treating it as a
+        // job id for every event looked up unrelated jobs and could name the
+        // wrong plan and link the wrong page.
+        $planEvents = ['backup_failed', 'backup_warning', 'missed_schedule'];
+        $planId = in_array($event, $planEvents, true) ? $refId : 0;
+        $jobId = 0;
         $agentRow = $clientId > 0
             ? $this->db->fetchOne("SELECT name, last_heartbeat FROM agents WHERE id = ?", [$clientId])
             : null;
@@ -163,18 +172,31 @@ class PushService
         }
 
         $plan = null;
-        if ($jobId > 0) {
+        if ($planId > 0) {
             $row = $this->db->fetchOne("
-                SELECT bp.name AS plan_name, a.name AS client_name, bj.agent_id
-                FROM backup_jobs bj
-                LEFT JOIN backup_plans bp ON bp.id = bj.backup_plan_id
-                LEFT JOIN agents a ON a.id = bj.agent_id
-                WHERE bj.id = ?
-            ", [$jobId]);
+                SELECT bp.name AS plan_name, a.name AS client_name, bp.agent_id
+                FROM backup_plans bp
+                LEFT JOIN agents a ON a.id = bp.agent_id
+                WHERE bp.id = ?
+            ", [$planId]);
             $plan = $row['plan_name'] ?? null;
             $client = $client ?: ($row['client_name'] ?? null);
             if ($clientId <= 0 && !empty($row['agent_id'])) {
                 $clientId = (int) $row['agent_id'];
+            }
+
+            // The job the failure or warning is about, for the deep link: the
+            // plan's most recent job in that state.
+            if ($event === 'backup_failed') {
+                $jobId = (int) ($this->db->fetchOne(
+                    "SELECT id FROM backup_jobs WHERE backup_plan_id = ? AND status = 'failed' ORDER BY id DESC LIMIT 1",
+                    [$planId]
+                )['id'] ?? 0);
+            } elseif ($event === 'backup_warning') {
+                $jobId = (int) ($this->db->fetchOne(
+                    "SELECT id FROM backup_jobs WHERE backup_plan_id = ? AND had_warnings = 1 ORDER BY id DESC LIMIT 1",
+                    [$planId]
+                )['id'] ?? 0);
             }
         }
 
@@ -203,8 +225,8 @@ class PushService
                         'deep_link' => $clientId > 0 ? "/clients/{$clientId}" : '/clients'];
             case 'missed_schedule':
                 return ['title' => $client !== null ? "Missed backup on {$client}" : 'Scheduled backup missed',
-                        'body' => trim("Scheduled plan{$forPlan} did not run."),
-                        'deep_link' => $deepLink];
+                        'body' => trim("Scheduled plan{$forPlan} did not run — the client is offline."),
+                        'deep_link' => $clientId > 0 ? "/clients/{$clientId}" : '/clients'];
             case 'storage_low':
                 return ['title' => 'Storage running low',
                         'body' => 'A storage location passed your threshold.',
