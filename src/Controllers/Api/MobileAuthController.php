@@ -292,12 +292,32 @@ class MobileAuthController extends Controller
             $this->json(['error' => 'User no longer exists.'], 401);
         }
 
+        // The five action permissions, as global grants, so a client can hide
+        // buttons it knows will 403. Per-agent grants stay server-side — the
+        // rare per-agent case answers with a clear 403 instead, which the
+        // client shows as-is.
+        $permissions = [];
+        if ($user['role'] === 'admin') {
+            foreach (\BBS\Services\PermissionService::ALL_PERMISSIONS as $perm) {
+                $permissions[$perm] = true;
+            }
+        } else {
+            $granted = array_column($this->db->fetchAll(
+                "SELECT permission FROM user_permissions WHERE user_id = ? AND agent_id IS NULL",
+                [(int) $user['id']]
+            ), 'permission');
+            foreach (\BBS\Services\PermissionService::ALL_PERMISSIONS as $perm) {
+                $permissions[$perm] = in_array($perm, $granted, true);
+            }
+        }
+
         $this->json([
             'user' => $this->userPayload($user),
             'capabilities' => [
                 'is_admin' => $user['role'] === 'admin',
                 'all_clients' => $user['role'] === 'admin' || !empty($user['all_clients']),
             ],
+            'permissions' => $permissions,
         ]);
     }
 

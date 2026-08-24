@@ -250,6 +250,20 @@ class Controller
      * Per-agent action permission check for token-authenticated endpoints
      * (trigger_backup, restore, ...). Admins bypass, matching the web UI.
      */
+    /**
+     * Enforce an action permission, with the refusal worded for a person.
+     * The client shows the message as-is, so it names the permission the way
+     * the web's user-edit screen labels it — not the internal key.
+     */
+    protected function apiRequirePermission(array $ctx, string $permission, int $agentId): void
+    {
+        if ($this->apiHasPermission($ctx, $permission, $agentId)) {
+            return;
+        }
+        $label = \BBS\Services\PermissionService::PERMISSION_LABELS[$permission] ?? $permission;
+        $this->json(['error' => "You don't have the {$label} permission."], 403);
+    }
+
     protected function apiHasPermission(array $ctx, string $permission, int $agentId): bool
     {
         if (($ctx['role'] ?? '') === 'admin') {

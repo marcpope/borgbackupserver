@@ -142,7 +142,8 @@ class AdminApiController extends Controller
 
     public function summary(): void
     {
-        $this->requireApiToken();
+        $ctx = $this->requireApiAuth();
+        [$agentWhere, $agentParams] = $this->apiAgentWhereClause($ctx, 'a');
 
         // Latest terminal backup job per plan, computed once via ROW_NUMBER()
         // ordered by completed_at (the previous correlated subquery did the
@@ -177,8 +178,9 @@ class AdminApiController extends Controller
                 WHERE task_type = 'backup'
                   AND status IN ('completed', 'failed')
             ) bj ON bj.backup_plan_id = bp.id AND bj.rn = 1
+            WHERE {$agentWhere}
             ORDER BY a.name, bp.name
-        ");
+        ", $agentParams);
 
         $clients = [];
         foreach ($rows as $row) {
@@ -451,7 +453,11 @@ class AdminApiController extends Controller
 
     public function createRepository(int $id): void
     {
-        $this->requireApiToken();
+        $ctx = $this->requireApiAuth();
+        if (!$this->apiCanAccessAgent($ctx, $id)) {
+            $this->json(['error' => 'Client not found'], 404);
+        }
+        $this->apiRequirePermission($ctx, \BBS\Services\PermissionService::MANAGE_REPOS, $id);
         $input = $this->getJsonInput();
 
         $agent = $this->db->fetchOne("SELECT * FROM agents WHERE id = ?", [$id]);
@@ -706,7 +712,11 @@ class AdminApiController extends Controller
 
     public function createPlan(int $id): void
     {
-        $this->requireApiToken();
+        $ctx = $this->requireApiAuth();
+        if (!$this->apiCanAccessAgent($ctx, $id)) {
+            $this->json(['error' => 'Client not found'], 404);
+        }
+        $this->apiRequirePermission($ctx, \BBS\Services\PermissionService::MANAGE_PLANS, $id);
         $input = $this->getJsonInput();
 
         $agent = $this->db->fetchOne("SELECT id FROM agents WHERE id = ?", [$id]);
@@ -1105,7 +1115,11 @@ class AdminApiController extends Controller
 
     public function renameRepository(int $id, int $repoId): void
     {
-        $this->requireApiToken();
+        $ctx = $this->requireApiAuth();
+        if (!$this->apiCanAccessAgent($ctx, $id)) {
+            $this->json(['error' => 'Client not found'], 404);
+        }
+        $this->apiRequirePermission($ctx, \BBS\Services\PermissionService::MANAGE_REPOS, $id);
         $input = $this->getJsonInput();
 
         $repo = $this->db->fetchOne("SELECT r.*, a.id as agent_id FROM repositories r JOIN agents a ON a.id = r.agent_id WHERE r.id = ? AND r.agent_id = ?", [$repoId, $id]);
@@ -1164,7 +1178,11 @@ class AdminApiController extends Controller
 
     public function deleteRepository(int $id, int $repoId): void
     {
-        $this->requireApiToken();
+        $ctx = $this->requireApiAuth();
+        if (!$this->apiCanAccessAgent($ctx, $id)) {
+            $this->json(['error' => 'Client not found'], 404);
+        }
+        $this->apiRequirePermission($ctx, \BBS\Services\PermissionService::MANAGE_REPOS, $id);
 
         $repo = $this->db->fetchOne("SELECT r.*, a.id as agent_id FROM repositories r JOIN agents a ON a.id = r.agent_id WHERE r.id = ? AND r.agent_id = ?", [$repoId, $id]);
         if (!$repo) {
@@ -1298,7 +1316,11 @@ class AdminApiController extends Controller
      */
     public function setArchiveLock(int $id, int $repoId, int $archiveId): void
     {
-        $this->requireApiToken();
+        $ctx = $this->requireApiAuth();
+        if (!$this->apiCanAccessAgent($ctx, $id)) {
+            $this->json(['error' => 'Client not found'], 404);
+        }
+        $this->apiRequirePermission($ctx, \BBS\Services\PermissionService::REPO_MAINTENANCE, $id);
         $input = $this->getJsonInput();
 
         if (!array_key_exists('locked', $input)) {
@@ -1321,7 +1343,11 @@ class AdminApiController extends Controller
 
     public function updatePlan(int $id, int $planId): void
     {
-        $this->requireApiToken();
+        $ctx = $this->requireApiAuth();
+        if (!$this->apiCanAccessAgent($ctx, $id)) {
+            $this->json(['error' => 'Client not found'], 404);
+        }
+        $this->apiRequirePermission($ctx, \BBS\Services\PermissionService::MANAGE_PLANS, $id);
         $input = $this->getJsonInput();
 
         $plan = $this->db->fetchOne("SELECT * FROM backup_plans WHERE id = ? AND agent_id = ?", [$planId, $id]);
@@ -1415,7 +1441,11 @@ class AdminApiController extends Controller
 
     public function deletePlan(int $id, int $planId): void
     {
-        $this->requireApiToken();
+        $ctx = $this->requireApiAuth();
+        if (!$this->apiCanAccessAgent($ctx, $id)) {
+            $this->json(['error' => 'Client not found'], 404);
+        }
+        $this->apiRequirePermission($ctx, \BBS\Services\PermissionService::MANAGE_PLANS, $id);
 
         $plan = $this->db->fetchOne("SELECT * FROM backup_plans WHERE id = ? AND agent_id = ?", [$planId, $id]);
         if (!$plan) {
@@ -1483,6 +1513,7 @@ class AdminApiController extends Controller
         if (!$this->apiCanAccessAgent($ctx, $id)) {
             $this->json(['error' => 'Plan not found'], 404);
         }
+        $this->apiRequirePermission($ctx, \BBS\Services\PermissionService::TRIGGER_BACKUP, $id);
 
         $plan = $this->db->fetchOne("SELECT * FROM backup_plans WHERE id = ? AND agent_id = ?", [$planId, $id]);
         if (!$plan) {
@@ -1531,13 +1562,16 @@ class AdminApiController extends Controller
      */
     public function changeRepositoryPassphrase(int $repoId): void
     {
-        $this->requireApiToken();
+        $ctx = $this->requireApiAuth();
         $input = $this->getJsonInput();
 
         $repo = $this->db->fetchOne("SELECT * FROM repositories WHERE id = ?", [$repoId]);
-        if (!$repo) {
+        if (!$repo || !$this->apiCanAccessAgent($ctx, (int) $repo['agent_id'])) {
+            // Same 404 for "no such repo" and "not yours": a scoped user
+            // cannot probe which repository ids exist.
             $this->json(['error' => 'Repository not found'], 404);
         }
+        $this->apiRequirePermission($ctx, \BBS\Services\PermissionService::MANAGE_REPOS, (int) $repo['agent_id']);
 
         $svc = new \BBS\Services\RepositoryPassphraseService();
         $passphrase = trim((string) ($input['passphrase'] ?? ''));
@@ -1594,12 +1628,22 @@ class AdminApiController extends Controller
 
     public function updateClient(int $id): void
     {
-        $this->requireApiToken();
+        $ctx = $this->requireApiAuth();
         $input = $this->getJsonInput();
 
         $agent = $this->db->fetchOne("SELECT * FROM agents WHERE id = ?", [$id]);
-        if (!$agent) {
+        if (!$agent || !$this->apiCanAccessAgent($ctx, $id)) {
             $this->json(['error' => 'Client not found'], 404);
+        }
+
+        // An assigned user may rename a client they can see, matching the web.
+        // Everything beyond the display name — profile, ownership — changes
+        // how the fleet is organised and stays with the admin role.
+        if (($ctx['role'] ?? '') !== 'admin') {
+            $extra = array_diff(array_keys($input), ['name']);
+            if (!empty($extra)) {
+                $this->json(['error' => "Only a client's name can be changed without the admin role."], 403);
+            }
         }
 
         $data = [];
@@ -3640,6 +3684,7 @@ class AdminApiController extends Controller
         if (!$this->apiCanAccessAgent($ctx, $id)) {
             $this->json(['error' => 'Client not found'], 404);
         }
+        $this->apiRequirePermission($ctx, \BBS\Services\PermissionService::RESTORE, $id);
         if (!$this->apiHasPermission($ctx, \BBS\Services\PermissionService::RESTORE, $id)) {
             $this->json(['error' => 'You do not have permission to restore on this client'], 403);
         }
@@ -3785,6 +3830,7 @@ class AdminApiController extends Controller
         if (!$this->apiCanAccessAgent($ctx, $id)) {
             $this->json(['error' => 'Client not found'], 404);
         }
+        $this->apiRequirePermission($ctx, \BBS\Services\PermissionService::RESTORE, $id);
         if (!$this->apiHasPermission($ctx, \BBS\Services\PermissionService::RESTORE, $id)) {
             $this->json(['error' => 'You do not have permission to restore on this client'], 403);
         }
@@ -4018,6 +4064,7 @@ class AdminApiController extends Controller
         if (!$this->apiCanAccessAgent($ctx, $id)) {
             $this->json(['error' => 'Client not found'], 404);
         }
+        $this->apiRequirePermission($ctx, \BBS\Services\PermissionService::RESTORE, $id);
         if (!$this->apiHasPermission($ctx, \BBS\Services\PermissionService::RESTORE, $id)) {
             $this->json(['error' => 'You do not have permission to restore on this client'], 403);
         }
@@ -4493,6 +4540,7 @@ class AdminApiController extends Controller
         if (!$this->apiCanAccessAgent($ctx, $id)) {
             $this->json(['error' => 'Client not found'], 404);
         }
+        $this->apiRequirePermission($ctx, \BBS\Services\PermissionService::REPO_MAINTENANCE, $id);
         if (!$this->apiHasPermission($ctx, \BBS\Services\PermissionService::MANAGE_REPOS, $id)) {
             $this->json(['error' => 'Repository management permission required'], 403);
         }
