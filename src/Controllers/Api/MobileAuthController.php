@@ -292,10 +292,11 @@ class MobileAuthController extends Controller
             $this->json(['error' => 'User no longer exists.'], 401);
         }
 
-        // The five action permissions, as global grants, so a client can hide
-        // buttons it knows will 403. Per-agent grants stay server-side — the
-        // rare per-agent case answers with a clear 403 instead, which the
-        // client shows as-is.
+        // The five action permissions, meaning "granted anywhere" — globally
+        // or on any single agent — so a client can hide buttons that would
+        // 403 everywhere. A button shown because of one agent's grant can
+        // still 403 on another agent; that answer carries its reason and the
+        // client shows it as-is.
         $permissions = [];
         if ($user['role'] === 'admin') {
             foreach (\BBS\Services\PermissionService::ALL_PERMISSIONS as $perm) {
@@ -303,7 +304,7 @@ class MobileAuthController extends Controller
             }
         } else {
             $granted = array_column($this->db->fetchAll(
-                "SELECT permission FROM user_permissions WHERE user_id = ? AND agent_id IS NULL",
+                "SELECT DISTINCT permission FROM user_permissions WHERE user_id = ?",
                 [(int) $user['id']]
             ), 'permission');
             foreach (\BBS\Services\PermissionService::ALL_PERMISSIONS as $perm) {

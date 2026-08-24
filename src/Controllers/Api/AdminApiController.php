@@ -3804,7 +3804,11 @@ class AdminApiController extends Controller
      */
     public function health(): void
     {
-        $this->requireApiAuth();
+        // Admin-only, like the web's health JSON: the full picture names every
+        // overdue client and describes scheduler and storage state, which a
+        // token scoped to one agent has no business reading. The app hiding
+        // the screen is presentation; this is the enforcement.
+        $this->requireApiToken();
         $result = (new \BBS\Services\HealthService())->check();
         $this->json($result, $result['status'] === \BBS\Services\HealthService::CRITICAL ? 503 : 200);
     }
