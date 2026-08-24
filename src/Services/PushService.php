@@ -229,9 +229,7 @@ class PushService
         switch ($event) {
             case 'backup_failed':
                 return ['title' => $title ?? 'Backup Failed',
-                        'body' => $plan !== null
-                            ? "Backup Failed: {$plan} — did not complete"
-                            : 'Backup failed — did not complete',
+                        'body' => ($plan !== null ? "{$plan} Failed" : 'Backup Failed') . ' — did not complete',
                         'deep_link' => $deepLink];
             case 'backup_completed':
                 $detail = '';
@@ -247,17 +245,17 @@ class PushService
                         'deep_link' => $deepLink];
             case 'backup_warning':
                 return ['title' => $title ?? 'Backup Warnings',
-                        'body' => 'Backup Warnings' . ($plan !== null ? ": {$plan}" : '') . ' — completed with warnings',
+                        'body' => ($plan !== null ? "{$plan} Complete" : 'Backup Complete') . ' — with warnings',
                         'deep_link' => $deepLink];
             case 'missed_schedule':
                 return ['title' => $title ?? 'Missed Backup',
-                        'body' => 'Missed Backup' . ($plan !== null ? ": {$plan}" : '') . ' — did not run while offline',
+                        'body' => ($plan !== null ? "{$plan} Missed" : 'Backup Missed') . ' — did not run while offline',
                         'deep_link' => $clientId > 0 ? "/clients/{$clientId}" : '/clients'];
             case 'agent_offline':
                 return ['title' => $title ?? 'Client Offline',
                         'body' => $quietFor !== null
-                            ? "Offline — no check-in for {$quietFor}."
-                            : 'Offline — it has stopped checking in.',
+                            ? "Offline — no check-in for {$quietFor}"
+                            : 'Offline — stopped checking in',
                         'deep_link' => $clientId > 0 ? "/clients/{$clientId}" : '/clients'];
             case 'storage_low':
                 return ['title' => 'Storage running low',
