@@ -243,8 +243,8 @@ class PushService
                             : ($doneSecs >= 60 ? floor($doneSecs / 60) . 'm ' . ($doneSecs % 60) . 's' : $doneSecs . 's'));
                     }
                 }
-                return ['title' => $title ?? 'Backup Done',
-                        'body' => 'Backup Done' . ($plan !== null ? ": {$plan}" : '') . ($detail !== '' ? " — {$detail}" : ''),
+                return ['title' => $title ?? 'Backup Complete',
+                        'body' => 'Backup Complete' . ($plan !== null ? ": {$plan}" : '') . ($detail !== '' ? " — {$detail}" : ''),
                         'deep_link' => $deepLink];
             case 'backup_warning':
                 return ['title' => $title ?? 'Backup Warnings',
