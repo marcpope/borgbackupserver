@@ -192,21 +192,22 @@ class PushService
             // plan's most recent job in that state.
             if ($event === 'backup_completed') {
                 $done = $this->db->fetchOne(
-                    "SELECT id, files_processed, duration_seconds FROM backup_jobs
-                     WHERE backup_plan_id = ? AND status = 'completed' ORDER BY id DESC LIMIT 1",
+                    "SELECT id, files_processed, files_total, duration_seconds FROM backup_jobs
+                     WHERE backup_plan_id = ? AND task_type = 'backup' AND status = 'completed'
+                     ORDER BY id DESC LIMIT 1",
                     [$planId]
                 );
                 $jobId = (int) ($done['id'] ?? 0);
-                $doneFiles = (int) ($done['files_processed'] ?? 0);
+                $doneFiles = (int) (($done['files_processed'] ?? 0) ?: ($done['files_total'] ?? 0));
                 $doneSecs  = (int) ($done['duration_seconds'] ?? 0);
             } elseif ($event === 'backup_failed') {
                 $jobId = (int) ($this->db->fetchOne(
-                    "SELECT id FROM backup_jobs WHERE backup_plan_id = ? AND status = 'failed' ORDER BY id DESC LIMIT 1",
+                    "SELECT id FROM backup_jobs WHERE backup_plan_id = ? AND task_type = 'backup' AND status = 'failed' ORDER BY id DESC LIMIT 1",
                     [$planId]
                 )['id'] ?? 0);
             } elseif ($event === 'backup_warning') {
                 $jobId = (int) ($this->db->fetchOne(
-                    "SELECT id FROM backup_jobs WHERE backup_plan_id = ? AND had_warnings = 1 ORDER BY id DESC LIMIT 1",
+                    "SELECT id FROM backup_jobs WHERE backup_plan_id = ? AND task_type = 'backup' AND had_warnings = 1 ORDER BY id DESC LIMIT 1",
                     [$planId]
                 )['id'] ?? 0);
             }
@@ -228,34 +229,36 @@ class PushService
         switch ($event) {
             case 'backup_failed':
                 return ['title' => $title ?? 'Backup Failed',
-                        'body' => trim("Backup failed — plan{$forPlan} did not complete."),
+                        'body' => $plan !== null
+                            ? "Backup Failed: {$plan} — did not complete"
+                            : 'Backup failed — did not complete',
                         'deep_link' => $deepLink];
             case 'backup_completed':
                 $detail = '';
                 if (!empty($doneFiles)) {
                     $detail = number_format($doneFiles) . ' files';
                     if (!empty($doneSecs)) {
-                        $detail .= ' in ' . ($doneSecs >= 3600
+                        $detail .= ', ' . ($doneSecs >= 3600
                             ? floor($doneSecs / 3600) . 'h ' . floor(($doneSecs % 3600) / 60) . 'm'
                             : ($doneSecs >= 60 ? floor($doneSecs / 60) . 'm ' . ($doneSecs % 60) . 's' : $doneSecs . 's'));
                     }
                 }
                 return ['title' => $title ?? 'Backup Done',
-                        'body' => trim("Backup done — plan{$forPlan}" . ($detail !== '' ? ", {$detail}." : '.')),
+                        'body' => 'Backup Done' . ($plan !== null ? ": {$plan}" : '') . ($detail !== '' ? " — {$detail}" : ''),
                         'deep_link' => $deepLink];
             case 'backup_warning':
                 return ['title' => $title ?? 'Backup Warnings',
-                        'body' => trim("Backup completed with warnings — plan{$forPlan}."),
+                        'body' => 'Backup Warnings' . ($plan !== null ? ": {$plan}" : '') . ' — completed with warnings',
                         'deep_link' => $deepLink];
+            case 'missed_schedule':
+                return ['title' => $title ?? 'Missed Backup',
+                        'body' => 'Missed Backup' . ($plan !== null ? ": {$plan}" : '') . ' — did not run while offline',
+                        'deep_link' => $clientId > 0 ? "/clients/{$clientId}" : '/clients'];
             case 'agent_offline':
                 return ['title' => $title ?? 'Client Offline',
                         'body' => $quietFor !== null
                             ? "Offline — no check-in for {$quietFor}."
                             : 'Offline — it has stopped checking in.',
-                        'deep_link' => $clientId > 0 ? "/clients/{$clientId}" : '/clients'];
-            case 'missed_schedule':
-                return ['title' => $title ?? 'Missed Backup',
-                        'body' => trim("Missed backup — plan{$forPlan} did not run while offline."),
                         'deep_link' => $clientId > 0 ? "/clients/{$clientId}" : '/clients'];
             case 'storage_low':
                 return ['title' => 'Storage running low',
