@@ -220,10 +220,15 @@ class PushService
         $deepLink = $jobId > 0 ? "/jobs/{$jobId}"
             : ($clientId > 0 ? "/clients/{$clientId}" : '/dashboard');
 
+        // Title is the client, body is what happened. An iOS banner gives
+        // the title one line and the body two, so the name — the part that
+        // decides whether you care — must never be the part that truncates.
+        $title = $client ?? null;
+
         switch ($event) {
             case 'backup_failed':
-                return ['title' => $client !== null ? "Backup Failed: {$client}" : 'Backup Failed',
-                        'body' => trim("Plan{$forPlan} did not complete.") ,
+                return ['title' => $title ?? 'Backup Failed',
+                        'body' => trim("Backup failed — plan{$forPlan} did not complete."),
                         'deep_link' => $deepLink];
             case 'backup_completed':
                 $detail = '';
@@ -235,24 +240,22 @@ class PushService
                             : ($doneSecs >= 60 ? floor($doneSecs / 60) . 'm ' . ($doneSecs % 60) . 's' : $doneSecs . 's'));
                     }
                 }
-                return ['title' => $client !== null ? "Backup Done: {$client}" : 'Backup Done',
-                        'body' => $detail !== ''
-                            ? trim("Plan{$forPlan} — {$detail}.")
-                            : trim("Plan{$forPlan}."),
+                return ['title' => $title ?? 'Backup Done',
+                        'body' => trim("Backup done — plan{$forPlan}" . ($detail !== '' ? ", {$detail}." : '.')),
                         'deep_link' => $deepLink];
             case 'backup_warning':
-                return ['title' => $client !== null ? "Backup Warnings: {$client}" : 'Backup Warnings',
-                        'body' => trim("Plan{$forPlan} completed with warnings."),
+                return ['title' => $title ?? 'Backup Warnings',
+                        'body' => trim("Backup completed with warnings — plan{$forPlan}."),
                         'deep_link' => $deepLink];
             case 'agent_offline':
-                return ['title' => $client !== null ? "Offline: {$client}" : 'Client Offline',
+                return ['title' => $title ?? 'Client Offline',
                         'body' => $quietFor !== null
-                            ? "No check-in for {$quietFor}."
-                            : 'It has stopped checking in.',
+                            ? "Offline — no check-in for {$quietFor}."
+                            : 'Offline — it has stopped checking in.',
                         'deep_link' => $clientId > 0 ? "/clients/{$clientId}" : '/clients'];
             case 'missed_schedule':
-                return ['title' => $client !== null ? "Missed Backup: {$client}" : 'Missed Backup',
-                        'body' => trim("Scheduled plan{$forPlan} did not run — the client is offline."),
+                return ['title' => $title ?? 'Missed Backup',
+                        'body' => trim("Missed backup — plan{$forPlan} did not run while offline."),
                         'deep_link' => $clientId > 0 ? "/clients/{$clientId}" : '/clients'];
             case 'storage_low':
                 return ['title' => 'Storage running low',
@@ -264,8 +267,8 @@ class PushService
                         'deep_link' => '/settings?tab=ssl'];
             default:
                 $label = ucfirst(str_replace('_', ' ', $event));
-                return ['title' => $label . ($client !== null ? " on {$client}" : ''),
-                        'body' => 'Open for details.',
+                return ['title' => $title ?? $label,
+                        'body' => $title !== null ? "{$label}. Open for details." : 'Open for details.',
                         'deep_link' => $deepLink];
         }
     }
