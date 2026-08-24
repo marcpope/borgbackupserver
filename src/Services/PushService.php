@@ -235,16 +235,15 @@ class PushService
                         'deep_link' => $deepLink];
             case 'backup_completed':
                 $detail = '';
-                if (!empty($doneFiles)) {
-                    $detail = number_format($doneFiles) . ' files';
-                    if (!empty($doneSecs)) {
-                        $detail .= ', ' . ($doneSecs >= 3600
-                            ? floor($doneSecs / 3600) . 'h ' . floor(($doneSecs % 3600) / 60) . 'm'
-                            : ($doneSecs >= 60 ? floor($doneSecs / 60) . 'm ' . ($doneSecs % 60) . 's' : $doneSecs . 's'));
-                    }
+                if (!empty($doneSecs)) {
+                    $detail = $doneSecs >= 3600
+                        ? floor($doneSecs / 3600) . 'h ' . floor(($doneSecs % 3600) / 60) . 'm'
+                        : ($doneSecs >= 60 ? floor($doneSecs / 60) . 'm ' . ($doneSecs % 60) . 's' : $doneSecs . 's');
                 }
                 return ['title' => $title ?? 'Backup Complete',
-                        'body' => 'Backup Complete' . ($plan !== null ? ": {$plan}" : '') . ($detail !== '' ? " — {$detail}" : ''),
+                        'body' => ($plan !== null ? "{$plan} Complete" : 'Backup Complete')
+                            . (!empty($doneFiles) ? ', Files: ' . number_format($doneFiles) : '')
+                            . ($detail !== '' ? " / Time: {$detail}" : ''),
                         'deep_link' => $deepLink];
             case 'backup_warning':
                 return ['title' => $title ?? 'Backup Warnings',
