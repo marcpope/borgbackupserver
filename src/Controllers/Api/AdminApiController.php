@@ -12,6 +12,9 @@ use BBS\Services\SshKeyManager;
 
 class AdminApiController extends Controller
 {
+    /** Schedule frequencies the web plan form offers; create and update both check against this. */
+    private const VALID_FREQUENCIES = ['10min', '15min', '30min', 'hourly', 'daily', 'weekly', 'monthly', 'manual'];
+
     private function getJsonInput(): array
     {
         $raw = file_get_contents('php://input');
@@ -694,6 +697,34 @@ class AdminApiController extends Controller
             ORDER BY bp.name
         ", [$id]);
 
+        // Plugins are returned for the same reason as retention: create and
+        // update accept a `plugins` list that replaces the attached set, so
+        // an editor that can't read the current set either never lets anyone
+        // change it or detaches configs the user didn't know were there.
+        $pluginsByPlan = [];
+        if ($plans) {
+            $rows = $this->db->fetchAll("
+                SELECT bpp.backup_plan_id, bpp.plugin_config_id, bpp.plugin_id,
+                       bpp.execution_order, p.slug, p.name AS plugin_name,
+                       pc.name AS config_name
+                FROM backup_plan_plugins bpp
+                JOIN backup_plans bp ON bp.id = bpp.backup_plan_id
+                JOIN plugins p ON p.id = bpp.plugin_id
+                LEFT JOIN plugin_configs pc ON pc.id = bpp.plugin_config_id
+                WHERE bp.agent_id = ? AND bpp.enabled = 1
+                ORDER BY bpp.backup_plan_id, bpp.execution_order ASC
+            ", [$id]);
+            foreach ($rows as $r) {
+                $pluginsByPlan[(int) $r['backup_plan_id']][] = [
+                    'plugin_config_id' => $r['plugin_config_id'] !== null ? (int) $r['plugin_config_id'] : null,
+                    'plugin_id' => (int) $r['plugin_id'],
+                    'name' => $r['config_name'] ?? $r['plugin_name'],
+                    'slug' => $r['slug'],
+                    'execution_order' => (int) $r['execution_order'],
+                ];
+            }
+        }
+
         foreach ($plans as &$p) {
             $p['id'] = (int) $p['id'];
             $p['enabled'] = (bool) $p['enabled'];
@@ -704,6 +735,7 @@ class AdminApiController extends Controller
                       'prune_weeks', 'prune_months', 'prune_years'] as $k) {
                 $p[$k] = (int) $p[$k];
             }
+            $p['plugins'] = $pluginsByPlan[$p['id']] ?? [];
         }
         unset($p);
 
@@ -753,9 +785,8 @@ class AdminApiController extends Controller
             $this->json(['error' => 'Repository not found or does not belong to this client'], 404);
         }
 
-        $validFreqs = ['hourly', 'daily', 'weekly', 'monthly', 'manual'];
-        if (!in_array($frequency, $validFreqs)) {
-            $this->json(['error' => 'Invalid frequency. Valid: ' . implode(', ', $validFreqs)], 400);
+        if (!in_array($frequency, self::VALID_FREQUENCIES, true)) {
+            $this->json(['error' => 'Invalid frequency. Valid: ' . implode(', ', self::VALID_FREQUENCIES)], 400);
         }
 
         $planId = $this->db->insert('backup_plans', [
@@ -1353,6 +1384,11 @@ class AdminApiController extends Controller
         $plan = $this->db->fetchOne("SELECT * FROM backup_plans WHERE id = ? AND agent_id = ?", [$planId, $id]);
         if (!$plan) {
             $this->json(['error' => 'Plan not found'], 404);
+        }
+
+        // Reject a bad frequency before any field is written.
+        if (isset($input['frequency']) && !in_array($input['frequency'], self::VALID_FREQUENCIES, true)) {
+            $this->json(['error' => 'Invalid frequency. Valid: ' . implode(', ', self::VALID_FREQUENCIES)], 400);
         }
 
         // Update plan fields (only those provided)
@@ -4815,5 +4851,112 @@ class AdminApiController extends Controller
         (new \BBS\Services\PushService())->deleteDevice($deviceId);
         http_response_code(204);
         exit;
+    }
+
+    // ── Filesystem browse ────────────────────────────────
+    // The web's ClientController::browse()/browsePoll() under token auth:
+    // same list_dir job, same 15-minute params-keyed cache, same answers.
+    // Reading a directory listing is a read of the client, so visibility
+    // is the only gate; manage_plans is needed to save the plan afterwards.
+
+    /**
+     * POST /api/v1/clients/{id}/browse
+     * Body: {"path": "/", "depth": 1, "show_hidden": false, "show_all": false, "refresh": false}
+     */
+    public function browse(int $id): void
+    {
+        $ctx = $this->requireApiAuth();
+        if (!$this->apiCanAccessAgent($ctx, $id)) {
+            $this->json(['error' => 'Client not found'], 404);
+        }
+
+        $agent = $this->db->fetchOne("SELECT id, name, status FROM agents WHERE id = ?", [$id]);
+        if (!$agent) {
+            $this->json(['error' => 'Client not found'], 404);
+        }
+        if (($agent['status'] ?? 'offline') !== 'online') {
+            $this->json(['error' => 'Agent is offline; cannot browse filesystem'], 409);
+        }
+
+        $input = $this->getJsonInput();
+        $path = trim((string) ($input['path'] ?? '/'));
+        if ($path === '') $path = '/';
+        $depth = max(0, min(5, (int) ($input['depth'] ?? 2)));
+        $showHidden = !empty($input['show_hidden']);
+        $showAll    = !empty($input['show_all']);
+
+        $cache = \BBS\Services\Cache::getInstance();
+        $cacheKey = sprintf(
+            'browse_tree:%d:%s',
+            $id,
+            md5("{$path}|{$depth}|" . ($showHidden ? '1' : '0') . '|' . ($showAll ? '1' : '0'))
+        );
+        // Absolute 15-minute TTL, not sliding — see ClientController::browse() (#429).
+        $cached = !empty($input['refresh']) ? null : $cache->get($cacheKey);
+        if (is_array($cached)) {
+            $this->json(['status' => 'completed', 'tree' => $cached, 'cached' => true]);
+        }
+
+        $jobId = $this->db->insert('backup_jobs', [
+            'agent_id' => $id,
+            'task_type' => 'list_dir',
+            'status' => 'queued',
+            'status_message' => json_encode([
+                'path' => $path,
+                'depth' => $depth,
+                'show_hidden' => $showHidden,
+                'show_all' => $showAll,
+                'cache_key' => $cacheKey,
+            ]),
+        ]);
+
+        $this->json(['status' => 'pending', 'task_id' => (int) $jobId]);
+    }
+
+    /**
+     * GET /api/v1/clients/{id}/browse/{taskId} — poll a browse() result.
+     */
+    public function browsePoll(int $id, int $taskId): void
+    {
+        $ctx = $this->requireApiAuth();
+        if (!$this->apiCanAccessAgent($ctx, $id)) {
+            $this->json(['error' => 'Client not found'], 404);
+        }
+
+        $job = $this->db->fetchOne(
+            "SELECT id, status, status_message, error_log, task_result FROM backup_jobs WHERE id = ? AND agent_id = ? AND task_type = 'list_dir'",
+            [$taskId, $id]
+        );
+        if (!$job) {
+            $this->json(['error' => 'Task not found'], 404);
+        }
+
+        if ($job['status'] === 'failed') {
+            $this->json(['status' => 'failed', 'error' => $job['error_log'] ?? 'list_dir failed']);
+        }
+        if ($job['status'] !== 'completed') {
+            $this->json(['status' => 'pending']);
+        }
+
+        // task_result on the job row is the primary source; the per-task
+        // cache entry covers rows that completed before it was persisted.
+        $cache = \BBS\Services\Cache::getInstance();
+        $tree = null;
+        if (!empty($job['task_result'])) {
+            $decoded = json_decode($job['task_result'], true);
+            if (is_array($decoded)) $tree = $decoded;
+        }
+        if ($tree === null) {
+            $tree = $cache->get("browse_result:{$taskId}");
+        }
+        if (!is_array($tree)) {
+            $this->json(['status' => 'failed', 'error' => 'Result not available (may have expired)']);
+        }
+
+        $params = json_decode($job['status_message'] ?? '{}', true) ?: [];
+        if (!empty($params['cache_key'])) {
+            $cache->set($params['cache_key'], $tree, 900);
+        }
+        $this->json(['status' => 'completed', 'tree' => $tree]);
     }
 }

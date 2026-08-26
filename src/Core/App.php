@@ -337,6 +337,8 @@ class App
         $this->router->map('POST', '/api/v1/clients/[i:id]/plans/[i:planId]/pause', 'Api\\AdminApiController@pausePlan');
         $this->router->map('POST', '/api/v1/clients/[i:id]/plans/[i:planId]/resume', 'Api\\AdminApiController@resumePlan');
         $this->router->map('POST', '/api/v1/clients/[i:id]/plans/[i:planId]/trigger', 'Api\\AdminApiController@triggerPlan');
+        $this->router->map('POST', '/api/v1/clients/[i:id]/browse', 'Api\\AdminApiController@browse');
+        $this->router->map('GET', '/api/v1/clients/[i:id]/browse/[i:taskId]', 'Api\\AdminApiController@browsePoll');
         $this->router->map('GET', '/api/v1/clients/[i:id]/jobs', 'Api\\AdminApiController@listJobs');
         $this->router->map('GET', '/api/v1/clients/[i:id]/jobs/[i:jobId]', 'Api\\AdminApiController@getJob');
         $this->router->map('GET', '/api/v1/queue', 'Api\\AdminApiController@getQueue');
