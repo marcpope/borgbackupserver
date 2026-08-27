@@ -526,9 +526,25 @@ class UpdateService
                 }
             }
 
+            // Fleet size and how much data is protected, as totals only:
+            // the number of clients, the original size of each repository's
+            // newest archive summed (what a full restore would bring back),
+            // and the deduplicated size on disk. No names, paths or hosts.
+            $clients = (int) ($this->db->fetchOne("SELECT COUNT(*) AS c FROM agents")['c'] ?? 0);
+            $protected = (int) ($this->db->fetchOne("
+                SELECT COALESCE(SUM(a.original_size), 0) AS b
+                FROM archives a
+                JOIN (SELECT repository_id, MAX(created_at) AS newest FROM archives GROUP BY repository_id) n
+                  ON n.repository_id = a.repository_id AND n.newest = a.created_at
+            ")['b'] ?? 0);
+            $repoBytes = (int) ($this->db->fetchOne("SELECT COALESCE(SUM(size_bytes), 0) AS b FROM repositories")['b'] ?? 0);
+
             $payload = json_encode([
                 'version' => $currentVersion,
                 'os' => $os,
+                'clients' => $clients,
+                'protected_bytes' => $protected,
+                'repo_bytes' => $repoBytes,
             ]);
             $url = 'https://www.borgbackupserver.com/api/telemetry.php';
 
