@@ -875,15 +875,15 @@ unset($ns);
                                     </button>
                                 </div>
                                 <div>
-                                    <form method="POST" action="/notification-services/<?= $service['id'] ?>/toggle" class="d-inline">
-                                        <input type="hidden" name="csrf_token" value="<?= $this->csrfToken() ?>">
-                                        <button type="submit" class="btn btn-sm btn-outline-<?= $service['enabled'] ? 'warning' : 'success' ?>">
-                                            <i class="bi bi-<?= $service['enabled'] ? 'pause-circle' : 'play-circle' ?> me-1"></i>
-                                            <?= $service['enabled'] ? 'Disable' : 'Enable' ?>
-                                        </button>
-                                    </form>
+                                    <button type="submit" class="btn btn-sm btn-outline-<?= $service['enabled'] ? 'warning' : 'success' ?>" form="svcToggle_<?= $service['id'] ?>">
+                                        <i class="bi bi-<?= $service['enabled'] ? 'pause-circle' : 'play-circle' ?> me-1"></i>
+                                        <?= $service['enabled'] ? 'Disable' : 'Enable' ?>
+                                    </button>
                                 </div>
                             </div>
+                        </form>
+                        <form id="svcToggle_<?= $service['id'] ?>" method="POST" action="/notification-services/<?= $service['id'] ?>/toggle" class="d-none">
+                            <input type="hidden" name="csrf_token" value="<?= $this->csrfToken() ?>">
                         </form>
                     </td>
                 </tr>
@@ -982,13 +982,13 @@ unset($ns);
                             <button type="button" class="btn btn-sm btn-outline-secondary ms-2"
                                     data-bs-toggle="collapse" data-bs-target="#editMobile_<?= $service['id'] ?>">Cancel</button>
                         </div>
-                        <form method="POST" action="/notification-services/<?= $service['id'] ?>/toggle" class="d-inline">
-                            <input type="hidden" name="csrf_token" value="<?= $this->csrfToken() ?>">
-                            <button type="submit" class="btn btn-sm btn-outline-<?= $service['enabled'] ? 'warning' : 'success' ?>">
-                                <?= $service['enabled'] ? 'Disable' : 'Enable' ?>
-                            </button>
-                        </form>
+                        <button type="submit" class="btn btn-sm btn-outline-<?= $service['enabled'] ? 'warning' : 'success' ?>" form="svcToggleMobile_<?= $service['id'] ?>">
+                            <?= $service['enabled'] ? 'Disable' : 'Enable' ?>
+                        </button>
                     </div>
+                </form>
+                <form id="svcToggleMobile_<?= $service['id'] ?>" method="POST" action="/notification-services/<?= $service['id'] ?>/toggle" class="d-none">
+                    <input type="hidden" name="csrf_token" value="<?= $this->csrfToken() ?>">
                 </form>
             </div>
         </div>
