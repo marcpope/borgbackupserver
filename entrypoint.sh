@@ -542,6 +542,17 @@ if ! mysql -e "SELECT 1 FROM mysql.user WHERE user='bbs'" 2>/dev/null | grep -q 
     mysql -e "FLUSH PRIVILEGES;"
 fi
 
+# .env is the source of truth for the password. If the two disagree — a
+# server backup restored from another install brought its own DB_PASS, or
+# someone edited .env by hand — reset the user to match rather than start
+# a container that can't reach its own database (#447).
+if ! mysql -u bbs -p"$DB_PASS" -e "SELECT 1" >/dev/null 2>&1; then
+    echo "Database password in .env does not match the bbs user — updating the user to match..."
+    mysql -e "ALTER USER 'bbs'@'localhost' IDENTIFIED BY '$DB_PASS';" 2>/dev/null || true
+    mysql -e "ALTER USER 'bbs'@'127.0.0.1' IDENTIFIED BY '$DB_PASS';" 2>/dev/null || true
+    mysql -e "FLUSH PRIVILEGES;" 2>/dev/null || true
+fi
+
 # Set permissions on backups (recursive for nested content)
 chown -R www-data:www-data /var/bbs/backups
 

@@ -109,20 +109,31 @@ fi
 # Step 2: Restore .env
 info "[2/7] Restoring config/.env..."
 
+# In Docker, config/.env is a symlink to the file on the data volume
+# (/var/bbs/config/.env). Every write below has to land on the real file:
+# `sed -i` on a symlink replaces the link with a plain file, which left the
+# fixed-up credentials in the container and the backup's stale password on
+# the volume — and the next container start, which re-links to the volume,
+# could no longer reach its own database (#447).
+ENV_FILE="$BBS_DIR/config/.env"
+if [ -L "$ENV_FILE" ]; then
+    ENV_FILE=$(readlink -f "$ENV_FILE")
+fi
+
 # Save current DB credentials before overwriting (the running MySQL may have different creds
 # than the backup's .env, e.g., Docker container with random password vs bare-metal backup)
 SAVED_DB_HOST=""
 SAVED_DB_NAME=""
 SAVED_DB_USER=""
 SAVED_DB_PASS=""
-if [ -f "$BBS_DIR/config/.env" ]; then
-    SAVED_DB_HOST=$(grep '^DB_HOST=' "$BBS_DIR/config/.env" | cut -d= -f2-)
-    SAVED_DB_NAME=$(grep '^DB_NAME=' "$BBS_DIR/config/.env" | cut -d= -f2-)
-    SAVED_DB_USER=$(grep '^DB_USER=' "$BBS_DIR/config/.env" | cut -d= -f2-)
-    SAVED_DB_PASS=$(grep '^DB_PASS=' "$BBS_DIR/config/.env" | cut -d= -f2-)
+if [ -f "$ENV_FILE" ]; then
+    SAVED_DB_HOST=$(grep '^DB_HOST=' "$ENV_FILE" | cut -d= -f2-)
+    SAVED_DB_NAME=$(grep '^DB_NAME=' "$ENV_FILE" | cut -d= -f2-)
+    SAVED_DB_USER=$(grep '^DB_USER=' "$ENV_FILE" | cut -d= -f2-)
+    SAVED_DB_PASS=$(grep '^DB_PASS=' "$ENV_FILE" | cut -d= -f2-)
 fi
 
-if [ -f "$BBS_DIR/config/.env" ]; then
+if [ -f "$ENV_FILE" ]; then
     if [ "$AUTO_YES" = true ]; then
         REPLY="y"
     else
@@ -132,20 +143,19 @@ if [ -f "$BBS_DIR/config/.env" ]; then
     if [[ ! "$REPLY" =~ ^[Yy]$ ]]; then
         echo "  Skipping .env restore (keeping existing)"
     else
-        cp "$TMPDIR/env" "$BBS_DIR/config/.env"
-        chmod 600 "$BBS_DIR/config/.env"
-        chown www-data:www-data "$BBS_DIR/config/.env"
+        cp "$TMPDIR/env" "$ENV_FILE"
+        chmod 600 "$ENV_FILE"
+        chown www-data:www-data "$ENV_FILE"
         ok "Restored .env"
     fi
 else
-    cp "$TMPDIR/env" "$BBS_DIR/config/.env"
-    chmod 600 "$BBS_DIR/config/.env"
-    chown www-data:www-data "$BBS_DIR/config/.env"
+    cp "$TMPDIR/env" "$ENV_FILE"
+    chmod 600 "$ENV_FILE"
+    chown www-data:www-data "$ENV_FILE"
     ok "Restored .env"
 fi
 
 # Read DB credentials from the (possibly restored) .env
-ENV_FILE="$BBS_DIR/config/.env"
 DB_HOST=$(grep '^DB_HOST=' "$ENV_FILE" | cut -d= -f2-)
 DB_NAME=$(grep '^DB_NAME=' "$ENV_FILE" | cut -d= -f2-)
 DB_USER=$(grep '^DB_USER=' "$ENV_FILE" | cut -d= -f2-)
