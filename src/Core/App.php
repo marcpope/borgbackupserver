@@ -385,6 +385,10 @@ class App
         $this->router->map('GET', '/api/v1/s3-credentials', 'Api\\AdminApiController@getS3Credentials');
         $this->router->map('POST', '/api/v1/s3-credentials', 'Api\\AdminApiController@setS3Credentials');
         $this->router->map('DELETE', '/api/v1/s3-credentials', 'Api\\AdminApiController@clearS3Credentials');
+        $this->router->map('POST', '/api/v1/s3-credentials/test', 'Api\\AdminApiController@testS3Credentials');
+        $this->router->map('GET', '/api/v1/server-backups', 'Api\\AdminApiController@listServerBackups');
+        $this->router->map('POST', '/api/v1/server-backups', 'Api\\AdminApiController@createServerBackup');
+        $this->router->map('POST', '/api/v1/server-backups/restore', 'Api\\AdminApiController@restoreServerBackup');
         $this->router->map('GET', '/api/v1/maintenance', 'Api\\AdminApiController@getMaintenance');
         $this->router->map('POST', '/api/v1/maintenance', 'Api\\AdminApiController@setMaintenance');
         $this->router->map('POST', '/api/v1/platform/rotate-token', 'Api\\AdminApiController@rotatePlatformToken');

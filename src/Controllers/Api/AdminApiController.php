@@ -2528,10 +2528,14 @@ class AdminApiController extends Controller
         }
 
         $publicKeys = [
-            's3_endpoint'    => 'endpoint',
-            's3_region'      => 'region',
-            's3_bucket'      => 'bucket',
-            's3_path_prefix' => 'path_prefix',
+            's3_endpoint'        => 'endpoint',
+            's3_region'          => 'region',
+            's3_bucket'          => 'bucket',
+            's3_path_prefix'     => 'path_prefix',
+            's3_storage_class'   => 'storage_class',
+            's3_sse_mode'        => 'sse_mode',
+            's3_sse_kms_key_id'  => 'sse_kms_key_id',
+            's3_bandwidth_limit' => 'bandwidth_limit',
         ];
         $secretKeys = [
             's3_access_key'  => 'access_key',
@@ -2543,10 +2547,24 @@ class AdminApiController extends Controller
             $row = $this->db->fetchOne("SELECT `value` FROM settings WHERE `key` = ?", [$settingKey]);
             $out[$responseKey] = $row['value'] ?? null;
         }
+        // The four option fields are strings the web form defaults to "";
+        // null would read as "unknown" rather than "provider default".
+        foreach (['storage_class', 'sse_mode', 'sse_kms_key_id', 'bandwidth_limit'] as $k) {
+            $out[$k] = (string) ($out[$k] ?? '');
+        }
+        $row = $this->db->fetchOne("SELECT `value` FROM settings WHERE `key` = 's3_sync_server_backups'");
+        $out['sync_server_backups'] = ($row['value'] ?? '0') === '1';
+
         if ($includeSecrets) {
+            // Stored encrypted when saved from the web (or via this API
+            // now); older API saves were plaintext, which decrypt() rejects.
             foreach ($secretKeys as $settingKey => $responseKey) {
                 $row = $this->db->fetchOne("SELECT `value` FROM settings WHERE `key` = ?", [$settingKey]);
-                $out[$responseKey] = $row['value'] ?? null;
+                $val = $row['value'] ?? null;
+                if (!empty($val)) {
+                    try { $val = \BBS\Services\Encryption::decrypt($val); } catch (\Exception $e) {}
+                }
+                $out[$responseKey] = $val;
             }
         }
 
@@ -2586,21 +2604,72 @@ class AdminApiController extends Controller
         }
         $input = $this->getJsonInput();
 
-        $fields = ['s3_endpoint', 's3_region', 's3_bucket', 's3_access_key', 's3_secret_key', 's3_path_prefix'];
-        $map = [
-            's3_endpoint'    => $input['endpoint']    ?? null,
-            's3_region'      => $input['region']      ?? null,
-            's3_bucket'      => $input['bucket']      ?? null,
-            's3_access_key'  => $input['access_key']  ?? null,
-            's3_secret_key'  => $input['secret_key']  ?? null,
-            's3_path_prefix' => $input['path_prefix'] ?? '',
-        ];
-
-        foreach (['s3_endpoint', 's3_region', 's3_bucket', 's3_access_key', 's3_secret_key'] as $required) {
-            if ($map[$required] === null || $map[$required] === '') {
-                $this->json(['error' => "Missing required field: " . str_replace('s3_', '', $required)], 400);
+        $endpoint = trim((string) ($input['endpoint'] ?? ''));
+        $region   = trim((string) ($input['region'] ?? ''));
+        $bucket   = trim((string) ($input['bucket'] ?? ''));
+        foreach (['endpoint' => $endpoint, 'region' => $region, 'bucket' => $bucket] as $k => $v) {
+            if ($v === '') {
+                $this->json(['error' => "Missing required field: {$k}"], 400);
             }
         }
+
+        // Same endpoint check as the web form: scheme optional, host required.
+        if (!preg_match('#^https?://#i', $endpoint)) {
+            $endpoint = 'https://' . $endpoint;
+        }
+        $parsed = parse_url($endpoint);
+        if (empty($parsed['host']) || !preg_match('/\.[a-z]{2,}$/i', $parsed['host'])) {
+            $this->json(['error' => 'endpoint must be a valid URL (e.g. https://s3.us-east-1.amazonaws.com)'], 400);
+        }
+
+        $storageClasses = ['', 'STANDARD', 'STANDARD_IA', 'ONEZONE_IA', 'INTELLIGENT_TIERING', 'GLACIER_IR', 'DEEP_ARCHIVE'];
+        $sseModes = ['', 'AES256', 'aws:kms'];
+        if (array_key_exists('storage_class', $input) && !in_array((string) $input['storage_class'], $storageClasses, true)) {
+            $this->json(['error' => 'Invalid storage_class. Valid: ' . implode(', ', array_filter($storageClasses)) . ' or "" for the provider default'], 400);
+        }
+        if (array_key_exists('sse_mode', $input) && !in_array((string) $input['sse_mode'], $sseModes, true)) {
+            $this->json(['error' => 'Invalid sse_mode. Valid: AES256, aws:kms or "" for none'], 400);
+        }
+
+        // Keys: blank or omitted means keep what is stored. A token can't
+        // read them back, so changing the bucket shouldn't cost re-typing
+        // both secrets. They are only required when nothing is stored yet.
+        $accessKey = (string) ($input['access_key'] ?? '');
+        $secretKey = (string) ($input['secret_key'] ?? '');
+        foreach (['access_key' => $accessKey, 'secret_key' => $secretKey] as $k => $v) {
+            if ($v === '') {
+                $stored = $this->db->fetchOne("SELECT `value` FROM settings WHERE `key` = ?", ["s3_{$k}"]);
+                if (empty($stored['value'])) {
+                    $this->json(['error' => "Missing required field: {$k} (no {$k} is stored yet)"], 400);
+                }
+            }
+        }
+
+        $map = [
+            's3_endpoint' => $endpoint,
+            's3_region'   => $region,
+            's3_bucket'   => $bucket,
+        ];
+        // Optional fields: written only when sent, so a caller that only
+        // knows the core fields doesn't blank the rest.
+        $optional = [
+            'path_prefix'     => 's3_path_prefix',
+            'storage_class'   => 's3_storage_class',
+            'sse_mode'        => 's3_sse_mode',
+            'sse_kms_key_id'  => 's3_sse_kms_key_id',
+            'bandwidth_limit' => 's3_bandwidth_limit',
+        ];
+        foreach ($optional as $inKey => $settingKey) {
+            if (array_key_exists($inKey, $input)) {
+                $map[$settingKey] = trim((string) ($input[$inKey] ?? ''));
+            }
+        }
+        if (array_key_exists('sync_server_backups', $input)) {
+            $map['s3_sync_server_backups'] = $input['sync_server_backups'] ? '1' : '0';
+        }
+        // Encrypted at rest, as the web form stores them.
+        if ($accessKey !== '') $map['s3_access_key'] = \BBS\Services\Encryption::encrypt($accessKey);
+        if ($secretKey !== '') $map['s3_secret_key'] = \BBS\Services\Encryption::encrypt($secretKey);
 
         foreach ($map as $key => $value) {
             $existing = $this->db->fetchOne("SELECT `key` FROM settings WHERE `key` = ?", [$key]);
@@ -2612,6 +2681,25 @@ class AdminApiController extends Controller
         }
 
         $this->json(['status' => 'ok', 'fields' => array_keys($map)]);
+    }
+
+    /**
+     * POST /api/v1/s3-credentials/test
+     * Runs the web page's connection test against the stored credentials.
+     */
+    public function testS3Credentials(): void
+    {
+        if (\BBS\Core\Config::isHosted()) {
+            $this->requirePlatformApiToken();
+        } else {
+            $this->requireApiToken();
+        }
+        $s3 = new \BBS\Services\S3SyncService();
+        $result = $s3->testConnection($s3->resolveCredentials(['credential_source' => 'global']));
+        if (!empty($result['success'])) {
+            $this->json(['status' => 'ok', 'message' => 'Bucket reachable']);
+        }
+        $this->json(['status' => 'error', 'error' => $result['error'] ?? 'Connection failed'], 400);
     }
 
     /**
@@ -2629,7 +2717,8 @@ class AdminApiController extends Controller
             $this->requireApiToken();
         }
 
-        $keys = ['s3_endpoint', 's3_region', 's3_bucket', 's3_access_key', 's3_secret_key', 's3_path_prefix'];
+        $keys = ['s3_endpoint', 's3_region', 's3_bucket', 's3_access_key', 's3_secret_key', 's3_path_prefix',
+                 's3_storage_class', 's3_sse_mode', 's3_sse_kms_key_id', 's3_bandwidth_limit', 's3_sync_server_backups'];
         foreach ($keys as $key) {
             $this->db->delete('settings', '`key` = ?', [$key]);
         }
@@ -2638,6 +2727,117 @@ class AdminApiController extends Controller
         );
 
         $this->json(['status' => 'ok', 'disabled_repositories' => $disabled ?? 0]);
+    }
+
+    // ── Server backups in off-site storage ─────────────────────────
+    // The server's backup of itself (database, configuration, SSH keys),
+    // as held in the S3 bucket. Not offered in hosted mode, where the
+    // platform looks after this.
+
+    private function requireServerBackupAccess(): void
+    {
+        if (\BBS\Core\Config::isHosted()) {
+            $this->json(['error' => 'Not available in hosted mode'], 404);
+        }
+        $this->requireApiToken();
+    }
+
+    /**
+     * GET /api/v1/server-backups
+     * {"backups": [{"name": "bbs-backup-2026-08-27_174304.tar.gz", "size": 1900000, "date": "2026-08-27 17:43:05"}]}
+     */
+    public function listServerBackups(): void
+    {
+        $this->requireServerBackupAccess();
+        $result = (new \BBS\Services\ServerBackupService())->listInS3();
+        if (empty($result['success'])) {
+            $this->json(['error' => $result['error'] ?? 'Failed to list backups'], 400);
+        }
+        $backups = [];
+        foreach ($result['backups'] as $b) {
+            $ts = $b['modified'] !== '' ? strtotime($b['modified']) : false;
+            $backups[] = [
+                'name' => $b['filename'],
+                'size' => (int) $b['size'],
+                'date' => $ts !== false ? date('Y-m-d H:i:s', $ts) : $b['modified'],
+            ];
+        }
+        $this->json(['backups' => $backups]);
+    }
+
+    /**
+     * POST /api/v1/server-backups
+     * Takes a server backup now and, when off-site sync of server backups
+     * is on, pushes it to the bucket. Runs to completion — there is no job
+     * for this — so allow a few minutes on a large install.
+     */
+    public function createServerBackup(): void
+    {
+        $this->requireServerBackupAccess();
+        set_time_limit(0);
+        ignore_user_abort(true);
+
+        $service = new \BBS\Services\ServerBackupService();
+        $result = $service->run();
+        if (!$result['success']) {
+            $this->db->insert('server_log', [
+                'level' => 'error',
+                'message' => 'On-demand server backup failed: ' . $result['message'],
+            ]);
+            $this->json(['status' => 'error', 'error' => $result['message']], 500);
+        }
+
+        $sync = $service->syncToS3();
+        $this->db->insert('server_log', [
+            'level' => 'info',
+            'message' => 'Server backup created on demand'
+                . ($result['filename'] ? ": {$result['filename']}" : '')
+                . ($sync['skipped'] ? '' : ' — ' . $sync['message']),
+        ]);
+
+        $this->json([
+            'status' => 'ok',
+            'name' => $result['filename'],
+            'synced' => !$sync['skipped'] && $sync['success'],
+            'sync_message' => $sync['skipped'] ? null : $sync['message'],
+            'message' => $result['message'],
+        ], 201);
+    }
+
+    /**
+     * POST /api/v1/server-backups/restore   {"name": "bbs-backup-….tar.gz", "confirm": "RESTORE"}
+     * Replaces this install's database, configuration and SSH keys with
+     * the named backup, switches maintenance mode on, and resets the admin
+     * password — which is returned once, here. The confirmation phrase is
+     * required because there is no undo.
+     */
+    public function restoreServerBackup(): void
+    {
+        $this->requireServerBackupAccess();
+        $input = $this->getJsonInput();
+
+        $name = trim((string) ($input['name'] ?? ($input['filename'] ?? '')));
+        if ($name === '') {
+            $this->json(['error' => 'name is required'], 400);
+        }
+        if (($input['confirm'] ?? '') !== 'RESTORE') {
+            $this->json(['error' => 'Restore replaces the database, configuration and SSH keys. Send "confirm": "RESTORE" to proceed.'], 400);
+        }
+
+        set_time_limit(0);
+        ignore_user_abort(true);
+
+        $result = (new \BBS\Services\ServerBackupService())->restoreFromS3($name);
+        if (!$result['success']) {
+            $code = ($result['error'] ?? '') === 'Invalid backup filename' ? 400 : 500;
+            $this->json(['status' => 'error', 'error' => $result['error'], 'output' => $result['output'] ?? null], $code);
+        }
+        $this->json([
+            'status' => 'ok',
+            'username' => $result['username'],
+            'password' => $result['password'],
+            'maintenance_mode' => true,
+        ]);
     }
 
     // ── Platform token rotation ─────────────────────────────────────
@@ -2932,13 +3132,26 @@ class AdminApiController extends Controller
                     r.size_bytes, r.archive_count, r.created_at,
                     r.passphrase_encrypted,
                     COALESCE(rsc.enabled, 0) AS s3_sync_enabled,
-                    rsc.last_sync_at AS s3_last_sync_at
+                    rsc.last_sync_at AS s3_last_sync_at,
+                    s3c.plugin_config_id AS s3_config_id,
+                    s3c.name AS s3_config_name
              FROM repositories r
              LEFT JOIN agents a ON a.id = r.agent_id
              LEFT JOIN (
                  SELECT repository_id, MAX(enabled) AS enabled, MAX(last_sync_at) AS last_sync_at
                  FROM repository_s3_configs GROUP BY repository_id
              ) rsc ON rsc.repository_id = r.id
+             LEFT JOIN (
+                 SELECT rsc2.repository_id, rsc2.plugin_config_id, pc.name
+                 FROM repository_s3_configs rsc2
+                 JOIN plugin_configs pc ON pc.id = rsc2.plugin_config_id
+                 WHERE rsc2.id = (
+                     SELECT rsc3.id FROM repository_s3_configs rsc3
+                     JOIN plugin_configs pc3 ON pc3.id = rsc3.plugin_config_id
+                     WHERE rsc3.repository_id = rsc2.repository_id
+                     ORDER BY pc3.name, rsc3.id LIMIT 1
+                 )
+             ) s3c ON s3c.repository_id = r.id
              ORDER BY a.name, r.name"
         );
 
@@ -2957,6 +3170,8 @@ class AdminApiController extends Controller
                 'created_at'      => $r['created_at'],
                 's3_sync_enabled' => (bool) $r['s3_sync_enabled'],
                 's3_last_sync_at' => $r['s3_last_sync_at'],
+                's3_config_id'    => $r['s3_config_id'] !== null ? (int) $r['s3_config_id'] : null,
+                's3_config_name'  => $r['s3_config_name'],
             ];
             if ($includeSecrets) {
                 $repo['passphrase'] = null;

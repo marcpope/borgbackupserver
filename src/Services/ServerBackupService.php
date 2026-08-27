@@ -151,4 +151,125 @@ class ServerBackupService
             'skipped' => false,
         ];
     }
+
+    /**
+     * The server backups held in off-site storage, newest first.
+     *
+     * @return array{success: bool, error?: string, backups?: array<int, array{filename: string, size: int, modified: string}>}
+     */
+    public function listInS3(): array
+    {
+        $s3 = new S3SyncService();
+        $creds = $s3->resolveCredentials(['credential_source' => 'global']);
+        if (empty($creds['bucket']) || empty($creds['access_key'])) {
+            return ['success' => false, 'error' => 'S3 credentials not configured'];
+        }
+
+        $cmd = sprintf(
+            'sudo %s rclone-server-list %s %s %s %s %s %s 2>&1',
+            escapeshellarg(self::HELPER),
+            escapeshellarg($creds['endpoint']),
+            escapeshellarg($creds['region']),
+            escapeshellarg($creds['bucket']),
+            escapeshellarg($creds['access_key']),
+            escapeshellarg($creds['secret_key']),
+            escapeshellarg($creds['path_prefix'] ?? '')
+        );
+        $output = shell_exec($cmd);
+        $json = json_decode($output ?? '', true);
+        if (!is_array($json)) {
+            return ['success' => false, 'error' => 'Failed to list backups: ' . trim((string) $output)];
+        }
+
+        $backups = [];
+        foreach ($json as $item) {
+            if (!isset($item['Name'])) continue;
+            $backups[] = [
+                'filename' => $item['Name'],
+                'size' => (int) ($item['Size'] ?? 0),
+                'modified' => $item['ModTime'] ?? '',
+            ];
+        }
+        usort($backups, static fn($a, $b) => strcmp($b['modified'], $a['modified']));
+
+        return ['success' => true, 'backups' => $backups];
+    }
+
+    /**
+     * Download one server backup from off-site storage and restore it over
+     * this install — database, configuration and SSH keys. Maintenance mode
+     * is switched on afterwards; the admin password is reset and returned.
+     *
+     * @return array{success: bool, error?: string, output?: string, username?: string, password?: string}
+     */
+    public function restoreFromS3(string $filename): array
+    {
+        if ($filename === '' || !preg_match('/^bbs-backup-.*\.tar\.gz$/', $filename)) {
+            return ['success' => false, 'error' => 'Invalid backup filename'];
+        }
+
+        $s3 = new S3SyncService();
+        $creds = $s3->resolveCredentials(['credential_source' => 'global']);
+        if (empty($creds['bucket']) || empty($creds['access_key'])) {
+            return ['success' => false, 'error' => 'S3 credentials not configured'];
+        }
+
+        // Stage under the data volume, not the OS disk (#344)
+        $stagingBase = '/var/bbs/tmp';
+        if (!is_dir($stagingBase) && !@mkdir($stagingBase, 0770, true)) {
+            $stagingBase = '/tmp';
+        }
+        $tmpDir = $stagingBase . '/bbs-restore-' . bin2hex(random_bytes(8));
+        mkdir($tmpDir, 0700, true);
+
+        $dlCmd = sprintf(
+            'sudo %s rclone-server-download %s %s %s %s %s %s %s %s 2>&1',
+            escapeshellarg(self::HELPER),
+            escapeshellarg($filename),
+            escapeshellarg($tmpDir),
+            escapeshellarg($creds['endpoint']),
+            escapeshellarg($creds['region']),
+            escapeshellarg($creds['bucket']),
+            escapeshellarg($creds['access_key']),
+            escapeshellarg($creds['secret_key']),
+            escapeshellarg($creds['path_prefix'] ?? '')
+        );
+        $dlOutput = shell_exec($dlCmd);
+        $backupFile = $tmpDir . '/' . $filename;
+        if (!file_exists($backupFile)) {
+            shell_exec('rm -rf ' . escapeshellarg($tmpDir));
+            return ['success' => false, 'error' => 'Failed to download backup: ' . trim((string) $dlOutput)];
+        }
+
+        $restoreCmd = sprintf(
+            'sudo %s server-restore %s 2>&1',
+            escapeshellarg(self::HELPER),
+            escapeshellarg($backupFile)
+        );
+        $restoreOutput = (string) shell_exec($restoreCmd);
+        shell_exec('rm -rf ' . escapeshellarg($tmpDir));
+
+        $newPassword = '';
+        if (preg_match('/NEW_ADMIN_PASSWORD=(.+)/', $restoreOutput, $m)) {
+            $newPassword = trim($m[1]);
+        }
+
+        // Maintenance mode on: the restored DB is fresh. bbs-restore sets
+        // this too, but through CLI credentials — make sure it stuck.
+        $existing = $this->db->fetchOne("SELECT `key` FROM settings WHERE `key` = 'maintenance_mode'");
+        if ($existing) {
+            $this->db->update('settings', ['value' => '1'], "`key` = ?", ['maintenance_mode']);
+        } else {
+            $this->db->insert('settings', ['key' => 'maintenance_mode', 'value' => '1']);
+        }
+
+        if ($newPassword === '') {
+            return [
+                'success' => false,
+                'error' => 'Restore may have failed — no new password generated',
+                'output' => $restoreOutput,
+            ];
+        }
+        return ['success' => true, 'username' => 'admin', 'password' => $newPassword];
+    }
 }
