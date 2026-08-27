@@ -328,6 +328,7 @@ class App
         $this->router->map('PUT', '/api/v1/clients/[i:id]/repositories/[i:repoId]', 'Api\\AdminApiController@renameRepository');
         $this->router->map('DELETE', '/api/v1/clients/[i:id]/repositories/[i:repoId]', 'Api\\AdminApiController@deleteRepository');
         $this->router->map('GET', '/api/v1/clients/[i:id]/repositories/[i:repoId]/archives', 'Api\\AdminApiController@listArchives');
+        $this->router->map('GET', '/api/v1/clients/[i:id]/repositories/[i:repoId]/archives/[i:archiveId]', 'Api\\AdminApiController@archiveDetail');
         $this->router->map('GET', '/api/v1/clients/[i:id]/repositories/[i:repoId]/archives/[i:archiveId]/databases', 'Api\\AdminApiController@listArchiveDatabases');
         $this->router->map('POST', '/api/v1/clients/[i:id]/repositories/[i:repoId]/archives/[i:archiveId]/lock', 'Api\\AdminApiController@setArchiveLock');
         $this->router->map('GET', '/api/v1/clients/[i:id]/plans', 'Api\\AdminApiController@listPlans');
@@ -388,6 +389,9 @@ class App
         $this->router->map('POST', '/api/v1/maintenance', 'Api\\AdminApiController@setMaintenance');
         $this->router->map('POST', '/api/v1/platform/rotate-token', 'Api\\AdminApiController@rotatePlatformToken');
         $this->router->map('PUT', '/api/v1/repositories/[i:repoId]/s3-sync', 'Api\\AdminApiController@setRepositoryS3Sync');
+        $this->router->map('POST', '/api/v1/repositories/[i:repoId]/s3-sync', 'Api\\AdminApiController@attachRepositoryS3');
+        $this->router->map('DELETE', '/api/v1/repositories/[i:repoId]/s3-sync', 'Api\\AdminApiController@detachRepositoryS3');
+        $this->router->map('POST', '/api/v1/repositories/[i:repoId]/s3-restore', 'Api\\AdminApiController@restoreRepositoryS3');
         $this->router->map('GET', '/api/v1/repositories', 'Api\\AdminApiController@listAllRepositories');
         $this->router->map('GET', '/api/v1/users', 'Api\\AdminApiController@listUsers');
         $this->router->map('POST', '/api/v1/users', 'Api\\AdminApiController@createUser');

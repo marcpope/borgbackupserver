@@ -435,19 +435,42 @@ class AdminApiController extends Controller
             $this->json(['error' => 'Client not found'], 404);
         }
 
+        // borg_version_last falls back to the agent's borg version as the
+        // web page does — the repo column is only filled once a job has run
+        // against it. storage_location_name is null for remote repos, and
+        // s3_config_name/s3_config_id describe the first destination by
+        // name when several are linked.
         $repos = $this->db->fetchAll(
             "SELECT r.id, r.name, r.path, r.encryption, r.storage_type, r.size_bytes, r.archive_count, r.created_at,
                     COALESCE(rsc.enabled, 0) AS s3_sync_enabled,
-                    rsc.last_sync_at AS s3_last_sync_at
+                    rsc.last_sync_at AS s3_last_sync_at,
+                    COALESCE(r.borg_version_last, a.borg_version) AS borg_version_last,
+                    sl.label AS storage_location_name,
+                    s3c.plugin_config_id AS s3_config_id,
+                    s3c.name AS s3_config_name
              FROM repositories r
+             JOIN agents a ON a.id = r.agent_id
+             LEFT JOIN storage_locations sl ON sl.id = r.storage_location_id
              LEFT JOIN (
                  SELECT repository_id, MAX(enabled) AS enabled, MAX(last_sync_at) AS last_sync_at
                  FROM repository_s3_configs GROUP BY repository_id
              ) rsc ON rsc.repository_id = r.id
+             LEFT JOIN (
+                 SELECT rsc2.repository_id, rsc2.plugin_config_id, pc.name
+                 FROM repository_s3_configs rsc2
+                 JOIN plugin_configs pc ON pc.id = rsc2.plugin_config_id
+                 WHERE rsc2.id = (
+                     SELECT rsc3.id FROM repository_s3_configs rsc3
+                     JOIN plugin_configs pc3 ON pc3.id = rsc3.plugin_config_id
+                     WHERE rsc3.repository_id = rsc2.repository_id
+                     ORDER BY pc3.name, rsc3.id LIMIT 1
+                 )
+             ) s3c ON s3c.repository_id = r.id
              WHERE r.agent_id = ? ORDER BY r.name", [$id]
         );
         foreach ($repos as &$r) {
             $r['s3_sync_enabled'] = (bool) $r['s3_sync_enabled'];
+            $r['s3_config_id'] = $r['s3_config_id'] !== null ? (int) $r['s3_config_id'] : null;
         }
         unset($r);
 
@@ -1312,10 +1335,16 @@ class AdminApiController extends Controller
             $this->json(['error' => 'Repository not found'], 404);
         }
 
+        // Plan name and duration come through the backup job, as on the web
+        // page; both are null for imported archives with no job.
         $rows = $this->db->fetchAll(
-            "SELECT id, archive_name, file_count, original_size, deduplicated_size, locked, created_at,
-                    databases_backed_up IS NOT NULL AND databases_backed_up != '' AS has_databases
-             FROM archives WHERE repository_id = ? ORDER BY created_at DESC",
+            "SELECT ar.id, ar.archive_name, ar.file_count, ar.original_size, ar.deduplicated_size, ar.locked, ar.created_at,
+                    ar.databases_backed_up IS NOT NULL AND ar.databases_backed_up != '' AS has_databases,
+                    bp.name AS plan_name, bj.duration_seconds
+             FROM archives ar
+             LEFT JOIN backup_jobs bj ON bj.id = ar.backup_job_id
+             LEFT JOIN backup_plans bp ON bp.id = bj.backup_plan_id
+             WHERE ar.repository_id = ? ORDER BY ar.created_at DESC",
             [$repoId]
         );
         $archives = array_map(static function ($a) {
@@ -1326,15 +1355,129 @@ class AdminApiController extends Controller
                 'has_databases'     => (bool) $a['has_databases'],
                 'id'                => (int) $a['id'],
                 'name'              => $a['archive_name'],
+                'plan_name'         => $a['plan_name'],
                 'file_count'        => (int) $a['file_count'],
                 'original_size'     => (int) $a['original_size'],
                 'deduplicated_size' => (int) $a['deduplicated_size'],
+                'duration_seconds'  => $a['duration_seconds'] !== null ? (int) $a['duration_seconds'] : null,
                 'locked'            => (bool) ((int) $a['locked']),
                 'created_at'        => $a['created_at'],
             ];
         }, $rows);
 
         $this->json(['archives' => $archives]);
+    }
+
+    /**
+     * GET /api/v1/clients/{id}/repositories/{repoId}/archives/{archiveId}
+     *
+     * One recovery point with what the web archive page shows beyond the
+     * list: the plan's directories at the time of the job, files grouped by
+     * borg status, and the twenty largest files. The two catalog panels are
+     * [] when ClickHouse is unavailable or the archive isn't catalogued yet,
+     * and `catalog` says which.
+     */
+    public function archiveDetail(int $id, int $repoId, int $archiveId): void
+    {
+        $ctx = $this->requireApiAuth();
+        if (!$this->apiCanAccessAgent($ctx, $id)) {
+            $this->json(['error' => 'Client not found'], 404);
+        }
+
+        $repo = $this->db->fetchOne("SELECT id FROM repositories WHERE id = ? AND agent_id = ?", [$repoId, $id]);
+        if (!$repo) {
+            $this->json(['error' => 'Repository not found'], 404);
+        }
+
+        $archive = $this->db->fetchOne(
+            "SELECT ar.id, ar.archive_name, ar.file_count, ar.original_size, ar.deduplicated_size, ar.locked, ar.created_at,
+                    ar.databases_backed_up IS NOT NULL AND ar.databases_backed_up != '' AS has_databases,
+                    bp.name AS plan_name, bp.directories, bj.duration_seconds, bj.started_at, bj.completed_at
+             FROM archives ar
+             LEFT JOIN backup_jobs bj ON bj.id = ar.backup_job_id
+             LEFT JOIN backup_plans bp ON bp.id = bj.backup_plan_id
+             WHERE ar.id = ? AND ar.repository_id = ?",
+            [$archiveId, $repoId]
+        );
+        if (!$archive) {
+            $this->json(['error' => 'Archive not found'], 404);
+        }
+
+        $directories = [];
+        foreach (preg_split('/\r?\n/', (string) ($archive['directories'] ?? '')) as $d) {
+            $d = trim($d);
+            if ($d !== '') $directories[] = $d;
+        }
+
+        // Same two ClickHouse queries as the web page, each in its own try so
+        // one failing doesn't empty the other. The "deleted since previous
+        // archive" anti-join is deliberately not here — it can take seconds
+        // on large archives.
+        $statusBreakdown = [];
+        $largestFiles = [];
+        try {
+            $ch = \BBS\Core\ClickHouse::getInstance();
+            if ($ch->isAvailable()) {
+                $aid = (int) $id;
+                $arid = (int) $archiveId;
+                try {
+                    $rows = $ch->fetchAll(
+                        "SELECT status, count() as cnt, sum(file_size) as total_size
+                         FROM file_catalog
+                         WHERE agent_id = {$aid} AND archive_id = {$arid} AND path != ''
+                         GROUP BY status ORDER BY cnt DESC"
+                    );
+                    foreach ($rows as $r) {
+                        $statusBreakdown[] = [
+                            'status' => $r['status'],
+                            'count' => (int) $r['cnt'],
+                            'size' => $r['total_size'] !== null ? (int) $r['total_size'] : null,
+                        ];
+                    }
+                } catch (\Exception $e) {
+                    error_log("api archiveDetail statusBreakdown failed (agent_id={$aid}, archive_id={$arid}): " . $e->getMessage());
+                }
+                try {
+                    $rows = $ch->fetchAllOrdered(
+                        "SELECT path, file_name, file_size, status
+                         FROM file_catalog
+                         WHERE agent_id = {$aid} AND archive_id = {$arid} AND path != ''
+                           AND status != toFixedString('X', 1)
+                         ORDER BY file_size DESC LIMIT 20"
+                    );
+                    foreach ($rows as $r) {
+                        $largestFiles[] = [
+                            'path' => $r['path'],
+                            'size' => (int) $r['file_size'],
+                            'status' => $r['status'],
+                        ];
+                    }
+                } catch (\Exception $e) {
+                    error_log("api archiveDetail largestFiles failed (agent_id={$aid}, archive_id={$arid}): " . $e->getMessage());
+                }
+            }
+        } catch (\Exception $e) {
+            // ClickHouse unreachable — both panels stay empty; catalog says so.
+        }
+
+        $this->json([
+            'id' => (int) $archive['id'],
+            'name' => $archive['archive_name'],
+            'plan_name' => $archive['plan_name'],
+            'created_at' => $archive['created_at'],
+            'started_at' => $archive['started_at'],
+            'completed_at' => $archive['completed_at'],
+            'duration_seconds' => $archive['duration_seconds'] !== null ? (int) $archive['duration_seconds'] : null,
+            'file_count' => (int) $archive['file_count'],
+            'original_size' => (int) $archive['original_size'],
+            'deduplicated_size' => (int) $archive['deduplicated_size'],
+            'locked' => (bool) ((int) $archive['locked']),
+            'has_databases' => (bool) $archive['has_databases'],
+            'directories' => $directories,
+            'status_breakdown' => $statusBreakdown,
+            'largest_files' => $largestFiles,
+            'catalog' => $this->catalogState($id, $archiveId),
+        ]);
     }
 
     /**
@@ -2608,6 +2751,162 @@ class AdminApiController extends Controller
             'name' => $repo['name'],
             's3_sync_enabled' => $enabled,
         ]);
+    }
+
+    /**
+     * Resolves a repository for the /api/v1/repositories/{id}/s3-* routes:
+     * the row joined to what the restore needs from the agent, with the
+     * caller's visibility of that agent already checked.
+     */
+    private function s3RepoForCaller(array $ctx, int $repoId): array
+    {
+        $repo = $this->db->fetchOne("
+            SELECT r.*, a.name AS agent_name, a.ssh_unix_user, a.server_host_override
+            FROM repositories r
+            JOIN agents a ON a.id = r.agent_id
+            WHERE r.id = ?
+        ", [$repoId]);
+        if (!$repo || !$this->apiCanAccessAgent($ctx, (int) $repo['agent_id'])) {
+            $this->json(['error' => 'Repository not found'], 404);
+        }
+        return $repo;
+    }
+
+    /**
+     * POST /api/v1/repositories/{id}/s3-sync   {"plugin_config_id": 5}
+     * Links an S3 destination to the repository (re-enabling it if the link
+     * already exists). A repo may replicate to several destinations, so this
+     * adds rather than replaces; use DELETE to drop one.
+     */
+    public function attachRepositoryS3(int $repoId): void
+    {
+        $ctx = $this->requireApiAuth();
+        $repo = $this->s3RepoForCaller($ctx, $repoId);
+        $agentId = (int) $repo['agent_id'];
+        $this->apiRequirePermission($ctx, \BBS\Services\PermissionService::MANAGE_REPOS, $agentId);
+        $input = $this->getJsonInput();
+
+        $pluginConfigId = (int) ($input['plugin_config_id'] ?? 0);
+        if ($pluginConfigId <= 0) {
+            $this->json(['error' => 'plugin_config_id is required'], 400);
+        }
+        if (($repo['storage_type'] ?? 'local') !== 'local') {
+            $this->json(['error' => 'Only local repositories can be mirrored to S3'], 400);
+        }
+
+        $pluginConfig = $this->db->fetchOne(
+            "SELECT pc.id, pc.name FROM plugin_configs pc
+             JOIN plugins p ON p.id = pc.plugin_id
+             WHERE pc.id = ? AND pc.agent_id = ? AND p.slug = 's3_sync'",
+            [$pluginConfigId, $agentId]
+        );
+        if (!$pluginConfig) {
+            $this->json(['error' => 'S3 configuration not found for this client'], 404);
+        }
+
+        $existing = $this->db->fetchOne(
+            "SELECT id FROM repository_s3_configs WHERE repository_id = ? AND plugin_config_id = ?",
+            [$repoId, $pluginConfigId]
+        );
+        if ($existing) {
+            $this->db->update('repository_s3_configs', ['enabled' => 1], 'id = ?', [$existing['id']]);
+        } else {
+            $this->db->insert('repository_s3_configs', [
+                'repository_id' => $repoId,
+                'plugin_config_id' => $pluginConfigId,
+                'enabled' => 1,
+            ]);
+        }
+        $this->db->insert('server_log', [
+            'agent_id' => $agentId,
+            'level' => 'info',
+            'message' => "S3 sync enabled for repository \"{$repo['name']}\" to destination \"{$pluginConfig['name']}\"",
+        ]);
+
+        $this->json([
+            'id' => (int) $repo['id'],
+            'name' => $repo['name'],
+            's3_sync_enabled' => true,
+            's3_config_id' => (int) $pluginConfig['id'],
+            's3_config_name' => $pluginConfig['name'],
+        ], $existing ? 200 : 201);
+    }
+
+    /**
+     * DELETE /api/v1/repositories/{id}/s3-sync[?plugin_config_id=N]
+     * Removes one destination when given, all of them otherwise. Data in
+     * the bucket is left alone either way.
+     */
+    public function detachRepositoryS3(int $repoId): void
+    {
+        $ctx = $this->requireApiAuth();
+        $repo = $this->s3RepoForCaller($ctx, $repoId);
+        $agentId = (int) $repo['agent_id'];
+        $this->apiRequirePermission($ctx, \BBS\Services\PermissionService::MANAGE_REPOS, $agentId);
+        $input = $this->getJsonInput();
+
+        $pluginConfigId = (int) ($input['plugin_config_id'] ?? ($_GET['plugin_config_id'] ?? 0));
+        $destLabel = '';
+        if ($pluginConfigId > 0) {
+            $dest = $this->db->fetchOne(
+                "SELECT name FROM plugin_configs WHERE id = ? AND agent_id = ?",
+                [$pluginConfigId, $agentId]
+            );
+            $destLabel = $dest ? " to \"{$dest['name']}\"" : '';
+            $removed = $this->db->delete('repository_s3_configs', 'repository_id = ? AND plugin_config_id = ?', [$repoId, $pluginConfigId]);
+        } else {
+            $removed = $this->db->delete('repository_s3_configs', 'repository_id = ?', [$repoId]);
+        }
+        if ((int) $removed === 0) {
+            $this->json(['error' => 'Repository has no matching S3 destination'], 404);
+        }
+
+        $this->db->insert('server_log', [
+            'agent_id' => $agentId,
+            'level' => 'info',
+            'message' => "S3 sync{$destLabel} disabled for repository \"{$repo['name']}\" (data remains in S3)",
+        ]);
+
+        $remaining = $this->db->fetchOne("SELECT MAX(enabled) AS enabled FROM repository_s3_configs WHERE repository_id = ?", [$repoId]);
+        $this->json([
+            'id' => (int) $repo['id'],
+            'name' => $repo['name'],
+            's3_sync_enabled' => (bool) ($remaining['enabled'] ?? 0),
+            'removed' => (int) $removed,
+        ]);
+    }
+
+    /**
+     * POST /api/v1/repositories/{id}/s3-restore
+     *   {"mode": "replace"}                              over the existing repository
+     *   {"mode": "copy", "name": "Repo-copy"}            into a new one (name optional)
+     *   plus "plugin_config_id" when several destinations are linked.
+     * 202 with the job id, like maintenance.
+     */
+    public function restoreRepositoryS3(int $repoId): void
+    {
+        $ctx = $this->requireApiAuth();
+        $repo = $this->s3RepoForCaller($ctx, $repoId);
+        $agentId = (int) $repo['agent_id'];
+        $this->apiRequirePermission($ctx, \BBS\Services\PermissionService::REPO_MAINTENANCE, $agentId);
+        $input = $this->getJsonInput();
+
+        $result = (new \BBS\Services\S3RestoreService())->queue(
+            $agentId, $repo,
+            (string) ($input['mode'] ?? 'replace'),
+            $input['name'] ?? ($input['copy_name'] ?? null),
+            (int) ($input['plugin_config_id'] ?? 0)
+        );
+        if (!$result['ok']) {
+            $this->json(['error' => $result['error']], $result['code']);
+        }
+        $this->json([
+            'status' => 'queued',
+            'job_id' => $result['job_id'],
+            'mode' => $result['mode'],
+            'repository_id' => $result['repository_id'],
+            'repository_name' => $result['repository_name'],
+        ], 202);
     }
 
     /**
