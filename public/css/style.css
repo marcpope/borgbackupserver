@@ -40,13 +40,15 @@
 :root {
     --bs-body-font-family: 'Inter', system-ui, -apple-system, sans-serif;
     --bs-box-shadow-sm: 0 0.125rem 0.25rem rgba(0, 0, 0, 0.375);
-    --bbs-nav-bg: #2c3e50;
-    --bbs-nav-color: rgba(255, 255, 255, 0.7);
-    --bbs-nav-hover-bg: rgba(255, 255, 255, 0.1);
-    --bbs-nav-hover-color: #fff;
+    /* The top bar and sidebar are the same in both themes — only the content
+       area changes with the theme. These match the dark block below. */
+    --bbs-nav-bg: #151a1f;
+    --bbs-nav-color: rgba(255, 255, 255, 0.5);
+    --bbs-nav-hover-bg: rgba(255, 255, 255, 0.06);
+    --bbs-nav-hover-color: rgba(255, 255, 255, 0.9);
     --bbs-nav-active-bg: #e67e22;
     --bbs-nav-active-color: #fff;
-    --bbs-topbar-bg: #2c3e50;
+    --bbs-topbar-bg: #101417;
 }
 
 /* Muted Bootstrap color overrides — buttons and badges only */
@@ -198,8 +200,8 @@ html, body {
 }
 
 /* Version pill at the bottom of the sidebar. The sidebar background is
-   always dark navy regardless of theme (--bbs-nav-bg = #2c3e50 light /
-   #16191d dark), so the pill uses light-on-dark colors hardcoded. The
+   the same dark #151a1f in both themes, so the pill uses light-on-dark
+   colors hardcoded. The
    previous Bootstrap text-body-secondary token resolved to a midtone
    gray in light mode, which read as illegible against the dark navy. */
 .sidebar-version-pill {

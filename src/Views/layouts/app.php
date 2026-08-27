@@ -31,7 +31,7 @@
     <link rel="icon" type="image/png" sizes="96x96" href="/branding/icon/96">
     <link rel="shortcut icon" href="/favicon.ico">
     <link rel="apple-touch-icon" sizes="180x180" href="/branding/icon/180">
-    <meta name="theme-color" content="#2c3e50">
+    <meta name="theme-color" content="#101417">
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <meta http-equiv="Expires" content="0">
