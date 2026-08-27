@@ -2798,8 +2798,11 @@ class AdminApiController extends Controller
         } else {
             $this->requireApiToken();
         }
+        // Optional body fields (endpoint, region, bucket, path_prefix,
+        // access_key, secret_key) are laid over the stored credentials for
+        // the test only — check a change before saving it (#441).
         $s3 = new \BBS\Services\S3SyncService();
-        $result = $s3->testConnection($s3->resolveCredentials(['credential_source' => 'global']));
+        $result = $s3->testConnection($s3->globalCredentialsWithOverrides($this->getJsonInput()));
         if (!empty($result['success'])) {
             $this->json(['status' => 'ok', 'message' => 'Bucket reachable']);
         }

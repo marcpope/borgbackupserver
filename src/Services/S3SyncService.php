@@ -106,6 +106,33 @@ class S3SyncService
     }
 
     /**
+     * The stored global credentials with a form's unsaved values laid over
+     * them, for testing before saving (#441). Text fields replace the stored
+     * value when present in the input; the two keys only when non-empty,
+     * since a blank key field means "unchanged". Nothing is written.
+     */
+    public function globalCredentialsWithOverrides(array $input): array
+    {
+        $creds = $this->resolveCredentials(['credential_source' => 'global']);
+        foreach (['endpoint', 'region', 'bucket', 'path_prefix'] as $f) {
+            foreach ([$f, 's3_' . $f] as $k) {
+                if (array_key_exists($k, $input)) {
+                    $creds[$f] = trim((string) $input[$k]);
+                }
+            }
+        }
+        foreach (['access_key', 'secret_key'] as $f) {
+            foreach ([$f, 's3_' . $f] as $k) {
+                $v = trim((string) ($input[$k] ?? ''));
+                if ($v !== '') {
+                    $creds[$f] = $v;
+                }
+            }
+        }
+        return $creds;
+    }
+
+    /**
      * Build environment variables for rclone (env-based config, no rclone.conf needed).
      */
     public function buildRcloneEnv(array $creds): array

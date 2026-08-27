@@ -277,9 +277,10 @@ class StorageLocationController extends Controller
         $this->requireAdmin();
         $this->verifyCsrf();
 
+        // Test what is in the form, not only what was last saved, so a
+        // change can be checked before it replaces the working settings (#441).
         $s3Service = new \BBS\Services\S3SyncService();
-        $creds = $s3Service->resolveCredentials(['credential_source' => 'global']);
-        $result = $s3Service->testConnection($creds);
+        $result = $s3Service->testConnection($s3Service->globalCredentialsWithOverrides($_POST));
 
         $this->json($result);
     }

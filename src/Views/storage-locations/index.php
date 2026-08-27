@@ -228,10 +228,13 @@ document.getElementById('btnTestS3')?.addEventListener('click', function() {
     btn.disabled = true;
     result.textContent = 'Testing...';
     result.className = 'd-flex align-items-center ms-2 small text-muted';
+    // Send the form as it stands, so a change is tested before it is saved (#441).
+    var params = new URLSearchParams(new FormData(btn.closest('form')));
+    params.set('csrf_token', document.querySelector('input[name=csrf_token]').value);
     fetch('/storage-locations/s3/test', {
         method: 'POST',
         headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-        body: 'csrf_token=' + encodeURIComponent(document.querySelector('input[name=csrf_token]').value)
+        body: params.toString()
     })
     .then(function(r) { return r.json(); })
     .then(function(data) {
