@@ -492,6 +492,14 @@ class UpdateService
 
     /**
      * Send anonymous telemetry ping (version + OS) once per version.
+     *
+     * The request has to be completed, not just written. The previous
+     * fire-and-forget socket — write the request, close, never read the
+     * reply — stopped landing at the endpoint in late July: the connection
+     * was closed before the request was forwarded, so the ping was dropped,
+     * and because the version was marked as reported before sending, it was
+     * never retried. Now the version is recorded only once the endpoint has
+     * answered 200; a failure is retried, at most every six hours.
      */
     private function sendTelemetryPing(): void
     {
@@ -504,6 +512,11 @@ class UpdateService
             if ($this->getSetting('telemetry_last_version') === $currentVersion) {
                 return;
             }
+            $lastAttempt = $this->getSetting('telemetry_last_attempt');
+            if ($lastAttempt !== '' && strtotime($lastAttempt) > time() - 6 * 3600) {
+                return;
+            }
+            $this->setSetting('telemetry_last_attempt', date('Y-m-d H:i:s'));
 
             $os = php_uname('s') . ' ' . php_uname('r');
             if (file_exists('/etc/os-release')) {
@@ -517,23 +530,48 @@ class UpdateService
                 'version' => $currentVersion,
                 'os' => $os,
             ]);
+            $url = 'https://www.borgbackupserver.com/api/telemetry.php';
 
-            // Set optimistically so we don't retry if endpoint is down
-            $this->setSetting('telemetry_last_version', $currentVersion);
+            $status = 0;
+            if (function_exists('curl_init')) {
+                $ch = curl_init($url);
+                curl_setopt_array($ch, [
+                    CURLOPT_POST => true,
+                    CURLOPT_POSTFIELDS => $payload,
+                    CURLOPT_HTTPHEADER => [
+                        'Content-Type: application/json',
+                        'User-Agent: BorgBackupServer/' . $currentVersion,
+                    ],
+                    CURLOPT_RETURNTRANSFER => true,
+                    CURLOPT_CONNECTTIMEOUT => 3,
+                    CURLOPT_TIMEOUT => 6,
+                ]);
+                curl_exec($ch);
+                $status = (int) curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+                curl_close($ch);
+            } else {
+                $host = 'www.borgbackupserver.com';
+                $fp = @fsockopen('ssl://' . $host, 443, $errno, $errstr, 3);
+                if ($fp) {
+                    stream_set_timeout($fp, 6);
+                    $header = "POST /api/telemetry.php HTTP/1.1\r\n";
+                    $header .= "Host: {$host}\r\n";
+                    $header .= "Content-Type: application/json\r\n";
+                    $header .= "User-Agent: BorgBackupServer/{$currentVersion}\r\n";
+                    $header .= "Content-Length: " . strlen($payload) . "\r\n";
+                    $header .= "Connection: close\r\n\r\n";
+                    fwrite($fp, $header . $payload);
+                    $first = (string) fgets($fp, 256);
+                    while (!feof($fp)) { fgets($fp, 1024); }
+                    fclose($fp);
+                    if (preg_match('#^HTTP/\S+\s+(\d{3})#', $first, $m)) {
+                        $status = (int) $m[1];
+                    }
+                }
+            }
 
-            // Fire-and-forget via non-blocking socket (won't hang if server is down)
-            $host = 'www.borgbackupserver.com';
-            $path = '/api/telemetry.php';
-            $fp = @fsockopen('ssl://' . $host, 443, $errno, $errstr, 2);
-            if ($fp) {
-                $header = "POST {$path} HTTP/1.1\r\n";
-                $header .= "Host: {$host}\r\n";
-                $header .= "Content-Type: application/json\r\n";
-                $header .= "User-Agent: BorgBackupServer/{$currentVersion}\r\n";
-                $header .= "Content-Length: " . strlen($payload) . "\r\n";
-                $header .= "Connection: close\r\n\r\n";
-                fwrite($fp, $header . $payload);
-                fclose($fp);
+            if ($status === 200) {
+                $this->setSetting('telemetry_last_version', $currentVersion);
             }
         } catch (\Exception $e) {
             // Silently ignore telemetry failures
