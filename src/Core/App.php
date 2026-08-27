@@ -378,6 +378,7 @@ class App
         $this->router->map('GET',    '/api/v1/remote-ssh-configs', 'Api\\StorageApiController@listRemote');
         $this->router->map('POST',   '/api/v1/remote-ssh-configs', 'Api\\StorageApiController@createRemote');
         $this->router->map('POST',   '/api/v1/remote-ssh-configs/test', 'Api\\StorageApiController@testNewRemote');
+        $this->router->map('POST',   '/api/v1/remote-ssh-configs/borgbase-api-test', 'Api\\StorageApiController@testBorgBaseApi');
         $this->router->map('GET',    '/api/v1/remote-ssh-configs/[i:id]', 'Api\\StorageApiController@showRemote');
         $this->router->map('PUT',    '/api/v1/remote-ssh-configs/[i:id]', 'Api\\StorageApiController@updateRemote');
         $this->router->map('DELETE', '/api/v1/remote-ssh-configs/[i:id]', 'Api\\StorageApiController@deleteRemote');

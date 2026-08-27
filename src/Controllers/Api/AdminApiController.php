@@ -234,7 +234,10 @@ class AdminApiController extends Controller
             SELECT a.id, a.name, a.hostname, a.ip_address, a.os_info,
                    a.borg_version, a.agent_version, a.status, a.last_heartbeat,
                    a.api_key, a.api_key_encrypted, a.created_at, u.username as owner,
-                   a.client_profile_id, cp.name AS client_profile_name
+                   a.client_profile_id, cp.name AS client_profile_name,
+                   a.user_id, a.server_host_override, a.ssh_port_override,
+                   a.wol_enabled, a.wol_mac, a.mac_address, a.wol_broadcast, a.wol_timeout_minutes,
+                   a.notes
             FROM agents a
             LEFT JOIN users u ON u.id = a.user_id
             LEFT JOIN client_profiles cp ON cp.id = a.client_profile_id
@@ -287,6 +290,20 @@ class AdminApiController extends Controller
             }
         }
         unset($p);
+
+        // The Edit Client fields, typed the way the form wants them. The two
+        // read-only helpers let it show the same placeholders as the web:
+        // the agent-reported MAC, and the broadcast address it would use
+        // when none is set.
+        $agent['user_id'] = $agent['user_id'] !== null ? (int) $agent['user_id'] : null;
+        $agent['server_host_override'] = (string) ($agent['server_host_override'] ?? '');
+        $agent['ssh_port_override'] = $agent['ssh_port_override'] !== null ? (int) $agent['ssh_port_override'] : null;
+        $agent['wol_enabled'] = (bool) $agent['wol_enabled'];
+        $agent['wol_mac'] = (string) ($agent['wol_mac'] ?? '');
+        $agent['wol_broadcast'] = (string) ($agent['wol_broadcast'] ?? '');
+        $agent['wol_broadcast_default'] = \BBS\Services\WakeOnLanService::defaultBroadcast($agent['ip_address'] ?? null);
+        $agent['wol_timeout_minutes'] = (int) ($agent['wol_timeout_minutes'] ?? 5);
+        $agent['notes'] = (string) ($agent['notes'] ?? '');
 
         $agent['repositories'] = $repos;
         $agent['plans'] = $plans;
@@ -1841,13 +1858,100 @@ class AdminApiController extends Controller
             $data['client_profile_id'] = $pid ?? $svc->defaultProfileId();
         }
 
+        // The rest of the web's Edit Client panel. Each field is validated
+        // before anything is written, so a 422 leaves the client untouched.
+        if (array_key_exists('user_id', $input)) {
+            $uid = ($input['user_id'] === null || $input['user_id'] === '') ? null : (int) $input['user_id'];
+            if ($uid !== null && !$this->db->fetchOne("SELECT id FROM users WHERE id = ?", [$uid])) {
+                $this->json(['error' => 'user_id does not exist'], 422);
+            }
+            $data['user_id'] = $uid;
+        }
+        if (array_key_exists('server_host_override', $input)) {
+            $host = trim((string) ($input['server_host_override'] ?? ''));
+            if ($host !== '' && (preg_match('#://|/|\s#', $host) || preg_match('/^[^\[]*:\d+$/', $host))) {
+                $this->json(['error' => 'server_host_override must be a hostname or IP with no scheme, port or path'], 422);
+            }
+            $data['server_host_override'] = $host !== '' ? $host : null;
+        }
+        if (array_key_exists('ssh_port_override', $input)) {
+            $raw = $input['ssh_port_override'];
+            if ($raw === null || $raw === '') {
+                $data['ssh_port_override'] = null;
+            } elseif (!is_numeric($raw) || (int) $raw < 1 || (int) $raw > 65535) {
+                $this->json(['error' => 'ssh_port_override must be 1–65535 or null'], 422);
+            } else {
+                $data['ssh_port_override'] = (int) $raw;
+            }
+        }
+        if (array_key_exists('wol_enabled', $input)) {
+            $data['wol_enabled'] = filter_var($input['wol_enabled'], FILTER_VALIDATE_BOOLEAN) ? 1 : 0;
+        }
+        if (array_key_exists('wol_mac', $input)) {
+            $raw = trim((string) ($input['wol_mac'] ?? ''));
+            $mac = $raw !== '' ? \BBS\Services\WakeOnLanService::normalizeMac($raw) : null;
+            if ($raw !== '' && $mac === null) {
+                $this->json(['error' => 'wol_mac must be a MAC address like aa:bb:cc:dd:ee:ff'], 422);
+            }
+            $data['wol_mac'] = $mac;
+        }
+        if (array_key_exists('wol_broadcast', $input)) {
+            $bc = trim((string) ($input['wol_broadcast'] ?? ''));
+            if ($bc !== '' && !filter_var($bc, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
+                $this->json(['error' => 'wol_broadcast must be an IPv4 address or empty for the default'], 422);
+            }
+            $data['wol_broadcast'] = $bc !== '' ? $bc : null;
+        }
+        if (array_key_exists('wol_timeout_minutes', $input)) {
+            $t = $input['wol_timeout_minutes'];
+            if (!is_numeric($t) || (int) $t < 1 || (int) $t > 60) {
+                $this->json(['error' => 'wol_timeout_minutes must be 1–60'], 422);
+            }
+            $data['wol_timeout_minutes'] = (int) $t;
+        }
+        if (array_key_exists('notes', $input)) {
+            $notes = trim((string) ($input['notes'] ?? ''));
+            if (mb_strlen($notes) > 5000) {
+                $this->json(['error' => 'notes must be 5000 characters or fewer'], 422);
+            }
+            $data['notes'] = $notes !== '' ? $notes : null;
+            $data['notes_updated_by'] = $notes !== '' ? ($ctx['id'] ?? null) : null;
+            $data['notes_updated_at'] = $notes !== '' ? date('Y-m-d H:i:s') : null;
+        }
+
         if (empty($data)) {
             $this->json(['error' => 'No fields to update'], 400);
         }
 
         $this->db->update('agents', $data, 'id = ?', [$id]);
 
-        $this->json(['status' => 'ok', 'message' => 'Client updated']);
+        // Repo paths bake the server host in at creation time — when the
+        // override changes, rewrite this client's local repo paths to the new
+        // effective host, as the web does (#367).
+        if (array_key_exists('server_host_override', $data)
+            && $data['server_host_override'] !== ($agent['server_host_override'] ?? null)) {
+            $effectiveHost = $data['server_host_override'];
+            if ($effectiveHost === null) {
+                $serverHost = $this->db->fetchOne("SELECT `value` FROM settings WHERE `key` = 'server_host'");
+                $effectiveHost = $serverHost['value'] ?? '';
+            }
+            $updated = \BBS\Services\SshKeyManager::rewriteAgentRepoHosts($this->db, $id, $effectiveHost);
+            if ($updated > 0) {
+                $this->db->insert('server_log', [
+                    'agent_id' => $id,
+                    'level' => 'info',
+                    'message' => "Server host override changed — updated {$updated} repository path(s)",
+                ]);
+            }
+        }
+
+        // A newly assigned owner gets access and all permissions by default,
+        // revocable in the user's profile (#337).
+        if (!empty($data['user_id']) && $data['user_id'] !== (int) ($agent['user_id'] ?? 0)) {
+            (new \BBS\Services\PermissionService())->grantOwnerDefaults($data['user_id'], $id);
+        }
+
+        $this->json(['status' => 'ok', 'message' => 'Client updated', 'updated' => array_values(array_diff(array_keys($data), ['notes_updated_by', 'notes_updated_at']))]);
     }
 
     // ── Jobs & Queue ─────────────────────────────────────
