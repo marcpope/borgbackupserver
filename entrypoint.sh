@@ -878,4 +878,29 @@ case "$(echo "${HOSTED:-}" | tr '[:upper:]' '[:lower:]')" in
         ;;
 esac
 
+# --- Reverse proxy: real client IPs (#451) ---------------------------------
+# With a reverse proxy in front of the container, every request reaches
+# Apache from the proxy's address. TRUSTED_PROXIES (comma/space separated
+# IPs or CIDRs) tells Apache which peers are the proxy: only then is
+# X-Forwarded-For honoured — for the access log and for everything PHP
+# reads from REMOTE_ADDR — so clients can't spoof their address.
+REMOTEIP_CONF=/etc/apache2/conf-available/bbs-remoteip.conf
+if [ -n "${TRUSTED_PROXIES:-}" ]; then
+    a2enmod -q remoteip >/dev/null 2>&1 || true
+    {
+        echo "# Generated from TRUSTED_PROXIES at container start (#451)"
+        echo "RemoteIPHeader X-Forwarded-For"
+        for proxy in $(printf '%s' "$TRUSTED_PROXIES" | tr ',' ' '); do
+            # Only address characters — this lands in Apache config.
+            clean=$(printf '%s' "$proxy" | tr -cd '0-9a-fA-F:./')
+            [ -n "$clean" ] && echo "RemoteIPTrustedProxy $clean"
+        done
+    } > "$REMOTEIP_CONF"
+    a2enconf -q bbs-remoteip >/dev/null 2>&1
+    echo "Reverse proxy: trusting X-Forwarded-For from: $TRUSTED_PROXIES"
+else
+    a2disconf -q bbs-remoteip >/dev/null 2>&1 || true
+    rm -f "$REMOTEIP_CONF"
+fi
+
 exec apache2-foreground

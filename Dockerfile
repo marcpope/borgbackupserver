@@ -82,7 +82,7 @@ RUN { echo "max_execution_time = 300"; \
 RUN curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer
 
 # Enable Apache modules and configure in one layer
-RUN a2enmod rewrite && \
+RUN a2enmod rewrite remoteip && \
     echo "ServerName localhost" >> /etc/apache2/apache2.conf && \
     echo '<VirtualHost *:80>\n\
     DocumentRoot /var/www/bbs/public\n\
