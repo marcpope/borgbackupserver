@@ -242,6 +242,15 @@ class QueueManager
                     }
                 }
 
+                // Freeze what this job is actually told to back up, so its
+                // detail page keeps showing these directories after the plan
+                // is edited (#452). First send wins; NULL check keeps a
+                // re-poll from rewriting history.
+                $this->db->query(
+                    "UPDATE backup_jobs SET directories = ? WHERE id = ? AND directories IS NULL",
+                    [$plan['directories'], $job['id']]
+                );
+
                 $cmd = BorgCommandBuilder::buildCreateCommand($plan, $repo, $archiveName);
                 if ($isDryRun) {
                     $cmd = BorgCommandBuilder::makeDryRun($cmd);
@@ -473,6 +482,15 @@ class QueueManager
                         }
                     }
                 }
+
+                // Freeze what this job is actually told to back up, so its
+                // detail page keeps showing these directories after the plan
+                // is edited (#452). First send wins; NULL check keeps a
+                // re-poll from rewriting history.
+                $this->db->query(
+                    "UPDATE backup_jobs SET directories = ? WHERE id = ? AND directories IS NULL",
+                    [$plan['directories'], $job['id']]
+                );
 
                 $cmd = BorgCommandBuilder::buildCreateCommand($plan, $repo, $archiveName);
                 if ($isDryRun) {

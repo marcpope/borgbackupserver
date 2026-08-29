@@ -465,6 +465,12 @@ $taskLabel = ucfirst(str_replace('_', ' ', $job['task_type']));
                             <td class="text-muted fw-semibold ps-3">Bytes Processed</td>
                             <td><?= formatBytes($job['bytes_processed']) ?></td>
                         </tr>
+                        <?php if (($job['task_type'] ?? '') === 'backup'): ?>
+                        <tr>
+                            <td class="text-muted fw-semibold ps-3">Deduplicated Size</td>
+                            <td><?= !empty($jobArchive) ? formatBytes($jobArchive['deduplicated_size']) : '--' ?></td>
+                        </tr>
+                        <?php endif; ?>
                         <?php if ($job['directories']): ?>
                         <tr>
                             <td class="text-muted fw-semibold ps-3">Directories</td>
@@ -715,6 +721,7 @@ if ($job['task_type'] === 'backup_dry_run' && !empty($job['task_result'])) {
             'Bytes Total': fmtBytes(job.bytes_total),
             'Bytes Processed': fmtBytes(job.bytes_processed),
         };
+        if (job._archive) statsMap['Deduplicated Size'] = fmtBytes(job._archive.deduplicated_size);
         document.querySelectorAll('table.table-borderless td.text-muted').forEach(td => {
             const key = td.textContent.trim();
             if (statsMap[key] !== undefined) {
@@ -768,6 +775,7 @@ if ($job['task_type'] === 'backup_dry_run' && !empty($job['task_result'])) {
             .then(function(data) {
                 const job = data.job;
                 updateProgressBar(job, data);
+                job._archive = data.archive || null;
                 updateDetails(job);
                 updateLogs(data.logs);
                 if (job.status !== previousStatus) {

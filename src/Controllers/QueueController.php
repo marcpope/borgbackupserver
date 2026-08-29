@@ -132,7 +132,8 @@ class QueueController extends Controller
             SELECT bj.*, a.name as agent_name, a.id as agent_id,
                    a.status as agent_status, a.last_heartbeat,
                    r.name as repo_name, bp.name as plan_name,
-                   bp.directories, bp.excludes, bp.advanced_options
+                   bp.excludes, bp.advanced_options,
+                   COALESCE(bj.directories, bp.directories) AS directories
             FROM backup_jobs bj
             JOIN agents a ON a.id = bj.agent_id
             LEFT JOIN repositories r ON r.id = bj.repository_id
@@ -151,6 +152,16 @@ class QueueController extends Controller
             WHERE backup_job_id = ?
             ORDER BY created_at ASC
         ", [$id]);
+
+        // The archive this backup wrote — its deduplicated size is the cost
+        // of the backup on disk, which the frozen byte counters can't say.
+        $jobArchive = null;
+        if (($job['task_type'] ?? '') === 'backup') {
+            $jobArchive = $this->db->fetchOne(
+                "SELECT archive_name, original_size, deduplicated_size FROM archives
+                 WHERE backup_job_id = ? ORDER BY id DESC LIMIT 1", [$id]
+            );
+        }
 
         // Queue context: active count, max queue, position
         $activeCount = $this->db->count('backup_jobs', "status IN ('sent', 'running')");
@@ -171,6 +182,7 @@ class QueueController extends Controller
         $this->view('queue/detail', [
             'pageTitle' => 'Job #' . $id,
             'job' => $job,
+            'jobArchive' => $jobArchive,
             'logs' => $logs,
             'activeCount' => $activeCount,
             'maxQueue' => $maxQueue,
@@ -188,7 +200,8 @@ class QueueController extends Controller
             SELECT bj.*, a.name as agent_name, a.id as agent_id,
                    a.status as agent_status, a.last_heartbeat,
                    r.name as repo_name, bp.name as plan_name,
-                   bp.directories, bp.excludes, bp.advanced_options
+                   bp.excludes, bp.advanced_options,
+                   COALESCE(bj.directories, bp.directories) AS directories
             FROM backup_jobs bj
             JOIN agents a ON a.id = bj.agent_id
             LEFT JOIN repositories r ON r.id = bj.repository_id
@@ -215,6 +228,14 @@ class QueueController extends Controller
         if ($job['status'] === 'queued') {
             $pos = $this->db->fetchOne("SELECT COUNT(*) as cnt FROM backup_jobs WHERE status = 'queued' AND queued_at <= ?", [$job['queued_at']]);
             $queuePosition = (int) $pos['cnt'];
+        }
+
+        $jobArchive = null;
+        if (($job['task_type'] ?? '') === 'backup') {
+            $jobArchive = $this->db->fetchOne(
+                "SELECT archive_name, original_size, deduplicated_size FROM archives
+                 WHERE backup_job_id = ? ORDER BY id DESC LIMIT 1", [$id]
+            );
         }
 
         // For running backup jobs, tail the catalog log file to get the current file being backed up
@@ -244,6 +265,7 @@ class QueueController extends Controller
             'maxQueue' => $maxQueue,
             'queuePosition' => $queuePosition,
             'currentFile' => $currentFile,
+            'archive' => $jobArchive,
         ]);
     }
 

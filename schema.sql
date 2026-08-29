@@ -247,6 +247,8 @@ CREATE TABLE backup_jobs (
     source_repository_id INT DEFAULT NULL,
     task_type ENUM('backup', 'backup_dry_run', 'prune', 'restore', 'restore_mysql', 'restore_pg', 'restore_mongo', 'check', 'compact', 'update_borg', 'update_agent', 'plugin_test', 'plugin_post', 's3_sync', 'repo_check', 'repo_repair', 'break_lock', 's3_restore', 'catalog_sync', 'catalog_rebuild', 'catalog_rebuild_full', 'archive_delete', 'list_dir', 'archive_lock') NOT NULL DEFAULT 'backup',
     plugin_config_id INT DEFAULT NULL,
+    -- Frozen at dispatch: what this backup actually ran with (#452)
+    directories TEXT DEFAULT NULL,
     status ENUM('queued', 'sent', 'running', 'completed', 'failed', 'cancelled') NOT NULL DEFAULT 'queued',
     files_total INT DEFAULT NULL,
     files_processed INT DEFAULT NULL,

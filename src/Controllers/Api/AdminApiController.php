@@ -1409,7 +1409,7 @@ class AdminApiController extends Controller
         $archive = $this->db->fetchOne(
             "SELECT ar.id, ar.archive_name, ar.file_count, ar.original_size, ar.deduplicated_size, ar.locked, ar.created_at,
                     ar.databases_backed_up IS NOT NULL AND ar.databases_backed_up != '' AS has_databases,
-                    bp.name AS plan_name, bp.directories, bj.duration_seconds, bj.started_at, bj.completed_at
+                    bp.name AS plan_name, COALESCE(bj.directories, bp.directories) AS directories, bj.duration_seconds, bj.started_at, bj.completed_at
              FROM archives ar
              LEFT JOIN backup_jobs bj ON bj.id = ar.backup_job_id
              LEFT JOIN backup_plans bp ON bp.id = bj.backup_plan_id
