@@ -47,9 +47,10 @@ if not hasattr(subprocess, "run"):
     subprocess.run = _subprocess_run
     subprocess.CompletedProcess = _CompletedProcess
 
-AGENT_VERSION = "2.90.0"
+AGENT_VERSION = "2.93.6"
 BORG_PATH = None  # Resolved in get_system_info()
 IS_WINDOWS = sys.platform == "win32"
+IS_MACOS = sys.platform == "darwin"
 
 # Ensure UTF-8 filesystem encoding for handling filenames with non-ASCII characters.
 # CentOS 7 and older systems may default to ASCII, causing encoding errors.
@@ -524,6 +525,12 @@ def get_system_info(config=None):
     borg_path = None
     if IS_WINDOWS:
         candidates = [r"C:\Program Files\BorgBackup\borg.exe", r"C:\Program Files (x86)\BorgBackup\borg.exe"]
+    elif IS_MACOS:
+        # Homebrew's borg first: on macOS borg is managed through brew, and a
+        # manually upgraded /opt/homebrew/bin/borg must not stay shadowed by
+        # an older copy at /usr/local/bin (#453).
+        candidates = ["/opt/homebrew/bin/borg", "/usr/local/bin/borg", "/usr/bin/borg",
+                      os.path.expanduser("~/.local/bin/borg")]
     else:
         candidates = ["/usr/local/bin/borg", "/usr/bin/borg", "/opt/homebrew/bin/borg",
                       os.path.expanduser("~/.local/bin/borg"), "/root/.local/bin/borg"]
@@ -885,6 +892,21 @@ def execute_update_borg(config, task):
             # Windows: always update from borg-windows GitHub releases
             result, update_output, error_output = _install_borg_windows()
 
+        elif IS_MACOS:
+            # macOS: borg comes from Homebrew. A server-provided binary is
+            # still preferred when one matches, but the fallback is brew —
+            # never pip, which cannot build borg here, and never a Linux
+            # package manager (#453).
+            if install_method == "binary" and download_url:
+                result, update_output, error_output = _install_borg_binary(
+                    download_url, binary_path, target_version
+                )
+                if result == "failed" and fallback_to_pip:
+                    logger.warning("Binary install failed ({}), falling back to Homebrew".format(error_output))
+                    result, update_output, error_output = _install_borg_homebrew(target_version)
+            else:
+                result, update_output, error_output = _install_borg_homebrew(target_version)
+
         elif install_method == "binary" and download_url:
             result, update_output, error_output = _install_borg_binary(
                 download_url, binary_path, target_version
@@ -1221,6 +1243,94 @@ def _install_borg_pip(target_version):
         return "failed", "", str(e)
 
 
+def _find_brew():
+    """Full path to the Homebrew binary, or None."""
+    for p in ("/opt/homebrew/bin/brew", "/usr/local/bin/brew"):
+        if os.path.exists(p):
+            return p
+    return None
+
+
+def _brew_command(brew_bin, args):
+    """A brew invocation that works from the agent: brew refuses to run as
+    root, and the agent is a root daemon — so run it as the user who owns
+    the brew binary, with their HOME (#453)."""
+    cmd = [brew_bin] + args
+    if os.geteuid() == 0:
+        try:
+            import pwd
+            owner = pwd.getpwuid(os.stat(brew_bin).st_uid).pw_name
+        except Exception:
+            owner = None
+        if owner and owner != "root":
+            cmd = ["sudo", "-u", owner, "-H", brew_bin] + args
+    return cmd
+
+
+def _install_borg_homebrew(target_version=None):
+    """Update borg through Homebrew — the only supported source on macOS.
+    brew installs its current formula version; a specific target can't be
+    pinned, so the installed version is reported back instead."""
+    brew_bin = _find_brew()
+    if not brew_bin:
+        return "failed", "", ("Borg on macOS is managed through Homebrew, and Homebrew is not "
+                              "installed. Install it from https://brew.sh, then `brew install "
+                              "borgbackup`, and the agent will pick it up.")
+
+    env = dict(os.environ)
+    env["HOMEBREW_NO_AUTO_UPDATE"] = "1"
+    env["NONINTERACTIVE"] = "1"
+
+    def run_brew(args):
+        cmd = _brew_command(brew_bin, args)
+        logger.info("Running: {}".format(" ".join(cmd)))
+        proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=900, env=env)
+        out = proc.stdout.decode("utf-8", errors="replace").strip()
+        err = proc.stderr.decode("utf-8", errors="replace").strip()
+        return proc.returncode, out, err
+
+    try:
+        # Ask first whether an upgrade is even needed: `brew upgrade` can fail
+        # for reasons unrelated to borg (e.g. untrusted third-party taps), and
+        # an up-to-date borg must not be reported as a failed update.
+        rc0, out0, err0 = run_brew(["outdated", "--quiet", "borgbackup"])
+        if rc0 == 0 and "borgbackup" not in out0:
+            action = None  # installed and current
+        elif rc0 == 0:
+            action = "upgrade"
+        else:
+            action = "install"  # not installed through brew (or brew can't say)
+
+        if action is None:
+            rc, out, err = 0, "", ""
+        else:
+            rc, out, err = run_brew([action, "borgbackup"])
+            combined = (err + "\n" + out).strip()
+            if rc != 0 and action == "upgrade" and ("already installed" in combined
+                                                    or "already up-to-date" in combined):
+                rc = 0
+            if rc != 0:
+                return "failed", "", "brew {} failed (exit {}): {}".format(action, rc, combined[:800])
+    except subprocess.TimeoutExpired:
+        return "failed", "", "brew timed out"
+    except Exception as e:
+        return "failed", "", "brew error: {}".format(e)
+
+    # Report what is actually installed now.
+    label = "already up to date (Homebrew)" if action is None else "updated via Homebrew"
+    for candidate in ("/opt/homebrew/bin/borg", "/usr/local/bin/borg"):
+        if os.path.exists(candidate):
+            try:
+                r = subprocess.run([candidate, "--version"], stdout=subprocess.PIPE,
+                                   stderr=subprocess.PIPE, timeout=10)
+                if r.returncode == 0:
+                    ver = r.stdout.decode("utf-8", errors="replace").strip()
+                    return "completed", "Borg {}: {}".format(label, ver), ""
+            except Exception:
+                pass
+    return "completed", "Borg {}".format(label), ""
+
+
 def _install_borg_package_manager():
     """Install/update borg via OS package manager. Removes any existing /usr/local/bin/borg first."""
     if IS_WINDOWS:
@@ -1251,8 +1361,8 @@ def _install_borg_package_manager():
     elif os.path.exists("/usr/local/sbin/pkg"):
         cmd = ["pkg", "install", "-y", "borgbackup"]
         pre_cmd = None
-    elif os.path.exists("/usr/local/bin/brew") or os.path.exists("/opt/homebrew/bin/brew"):
-        cmd = ["brew", "install", "borgbackup"]
+    elif _find_brew():
+        cmd = _brew_command(_find_brew(), ["install", "borgbackup"])
         pre_cmd = None
     else:
         # Restore backup if no package manager
