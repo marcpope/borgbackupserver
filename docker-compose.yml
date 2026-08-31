@@ -42,6 +42,9 @@ services:
       # - CH_PGID=${CH_PGID:-999}
       # Admin password — only used on first run. Omit to auto-generate (shown in logs).
       # - ADMIN_PASS=${ADMIN_PASS}
+      # Use the IP provided by a trusted proxy (e.g. caddy reverse proxy) via the 
+      # X-Forwarded-For header
+      # - TRUSTED_PROXIES=${TRUSTED_PROXIES}
     volumes:
       - bbs-data:/var/bbs
       # To store backups on a specific disk or path instead of Docker's internal storage,
