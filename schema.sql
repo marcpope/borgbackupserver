@@ -232,7 +232,8 @@ CREATE TABLE schedules (
     next_run DATETIME DEFAULT NULL,
     last_run DATETIME DEFAULT NULL,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (backup_plan_id) REFERENCES backup_plans(id) ON DELETE CASCADE
+    FOREIGN KEY (backup_plan_id) REFERENCES backup_plans(id) ON DELETE CASCADE,
+    UNIQUE KEY uniq_schedule_plan (backup_plan_id)
 );
 
 -- --------------------------------------------------------
