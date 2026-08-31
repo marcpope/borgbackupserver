@@ -60,7 +60,7 @@ class DashboardController extends Controller
     {
         // --- Storage locations: per-location df + repo/archive counts ---
         $locations = $this->db->fetchAll("
-            SELECT sl.id, sl.label, sl.path, sl.is_default,
+            SELECT sl.id, sl.label, sl.path, sl.is_default, sl.capacity_bytes,
                    (SELECT COUNT(*) FROM repositories r
                      WHERE (r.storage_location_id = sl.id)
                         OR (sl.is_default = 1 AND r.storage_location_id IS NULL
@@ -74,7 +74,11 @@ class DashboardController extends Controller
         ");
         $storageLocations = [];
         foreach ($locations as $loc) {
-            $disk = ServerStats::getDiskUsage($loc['path']);
+            // Capacity-aware: a stated capacity (WebDAV and other mounts df
+            // can't see, #415) wins over df, and an untrusted mount with no
+            // stated size shows nothing rather than the cache disk's numbers
+            // (#454 — the storage page already did this; the dashboard didn't).
+            $disk = ServerStats::capacityForLocation($loc);
             $storageLocations[] = [
                 'kind' => 'local',
                 'id' => (int) $loc['id'],
