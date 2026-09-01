@@ -275,7 +275,8 @@ class AdminApiController extends Controller
                     bp.repository_id,
                     bp.prune_minutes, bp.prune_hours, bp.prune_days,
                     bp.prune_weeks, bp.prune_months, bp.prune_years,
-                    s.frequency, s.times, s.day_of_week, s.day_of_month
+                    s.frequency, s.times, s.day_of_week, s.day_of_month,
+                    s.timezone, s.next_run
              FROM backup_plans bp
              LEFT JOIN schedules s ON s.backup_plan_id = bp.id
              WHERE bp.agent_id = ? ORDER BY bp.name", [$id]
@@ -729,7 +730,8 @@ class AdminApiController extends Controller
                    bp.enabled, bp.repository_id, r.name as repository_name,
                    bp.prune_minutes, bp.prune_hours, bp.prune_days,
                    bp.prune_weeks, bp.prune_months, bp.prune_years,
-                   s.frequency, s.times, s.day_of_week, s.day_of_month
+                   s.frequency, s.times, s.day_of_week, s.day_of_month,
+                   s.timezone, s.next_run
             FROM backup_plans bp
             LEFT JOIN schedules s ON s.backup_plan_id = bp.id
             LEFT JOIN repositories r ON r.id = bp.repository_id
@@ -845,6 +847,17 @@ class AdminApiController extends Controller
             'enabled' => 1,
         ]);
 
+        // Timezone: an explicit one wins, otherwise the client profile's —
+        // as the web form does. Without this the schedule silently ran in
+        // UTC while looking correct everywhere (#462).
+        $timezone = trim((string) ($input['timezone'] ?? ''));
+        if ($timezone !== '' && !in_array($timezone, timezone_identifiers_list(), true)) {
+            $this->json(['error' => 'timezone must be an IANA zone like Europe/Berlin'], 422);
+        }
+        if ($timezone === '') {
+            $timezone = (new \BBS\Services\ClientProfileService())->planDefaults($id)['timezone'] ?? 'UTC';
+        }
+
         // Create schedule
         $scheduleId = $this->db->insert('schedules', [
             'backup_plan_id' => $planId,
@@ -852,7 +865,9 @@ class AdminApiController extends Controller
             'times' => $times,
             'day_of_week' => $dayOfWeek,
             'day_of_month' => $dayOfMonth,
+            'timezone' => $timezone,
             'enabled' => $frequency !== 'manual' ? 1 : 0,
+            'next_run' => $this->calcNextRun($frequency, $times, $dayOfWeek, $dayOfMonth, $timezone),
         ]);
 
         // Attach plugin configs if provided
@@ -1550,6 +1565,9 @@ class AdminApiController extends Controller
         if (isset($input['frequency']) && !in_array($input['frequency'], self::VALID_FREQUENCIES, true)) {
             $this->json(['error' => 'Invalid frequency. Valid: ' . implode(', ', self::VALID_FREQUENCIES)], 400);
         }
+        if (isset($input['timezone']) && !in_array((string) $input['timezone'], timezone_identifiers_list(), true)) {
+            $this->json(['error' => 'timezone must be an IANA zone like Europe/Berlin'], 422);
+        }
 
         // Update plan fields (only those provided)
         $planData = [];
@@ -1590,8 +1608,12 @@ class AdminApiController extends Controller
 
             if (isset($input['frequency'])) {
                 $schedData['enabled'] = ($input['frequency'] !== 'manual') ? 1 : 0;
-                // Calculate next_run
-                $freq = $input['frequency'];
+            }
+            // Any schedule field change moves the next occurrence — a new
+            // timezone or time must not wait for a frequency to be re-sent
+            // before it takes effect (#462).
+            if (!empty($schedData)) {
+                $freq = $input['frequency'] ?? $schedule['frequency'];
                 $times = $input['times'] ?? $schedule['times'] ?? '02:00';
                 $dow = $input['day_of_week'] ?? $schedule['day_of_week'];
                 $dom = $input['day_of_month'] ?? $schedule['day_of_month'];
