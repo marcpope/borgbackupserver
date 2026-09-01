@@ -39,37 +39,18 @@ The developer has made a system for provisioning Demos at no cost here: [Borg Ba
 
 ## Quick Start
 
-Start with a fresh **Ubuntu server** (22.04, 24.04, and 26.04 LTS are supported), then run:
+Both installation paths are documented step by step on the Wiki — start there rather than piecing it together:
 
-```bash
-curl -sO https://raw.githubusercontent.com/marcpope/borgbackupserver/main/bin/bbs-install
-sudo bash bbs-install --hostname backups.example.com
-```
+- **[Bare Metal / VM installation](https://github.com/marcpope/borgbackupserver/wiki/Installation)** — a fresh Ubuntu server (22.04, 24.04, and 26.04 LTS are supported) and one installer command; the guide covers prerequisites, SSL, the setup wizard, and what the installer changes.
+- **[Docker installation](https://github.com/marcpope/borgbackupserver/wiki/Docker-Installation)** — pre-built images on [Docker Hub](https://hub.docker.com/r/marcpope/borgbackupserver) for every release; the guide covers compose configuration, storage, reverse proxy setup, and updates.
 
-The installer handles everything — packages, Apache, MySQL, SSL, and cron. When it finishes, open the URL and the setup wizard walks you through the rest.
-
-See the **[full documentation on the Wiki](https://github.com/marcpope/borgbackupserver/wiki)** for installation details, agent setup, configuration, and usage guides.
+**Unraid:** a Community Applications template is included at [`unraid/borgbackupserver.xml`](unraid/borgbackupserver.xml) — add it via *Docker → Add Container → Template* (or your CA templates repo). It maps the web/SSH ports and the `/var/bbs` data path, and defaults `APP_URL`/`SSH_PORT` to the host.
 
 ---
 
-## Docker
+## 📱 BBS Manager is here
 
-Pre-built images are published to [Docker Hub](https://hub.docker.com/r/marcpope/borgbackupserver) on every release:
-
-```bash
-curl -sO https://raw.githubusercontent.com/marcpope/borgbackupserver/main/docker-compose.yml
-docker compose up -d
-```
-
-Get admin credentials from the container logs:
-
-```bash
-docker compose logs bbs
-```
-
-Open `http://localhost:8080` and log in. See the **[Docker Installation guide](https://github.com/marcpope/borgbackupserver/wiki/Docker-Installation)** for full configuration, storage, reverse proxy, and update documentation.
-
-**Unraid:** a Community Applications template is included at [`unraid/borgbackupserver.xml`](unraid/borgbackupserver.xml) — add it via *Docker → Add Container → Template* (or your CA templates repo). It maps the web/SSH ports and the `/var/bbs` data path, and defaults `APP_URL`/`SSH_PORT` to the host.
+**[BBS Manager](https://www.borgbackupserver.com/bbs-manager/) is now available on the Apple App Store** — manage your Borg Backup Server from your phone, with native push notifications for failed backups, server status, and more. It's an optional companion app; see the [announcement](https://github.com/marcpope/borgbackupserver/discussions/460) for details and how to connect it under **Settings → Push Service**. Update to the latest release for the best experience with the app.
 
 ---
 
