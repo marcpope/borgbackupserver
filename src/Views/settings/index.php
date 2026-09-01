@@ -1409,13 +1409,6 @@ $pushRegistered = (bool) $pushSvc->serverId();
     <p class="settings-page-lede mb-0">Delivers alerts to registered devices through an external notification service. Separate from <a href="/settings?tab=push">Apprise</a>, which contacts chat and webhook providers directly.</p>
 </div>
 
-<div class="alert alert-info small d-flex align-items-start">
-    <i class="bi bi-cone-striped me-2 mt-1"></i>
-    <div>
-        These settings are for a new feature that is in development. Safe to leave off.
-    </div>
-</div>
-
 <form method="POST" action="/settings/push">
     <input type="hidden" name="csrf_token" value="<?= $this->csrfToken() ?>">
 
