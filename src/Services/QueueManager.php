@@ -60,6 +60,25 @@ class QueueManager
      */
     public function processQueue(): array
     {
+        // Single-flight (#458): this runs on every agent poll, so a large
+        // fleet used to run the whole promotion scan dozens of times
+        // concurrently — the same job promoted hundreds of times, and the
+        // database saturated under the duplicate work. One caller holds the
+        // advisory lock and promotes; everyone else returns immediately and
+        // picks up their tasks from what that caller promoted.
+        $gate = $this->db->fetchOne("SELECT GET_LOCK('bbs_process_queue', 0) AS got");
+        if ((int) ($gate['got'] ?? 0) !== 1) {
+            return [];
+        }
+        try {
+            return $this->promoteQueuedJobs();
+        } finally {
+            $this->db->query("SELECT RELEASE_LOCK('bbs_process_queue')");
+        }
+    }
+
+    private function promoteQueuedJobs(): array
+    {
         // Check maintenance mode — still process server-side jobs (catalog, prune, etc.)
         $maintenance = $this->db->fetchOne("SELECT `value` FROM settings WHERE `key` = 'maintenance_mode'");
         $maintenanceMode = (($maintenance['value'] ?? '0') === '1');
@@ -179,11 +198,16 @@ class QueueManager
             // Skip duplicate backup for the same plan (no point running the same backup twice)
             if ($job['task_type'] === 'backup' && $job['backup_plan_id']
                 && in_array($job['backup_plan_id'], $busyPlanIds)) {
-                $this->db->update('backup_jobs', [
+                // Compare-and-set so a concurrent caller can't double-fail
+                // and double-log the same job (#458).
+                $skipped = $this->db->update('backup_jobs', [
                     'status' => 'failed',
                     'completed_at' => date('Y-m-d H:i:s'),
                     'error_log' => 'Skipped — a backup for this plan is already queued or running',
-                ], 'id = ?', [$job['id']]);
+                ], "id = ? AND status = 'queued'", [$job['id']]);
+                if ($skipped === 0) {
+                    continue;
+                }
                 $this->db->insert('server_log', [
                     'agent_id' => $job['agent_id'],
                     'backup_job_id' => $job['id'],
@@ -198,6 +222,23 @@ class QueueManager
             if ($job['repository_id'] && in_array($job['repository_id'], $busyRepoIds)) {
                 continue;
             }
+            // Atomic claim before any payload work (#458): between the
+            // queued-jobs SELECT above and here, another caller may have
+            // taken this job. First writer wins; a loser sees zero rows and
+            // moves on without decrypting keys or assembling plugins for a
+            // job it doesn't own. The advisory lock above already serializes
+            // callers on one database; this is defense in depth, and the
+            // guard that matters if the lock is ever bypassed.
+            $claimed = $this->db->update(
+                'backup_jobs',
+                ['status' => 'sent'],
+                "id = ? AND status = 'queued'",
+                [$job['id']]
+            );
+            if ($claimed === 0) {
+                continue;
+            }
+
             // Build the task payload
             $repo = [
                 'path' => $job['repo_path'],
@@ -377,11 +418,7 @@ class QueueManager
             }
 
             if ($taskPayload) {
-                // Store the payload so the agent API can serve it
-                $this->db->update('backup_jobs', [
-                    'status' => 'sent',
-                ], 'id = ?', [$job['id']]);
-
+                // Already claimed as 'sent' above; just record and count it.
                 $destination = ($taskPayload['server_side'] ?? false) ? 'server' : 'agent';
                 $this->db->insert('server_log', [
                     'agent_id' => $job['agent_id'],
@@ -409,6 +446,15 @@ class QueueManager
                 if ($job['backup_plan_id'] && $job['task_type'] === 'backup') {
                     $busyPlanIds[] = $job['backup_plan_id'];
                 }
+            } else {
+                // Claimed but no payload could be built — release the job so
+                // it isn't stuck in 'sent' with nothing behind it.
+                $this->db->update(
+                    'backup_jobs',
+                    ['status' => 'queued'],
+                    "id = ? AND status = 'sent'",
+                    [$job['id']]
+                );
             }
         }
 
