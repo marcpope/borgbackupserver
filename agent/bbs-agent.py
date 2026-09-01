@@ -47,7 +47,7 @@ if not hasattr(subprocess, "run"):
     subprocess.run = _subprocess_run
     subprocess.CompletedProcess = _CompletedProcess
 
-AGENT_VERSION = "2.93.6"
+AGENT_VERSION = "2.93.9"
 BORG_PATH = None  # Resolved in get_system_info()
 IS_WINDOWS = sys.platform == "win32"
 IS_MACOS = sys.platform == "darwin"
@@ -3927,6 +3927,12 @@ def _execute_task_inner(config, task, job_id, task_type, command, env_vars,
                     stdin=subprocess.PIPE,
                     stdout=subprocess.DEVNULL,
                     stderr=catalog_ssh_errfile,
+                    # Own process group, like the borg subprocess: without
+                    # this, killing a hung pipe via _kill_process_tree()
+                    # killpg'd the agent's own group — the agent SIGKILLed
+                    # itself, and a finished backup was reported abandoned
+                    # by the restarted agent (#461).
+                    **_popen_new_group_kwargs()
                 )
                 logger.info("Catalog SSH pipe opened for job {}".format(job_id))
             except Exception as e:
