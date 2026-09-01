@@ -831,6 +831,13 @@ class AdminApiController extends Controller
             $this->json(['error' => 'Invalid frequency. Valid: ' . implode(', ', self::VALID_FREQUENCIES)], 400);
         }
 
+        // Validate before anything is written, so a bad zone can't leave an
+        // orphan plan with no schedule.
+        $timezone = trim((string) ($input['timezone'] ?? ''));
+        if ($timezone !== '' && !in_array($timezone, timezone_identifiers_list(), true)) {
+            $this->json(['error' => 'timezone must be an IANA zone like Europe/Berlin'], 422);
+        }
+
         $planId = $this->db->insert('backup_plans', [
             'agent_id' => $id,
             'repository_id' => $repositoryId,
@@ -847,13 +854,10 @@ class AdminApiController extends Controller
             'enabled' => 1,
         ]);
 
-        // Timezone: an explicit one wins, otherwise the client profile's —
-        // as the web form does. Without this the schedule silently ran in
-        // UTC while looking correct everywhere (#462).
-        $timezone = trim((string) ($input['timezone'] ?? ''));
-        if ($timezone !== '' && !in_array($timezone, timezone_identifiers_list(), true)) {
-            $this->json(['error' => 'timezone must be an IANA zone like Europe/Berlin'], 422);
-        }
+        // Timezone resolution: an explicit (already validated) one wins,
+        // otherwise the client profile's — as the web form does. Without
+        // this the schedule silently ran in UTC while looking correct
+        // everywhere (#462).
         if ($timezone === '') {
             $timezone = (new \BBS\Services\ClientProfileService())->planDefaults($id)['timezone'] ?? 'UTC';
         }
