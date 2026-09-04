@@ -728,13 +728,14 @@ class DashboardController extends Controller
             }
 
             // Remote SSH storage
-            $remoteConfigs = $db->fetchAll("SELECT id, name, provider, remote_host, remote_user, disk_total_bytes, disk_used_bytes, disk_free_bytes, disk_checked_at FROM remote_ssh_configs ORDER BY name");
+            $remoteConfigs = $db->fetchAll("SELECT id, name, provider, remote_host, remote_user, disk_total_bytes, disk_used_bytes, disk_free_bytes, disk_checked_at, borgbase_account_id FROM remote_ssh_configs ORDER BY name");
             $remoteStorage = [];
             foreach ($remoteConfigs as $rc) {
                 $entry = [
                     'id' => (int) $rc['id'],
                     'name' => $rc['name'],
                     'provider' => $rc['provider'],
+                    'borgbase_account_id' => $rc['borgbase_account_id'] !== null ? (int) $rc['borgbase_account_id'] : null,
                     'host' => $rc['remote_user'] . '@' . $rc['remote_host'],
                     'disk_total' => $rc['disk_total_bytes'] !== null ? (int) $rc['disk_total_bytes'] : null,
                     'disk_used' => $rc['disk_used_bytes'] !== null ? (int) $rc['disk_used_bytes'] : null,
