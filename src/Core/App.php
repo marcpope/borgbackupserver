@@ -335,6 +335,9 @@ class App
         $this->router->map('DELETE', '/api/v1/clients/[i:id]', 'Api\\AdminApiController@deleteClient');
         $this->router->map('GET', '/api/v1/clients/[i:id]/repositories', 'Api\\AdminApiController@listRepositories');
         $this->router->map('POST', '/api/v1/clients/[i:id]/repositories', 'Api\\AdminApiController@createRepository');
+        // Import an existing repository (specs/borgbase.md in the app repo). Literal paths before /[i:repoId].
+        $this->router->map('POST', '/api/v1/clients/[i:id]/repositories/import/verify', 'Api\\AdminApiController@verifyRepositoryImport');
+        $this->router->map('POST', '/api/v1/clients/[i:id]/repositories/import', 'Api\\AdminApiController@importRepository');
         $this->router->map('PUT', '/api/v1/clients/[i:id]/repositories/[i:repoId]', 'Api\\AdminApiController@renameRepository');
         $this->router->map('DELETE', '/api/v1/clients/[i:id]/repositories/[i:repoId]', 'Api\\AdminApiController@deleteRepository');
         $this->router->map('GET', '/api/v1/clients/[i:id]/repositories/[i:repoId]/archives', 'Api\\AdminApiController@listArchives');

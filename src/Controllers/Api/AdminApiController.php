@@ -46,6 +46,113 @@ class AdminApiController extends Controller
     }
 
     /**
+     * POST /api/v1/clients/{id}/repositories/import/verify
+     *   {name, storage_type?, storage_location_id?, remote_ssh_config_id?, passphrase?}
+     *
+     * Opens an existing repository with the passphrase and reports its
+     * encryption mode and archive count, without saving anything.
+     */
+    public function verifyRepositoryImport(int $id): void
+    {
+        $ctx = $this->requireApiAuth();
+        if (!$this->apiCanAccessAgent($ctx, $id)) {
+            $this->json(['error' => 'Client not found'], 404);
+        }
+        $this->apiRequirePermission($ctx, \BBS\Services\PermissionService::MANAGE_REPOS, $id);
+        $input = $this->getJsonInput();
+        $agent = $this->db->fetchOne("SELECT * FROM agents WHERE id = ?", [$id]);
+        if (!$agent) {
+            $this->json(['error' => 'Client not found'], 404);
+        }
+        [$storageType, $name, $storageLocationId, $remoteSshConfigId] = $this->importArgs($input);
+
+        $result = (new \BBS\Services\RepositoryImportService())->verify(
+            $agent, $storageType, $name, (string) ($input['passphrase'] ?? ''), $storageLocationId, $remoteSshConfigId
+        );
+        if (!$result['success']) {
+            $this->json(['error' => $result['error']], 422);
+        }
+        $this->json([
+            'status' => 'ok',
+            'name' => $name,
+            'encryption' => $result['encryption'],
+            'archive_count' => $result['archive_count'],
+        ]);
+    }
+
+    /**
+     * POST /api/v1/clients/{id}/repositories/import
+     *   {name, storage_type?, storage_location_id?, remote_ssh_config_id?, passphrase?, encryption?}
+     *
+     * Registers an existing repository for the client and queues a catalog
+     * sync to discover its archives. Verify first, or pass encryption from
+     * the verify response; the passphrase is stored for later use.
+     */
+    public function importRepository(int $id): void
+    {
+        $ctx = $this->requireApiAuth();
+        if (!$this->apiCanAccessAgent($ctx, $id)) {
+            $this->json(['error' => 'Client not found'], 404);
+        }
+        $this->apiRequirePermission($ctx, \BBS\Services\PermissionService::MANAGE_REPOS, $id);
+        $input = $this->getJsonInput();
+        $agent = $this->db->fetchOne("SELECT * FROM agents WHERE id = ?", [$id]);
+        if (!$agent) {
+            $this->json(['error' => 'Client not found'], 404);
+        }
+        [$storageType, $name, $storageLocationId, $remoteSshConfigId] = $this->importArgs($input);
+        if (Config::isHosted() && $storageType !== 'local') {
+            $this->json(['error' => 'Storage type is locked to local in hosted mode.'], 422);
+        }
+        $passphrase = (string) ($input['passphrase'] ?? '');
+        $encryption = trim((string) ($input['encryption'] ?? ''));
+
+        $service = new \BBS\Services\RepositoryImportService();
+        if ($encryption === '') {
+            // Not told the mode: open the repo to find out, which also
+            // catches a wrong passphrase before anything is written.
+            $verify = $service->verify($agent, $storageType, $name, $passphrase, $storageLocationId, $remoteSshConfigId);
+            if (!$verify['success']) {
+                $this->json(['error' => $verify['error']], 422);
+            }
+            $encryption = $verify['encryption'];
+        }
+
+        $result = $service->import($agent, $storageType, $name, $encryption, $passphrase, $storageLocationId, $remoteSshConfigId);
+        if (!$result['success']) {
+            $this->json(['error' => $result['error']], str_contains($result['error'], 'already exists') ? 409 : 422);
+        }
+        $this->json([
+            'status' => 'ok',
+            'repository_id' => (int) $result['repository_id'],
+            'agent_id' => $id,
+            'name' => $name,
+            'path' => $result['path'],
+            'encryption' => $encryption,
+            'catalog_sync_job_id' => (int) $result['job_id'],
+        ], 201);
+    }
+
+    /** Common validation for the two import endpoints. */
+    private function importArgs(array $input): array
+    {
+        $storageType = (string) ($input['storage_type'] ?? (!empty($input['remote_ssh_config_id']) ? 'remote_ssh' : 'local'));
+        if (!in_array($storageType, ['local', 'remote_ssh'], true)) {
+            $this->json(['error' => 'storage_type must be local or remote_ssh'], 422);
+        }
+        $name = \BBS\Services\RepositoryImportService::sanitizeName(trim((string) ($input['name'] ?? '')));
+        if ($name === '') {
+            $this->json(['error' => 'name is required and may only contain letters, numbers, hyphens and underscores'], 422);
+        }
+        $storageLocationId = !empty($input['storage_location_id']) ? (int) $input['storage_location_id'] : null;
+        $remoteSshConfigId = !empty($input['remote_ssh_config_id']) ? (int) $input['remote_ssh_config_id'] : null;
+        if ($storageType === 'remote_ssh' && !$remoteSshConfigId) {
+            $this->json(['error' => 'remote_ssh_config_id is required for storage_type remote_ssh'], 422);
+        }
+        return [$storageType, $name, $storageLocationId, $remoteSshConfigId];
+    }
+
+    /**
      * GET /api/v1/metrics — monitoring snapshot for external systems
      * (health checks, dashboards, Prometheus via a JSON adapter). Timestamps
      * are returned both as datetime strings and unix epochs so time-series
