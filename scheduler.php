@@ -2566,7 +2566,21 @@ foreach ($zeroRepos as $zr) {
 // Step 5b: Poll remote SSH host disk usage (every 15 minutes)
 if ((int) date('i') % 15 === 0) {
     $remoteSshService = $remoteSshService ?? new RemoteSshService();
-    $remoteConfigs = $db->fetchAll("SELECT * FROM remote_ssh_configs");
+
+    // BorgBase accounts: one API call per account updates the account's
+    // plan usage and every location attached to it.
+    $borgBaseService = new \BBS\Services\BorgBaseService();
+    foreach ($borgBaseService->getAll() as $bbAccount) {
+        $bbResult = $borgBaseService->refreshAccount((int) $bbAccount['id']);
+        if ($bbResult['success']) {
+            $bbUsed = \BBS\Services\BorgBaseService::formatBytes((int) ($borgBaseService->getById((int) $bbAccount['id'])['usage_bytes'] ?? 0));
+            echo date('Y-m-d H:i:s') . " BorgBase account \"{$bbAccount['name']}\": {$bbUsed} used\n";
+        } else {
+            echo date('Y-m-d H:i:s') . " BorgBase account \"{$bbAccount['name']}\": {$bbResult['error']}\n";
+        }
+    }
+
+    $remoteConfigs = $db->fetchAll("SELECT * FROM remote_ssh_configs WHERE borgbase_account_id IS NULL");
     foreach ($remoteConfigs as $rc) {
         $rcFull = $remoteSshService->getDecrypted((int) $rc['id']);
         if ($rcFull) {

@@ -577,9 +577,38 @@ document.getElementById('btnTestS3')?.addEventListener('click', function() {
 
 <!-- BorgBase Wizard Form -->
 <div id="wizardBorgbase" style="display:none">
-    <div class="card border-0 shadow-sm">
+    <div class="card border-0 shadow-sm mb-3">
         <div class="card-header fw-semibold" style="background:rgba(200,170,50,0.12)">
-            <img src="/images/borgbase.svg" alt="" style="width:18px;height:18px;border-radius:50%;vertical-align:text-bottom" class="me-1"> BorgBase Setup
+            <img src="/images/borgbase.svg" alt="" style="width:18px;height:18px;border-radius:50%;vertical-align:text-bottom" class="me-1"> Connect a BorgBase Account
+        </div>
+        <div class="card-body">
+            <p class="text-muted small mb-3">
+                BorgBase gives every repository its own SSH login, so BBS groups them by account. Paste an API token and BBS registers its own SSH key on the account,
+                shows the plan's storage and repository limits, and creates repositories there for your clients.
+            </p>
+            <form method="POST" action="/borgbase-accounts/create" autocomplete="off">
+                <input type="hidden" name="csrf_token" value="<?= $this->csrfToken() ?>">
+                <div class="mb-3">
+                    <label class="form-label fw-semibold">API Token</label>
+                    <input type="text" class="form-control font-monospace" name="api_token" required autocomplete="new-password" data-lpignore="true" data-1p-ignore="true" spellcheck="false" placeholder="eyJhbGciOi...">
+                    <div class="form-text">In BorgBase go to <strong>Account &rarr; API &rarr; New Token</strong>. Name it (for example "BBS") and choose <strong>Full Access</strong> so BBS can create and delete repositories. A Read Only token shows usage but can't manage repositories. The token is encrypted before it is stored.</div>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label fw-semibold">Name</label>
+                    <input type="text" class="form-control" name="name" placeholder="BorgBase" style="max-width:320px">
+                    <div class="form-text">How this account appears in BBS. Useful when you have more than one.</div>
+                </div>
+                <div class="d-flex gap-2 align-items-center">
+                    <button type="submit" class="btn btn-sm btn-primary"><i class="bi bi-plug me-1"></i> Connect Account</button>
+                    <button type="button" class="btn btn-sm btn-outline-secondary" onclick="hideWizardForm()">Cancel</button>
+                    <a class="small ms-auto" data-bs-toggle="collapse" href="#bbLegacyForm" role="button">Set up a single repository without a token</a>
+                </div>
+            </form>
+        </div>
+    </div>
+    <div class="card border-0 shadow-sm collapse" id="bbLegacyForm">
+        <div class="card-header fw-semibold" style="background:rgba(200,170,50,0.12)">
+            <img src="/images/borgbase.svg" alt="" style="width:18px;height:18px;border-radius:50%;vertical-align:text-bottom" class="me-1"> Single BorgBase Repository
         </div>
         <div class="card-body">
             <p class="text-muted small mb-3">Paste the SSH connection string from your <a href="https://www.borgbase.com" target="_blank">BorgBase</a> repository page, then paste your SSH private key below.</p>
@@ -1558,10 +1587,52 @@ function applyRemotePreset(select, form) {
     </div>
     <div class="card-body">
 
-<?php if (empty($remoteSshConfigs)): ?>
+<?php if (empty($remoteSshConfigs) && empty($borgBaseAccounts)): ?>
 <div class="alert alert-info mb-0">No remote SSH hosts configured. <a href="/storage-locations?section=wizard">Add one</a> to get started.</div>
 <?php else: ?>
 <div class="row g-3">
+    <?php foreach ($borgBaseAccounts ?? [] as $ba): ?>
+    <?php
+    $baPlanBytes = $ba['plan_max_size_gb'] !== null ? (int) $ba['plan_max_size_gb'] * 1000 * 1000 * 1000 : 0;
+    $baUsed = (int) ($ba['usage_bytes'] ?? 0);
+    $baPct = $baPlanBytes > 0 ? min(100, round($baUsed / $baPlanBytes * 100, 1)) : null;
+    $baColor = $baPct === null ? 'secondary' : ($baPct >= 90 ? 'danger' : ($baPct >= 75 ? 'warning' : 'success'));
+    $baLimit = (int) ($ba['plan_max_repos'] ?? 0);
+    $baRemote = (int) ($ba['remote_repo_count'] ?? 0);
+    ?>
+    <div class="col-xl-4 col-lg-6">
+        <a href="/borgbase-accounts/<?= $ba['id'] ?>" class="text-decoration-none text-reset">
+        <div class="card border-0 shadow-sm h-100 storage-account-card">
+            <div class="card-body">
+                <div class="d-flex align-items-start gap-2 mb-2">
+                    <div class="flex-shrink-0 mt-1"><img src="/images/borgbase.svg" alt="" style="width:24px;height:24px;border-radius:50%"></div>
+                    <div class="flex-grow-1" style="min-width:0">
+                        <h6 class="mb-0"><?= htmlspecialchars($ba['name']) ?></h6>
+                        <div class="small text-muted text-truncate"><?= $ba['plan_name'] ? htmlspecialchars($ba['plan_name']) : 'BorgBase account' ?><?= $ba['username'] ? ' &middot; ' . htmlspecialchars($ba['username']) : '' ?></div>
+                    </div>
+                    <span class="badge bg-warning text-dark">Account</span>
+                </div>
+                <div class="d-flex gap-3 small text-muted">
+                    <span><i class="bi bi-archive me-1"></i><?= $baRemote ?><?= $baLimit > 0 ? ' of ' . $baLimit : '' ?> repos on BorgBase</span>
+                    <span><i class="bi bi-hdd me-1"></i><?= (int) $ba['repo_count'] ?> in BBS</span>
+                </div>
+                <?php if ($ba['checked_at']): ?>
+                <div class="mt-2">
+                    <div class="d-flex justify-content-between small text-muted mb-1">
+                        <span><?= formatStorageBytesDecimal($baUsed) ?> used</span>
+                        <span><?= $baPlanBytes > 0 ? formatStorageBytesDecimal(max(0, $baPlanBytes - $baUsed)) . ' free' : '' ?></span>
+                    </div>
+                    <div class="progress" style="height: 6px;"><div class="progress-bar bg-<?= $baColor ?>" style="width: <?= $baPct ?? 0 ?>%"></div></div>
+                    <div class="text-muted small mt-1"><?= $baPlanBytes > 0 ? formatStorageBytesDecimal($baPlanBytes) . ' plan &middot; ' . $baPct . '% used &middot; ' : '' ?>checked <?= \BBS\Core\TimeHelper::ago($ba['checked_at']) ?></div>
+                    <?php if (!empty($ba['check_error'])): ?><div class="small text-danger mt-1"><?= htmlspecialchars($ba['check_error']) ?></div><?php endif; ?>
+                </div>
+                <?php endif; ?>
+                <div class="small mt-2"><i class="bi bi-box-arrow-up-right me-1"></i>Manage repositories</div>
+            </div>
+        </div>
+        </a>
+    </div>
+    <?php endforeach; ?>
     <?php foreach ($remoteSshConfigs as $rsc): ?>
     <?php $isBorgBase = (($rsc['provider'] ?? '') === 'borgbase') || str_contains((string)($rsc['remote_host'] ?? ''), '.repo.borgbase.com'); ?>
     <div class="col-xl-4 col-lg-6">
@@ -1654,6 +1725,9 @@ function applyRemotePreset(select, form) {
                         echo 'Quota unavailable — not checked yet';
                     }
                 ?></div>
+                <?php endif; ?>
+                <?php if ($isBorgBase): ?>
+                <div class="small text-muted mt-2"><i class="bi bi-info-circle me-1"></i>Not grouped under an account. <a href="/storage-locations?section=wizard">Connect the BorgBase account</a> with an API token to manage its repositories together.</div>
                 <?php endif; ?>
                 <div id="remoteSshTestResult<?= $rsc['id'] ?>" class="mt-2"></div>
             </div>

@@ -742,7 +742,11 @@ $dfFix = function (string $s): string {
                         <div>
                             <div class="sc-label"><?= htmlspecialchars($loc['label']) ?></div>
                             <div class="sc-kind <?= $loc['kind'] === 'remote' ? 'remote' : '' ?>">
+                                <?php if (!empty($loc['borgbase_account_id'])): ?>
+                                <a href="/borgbase-accounts/<?= (int) $loc['borgbase_account_id'] ?>" class="text-reset text-decoration-none">BorgBase account</a>
+                                <?php else: ?>
                                 <?= $loc['kind'] === 'remote' ? 'Remote SSH' : ($loc['is_default'] ? 'Default · Local' : 'Local') ?>
+                                <?php endif; ?>
                             </div>
                         </div>
                         <?php if ($loc['disk_percent'] !== null): ?>

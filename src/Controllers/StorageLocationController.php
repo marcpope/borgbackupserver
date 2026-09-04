@@ -41,9 +41,27 @@ class StorageLocationController extends Controller
         }
         unset($loc);
 
-        // Remote SSH configs
+        // BorgBase accounts: one card each; their locations live on the account page
+        $borgBaseService = new \BBS\Services\BorgBaseService();
+        $borgBaseAccounts = $borgBaseService->getAll();
+        foreach ($borgBaseAccounts as &$ba) {
+            $ba['location_count'] = (int) ($this->db->fetchOne(
+                "SELECT COUNT(*) as cnt FROM remote_ssh_configs WHERE borgbase_account_id = ?",
+                [$ba['id']]
+            )['cnt'] ?? 0);
+            $ba['repo_count'] = (int) ($this->db->fetchOne(
+                "SELECT COUNT(*) as cnt FROM repositories r JOIN remote_ssh_configs rsc ON rsc.id = r.remote_ssh_config_id WHERE rsc.borgbase_account_id = ?",
+                [$ba['id']]
+            )['cnt'] ?? 0);
+        }
+        unset($ba);
+
+        // Remote SSH configs (locations grouped under a BorgBase account are shown there instead)
         $remoteSshService = new \BBS\Services\RemoteSshService();
-        $remoteSshConfigs = $remoteSshService->getAll();
+        $remoteSshConfigs = array_values(array_filter(
+            $remoteSshService->getAll(),
+            fn($c) => empty($c['borgbase_account_id'])
+        ));
         $remoteRepoCount = (int) ($this->db->fetchOne("SELECT COUNT(*) as cnt FROM repositories WHERE storage_type = 'remote_ssh'")['cnt'] ?? 0);
 
         // Attach repo counts to each remote SSH config
@@ -82,6 +100,7 @@ class StorageLocationController extends Controller
             'pageTitle' => 'Storage',
             'locations' => $locations,
             'remoteSshConfigs' => $remoteSshConfigs,
+            'borgBaseAccounts' => $borgBaseAccounts,
             'remoteRepoCount' => $remoteRepoCount,
             'localRepoCount' => $localRepoCount,
             'settings' => $settings,

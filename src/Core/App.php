@@ -223,6 +223,16 @@ class App
         $this->router->map('POST', '/remote-ssh-configs/test-new', 'RemoteSshConfigController@testNew');
         $this->router->map('POST', '/remote-ssh-configs/borgbase-api-test', 'RemoteSshConfigController@testBorgBaseApi');
 
+        // BorgBase accounts: one card per account, repos managed through its API
+        $this->router->map('POST', '/borgbase-accounts/create', 'BorgBaseAccountController@store');
+        $this->router->map('GET',  '/borgbase-accounts/[i:id]', 'BorgBaseAccountController@show');
+        $this->router->map('POST', '/borgbase-accounts/[i:id]/refresh', 'BorgBaseAccountController@refresh');
+        $this->router->map('POST', '/borgbase-accounts/[i:id]/update', 'BorgBaseAccountController@update');
+        $this->router->map('POST', '/borgbase-accounts/[i:id]/delete', 'BorgBaseAccountController@delete');
+        $this->router->map('POST', '/borgbase-accounts/[i:id]/repos/create', 'BorgBaseAccountController@createRepo');
+        $this->router->map('POST', '/borgbase-accounts/[i:id]/repos/import', 'BorgBaseAccountController@importRepo');
+        $this->router->map('POST', '/borgbase-accounts/[i:id]/locations/[i:locationId]/delete', 'BorgBaseAccountController@deleteLocation');
+
         // Notification Services
         $this->router->map('GET', '/notification-services', 'NotificationServiceController@index');
         $this->router->map('POST', '/notification-services', 'NotificationServiceController@store');

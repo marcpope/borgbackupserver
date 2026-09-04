@@ -94,12 +94,44 @@ class DashboardController extends Controller
             ];
         }
 
-        // --- Remote SSH storage ---
+        // --- BorgBase accounts: one entry per account, not per repo ---
+        $bbAccounts = $this->db->fetchAll("
+            SELECT ba.id, ba.name, ba.plan_name, ba.plan_max_size_gb, ba.usage_bytes, ba.remote_repo_count, ba.checked_at,
+                   (SELECT COUNT(*) FROM repositories r JOIN remote_ssh_configs rsc ON rsc.id = r.remote_ssh_config_id WHERE rsc.borgbase_account_id = ba.id) AS repo_count,
+                   (SELECT COALESCE(SUM(r.size_bytes), 0) FROM repositories r JOIN remote_ssh_configs rsc ON rsc.id = r.remote_ssh_config_id WHERE rsc.borgbase_account_id = ba.id) AS repo_bytes
+            FROM borgbase_accounts ba
+            ORDER BY ba.name
+        ");
+        foreach ($bbAccounts as $ba) {
+            $total = $ba['plan_max_size_gb'] !== null ? (int) $ba['plan_max_size_gb'] * 1000 * 1000 * 1000 : null;
+            $used = $ba['usage_bytes'] !== null ? (int) $ba['usage_bytes'] : null;
+            $free = ($total !== null && $used !== null) ? max(0, $total - $used) : null;
+            $pct = ($total && $used !== null) ? round(($used / $total) * 100, 1) : null;
+            $storageLocations[] = [
+                'kind' => 'remote',
+                'provider' => 'borgbase',
+                'borgbase_account_id' => (int) $ba['id'],
+                'id' => (int) $ba['id'],
+                'label' => $ba['name'],
+                'path' => ($ba['plan_name'] ? $ba['plan_name'] . ' · ' : '') . (int) ($ba['remote_repo_count'] ?? 0) . ' repos on BorgBase',
+                'is_default' => false,
+                'repo_count' => (int) $ba['repo_count'],
+                'repo_bytes' => (int) $ba['repo_bytes'],
+                'disk_total' => $total,
+                'disk_used' => $used,
+                'disk_free' => $free,
+                'disk_percent' => $pct,
+                'borgbase_usage_source' => 'borgbase_api',
+            ];
+        }
+
+        // --- Remote SSH storage (locations not grouped under an account) ---
         $remotes = $this->db->fetchAll("
             SELECT id, name, provider, remote_host, remote_user, disk_total_bytes, disk_used_bytes, disk_free_bytes, disk_checked_at, borgbase_usage_source,
                    (SELECT COUNT(*) FROM repositories r WHERE r.remote_ssh_config_id = remote_ssh_configs.id) AS repo_count,
                    (SELECT COALESCE(SUM(size_bytes), 0) FROM repositories r WHERE r.remote_ssh_config_id = remote_ssh_configs.id) AS repo_bytes
             FROM remote_ssh_configs
+            WHERE borgbase_account_id IS NULL
             ORDER BY name
         ");
         foreach ($remotes as $rc) {
