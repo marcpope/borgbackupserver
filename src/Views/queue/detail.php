@@ -464,6 +464,16 @@ $taskLabel = ucfirst(str_replace('_', ' ', $job['task_type']));
             <div class="card-body p-0">
                 <table class="table table-borderless mb-0">
                     <tbody>
+                        <?php if ($isCheckJob): ?>
+                        <tr>
+                            <td class="text-muted fw-semibold ps-3" style="width: 160px;">Phase</td>
+                            <td><?= !empty($job['status_message']) ? htmlspecialchars($job['status_message']) : '--' ?></td>
+                        </tr>
+                        <tr>
+                            <td class="text-muted fw-semibold ps-3">Checked</td>
+                            <td><?= $job['files_total'] ? number_format((int) $job['files_processed']) . ' / ' . number_format($job['files_total']) : '--' ?></td>
+                        </tr>
+                        <?php else: ?>
                         <tr>
                             <td class="text-muted fw-semibold ps-3" style="width: 160px;">Files Total</td>
                             <td><?= $job['files_total'] ? number_format($job['files_total']) : '--' ?></td>
@@ -480,6 +490,7 @@ $taskLabel = ucfirst(str_replace('_', ' ', $job['task_type']));
                             <td class="text-muted fw-semibold ps-3">Bytes Processed</td>
                             <td><?= formatBytes($job['bytes_processed']) ?></td>
                         </tr>
+                        <?php endif; ?>
                         <?php if (($job['task_type'] ?? '') === 'backup'): ?>
                         <tr>
                             <td class="text-muted fw-semibold ps-3">Deduplicated Size</td>
@@ -738,6 +749,8 @@ if ($job['task_type'] === 'backup_dry_run' && !empty($job['task_result'])) {
             'Files Processed': job.files_processed ? Number(job.files_processed).toLocaleString() : '--',
             'Bytes Total': fmtBytes(job.bytes_total),
             'Bytes Processed': fmtBytes(job.bytes_processed),
+            'Phase': job.status_message || '--',
+            'Checked': job.files_total ? Number(job.files_processed || 0).toLocaleString() + ' / ' + Number(job.files_total).toLocaleString() : '--',
         };
         if (job._archive) statsMap['Deduplicated Size'] = fmtBytes(job._archive.deduplicated_size);
         document.querySelectorAll('table.table-borderless td.text-muted').forEach(td => {
