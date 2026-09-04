@@ -1406,7 +1406,7 @@ $pushRegistered = (bool) $pushSvc->serverId();
 ?>
 <div class="settings-page-head">
     <h1 class="settings-page-title">Push Service</h1>
-    <p class="settings-page-lede mb-0">Delivers alerts to registered devices through an external notification service. Separate from <a href="/settings?tab=push">Apprise</a>, which contacts chat and webhook providers directly.</p>
+    <p class="settings-page-lede mb-0">Delivers alerts to your phone through the <strong>BBS Manager</strong> mobile app. Install the app from <a href="https://borgbackupserver.com/bbs-manager" target="_blank" rel="noopener">borgbackupserver.com/bbs-manager</a>, then register this server here so the app can receive its alerts. Separate from <a href="/settings?tab=push">Apprise</a>, which contacts chat and webhook providers directly.</p>
 </div>
 
 <form method="POST" action="/settings/push">
@@ -1417,7 +1417,7 @@ $pushRegistered = (bool) $pushSvc->serverId();
     <div class="settings-row">
         <div>
             <div class="settings-row-label">Register with the Push Notification Service</div>
-            <p class="settings-row-help">Registers this server with the service so devices can receive alerts. Nothing is sent to it until this is on.</p>
+            <p class="settings-row-help">Registers this server with the push service so devices running BBS Manager can receive alerts. Nothing is sent to it until this is on.</p>
         </div>
         <div class="settings-row-control">
             <div class="form-check form-switch mb-0">

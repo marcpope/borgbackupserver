@@ -27,7 +27,10 @@ function formatBytes($bytes) {
 }
 
 $isActive = in_array($job['status'], ['queued', 'sent', 'running']);
-$isServerSide = in_array($job['task_type'], ['prune', 'compact', 's3_sync', 's3_restore', 'catalog_sync', 'catalog_rebuild', 'catalog_rebuild_full']);
+// Repo check/repair report borg's phase counts (segments, archives) rather
+// than files, with the phase named in status_message (#464).
+$isCheckJob = in_array($job['task_type'], ['repo_check', 'repo_repair'], true);
+$isServerSide = $isCheckJob || in_array($job['task_type'], ['prune', 'compact', 's3_sync', 's3_restore', 'catalog_sync', 'catalog_rebuild', 'catalog_rebuild_full']);
 $taskLabel = ucfirst(str_replace('_', ' ', $job['task_type']));
 ?>
 
@@ -158,7 +161,7 @@ $taskLabel = ucfirst(str_replace('_', ' ', $job['task_type']));
 <?php if ($isActive): ?>
 <div class="card border-0 shadow-sm mb-4 queue-progress-panel">
     <div class="card-body py-3">
-        <?php if ($isServerSide && $job['status'] === 'running'): ?>
+        <?php if ($isServerSide && !$isCheckJob && $job['status'] === 'running'): ?>
             <div class="text-white fw-semibold mb-1"><i class="bi bi-hdd me-1"></i> <?= ucfirst($job['task_type']) ?> running on server...</div>
             <div class="progress mb-1" style="height: 22px; background-color: rgba(255,255,255,0.15);">
                 <div class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar"
@@ -178,13 +181,13 @@ $taskLabel = ucfirst(str_replace('_', ' ', $job['task_type']));
             <div class="text-white-50 small">This <?= $job['task_type'] ?> job runs server-side and will be picked up by the scheduler within 60 seconds</div>
         <?php elseif ($job['status'] === 'running' && $pct > 0): ?>
             <div class="d-flex justify-content-between text-white mb-1">
-                <span class="fw-semibold"><?= $taskLabel ?>... <?= $pct ?>%</span>
-                <span class="small text-white-50"><?= formatBytes($job['bytes_processed']) ?><?= ($job['bytes_total'] ?? 0) > 0 ? ' of ' . formatBytes($job['bytes_total']) : '' ?> processed</span>
+                <span class="fw-semibold"><?= $isCheckJob && !empty($job['status_message']) ? htmlspecialchars($job['status_message']) : $taskLabel . '... ' . $pct . '%' ?></span>
+                <span class="small text-white-50"><?= $isCheckJob ? '' : formatBytes($job['bytes_processed']) . ((($job['bytes_total'] ?? 0) > 0) ? ' of ' . formatBytes($job['bytes_total']) : '') . ' processed' ?></span>
             </div>
             <div class="progress mb-1" style="height: 22px; background-color: rgba(255,255,255,0.15);">
                 <div class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar"
                      style="width: <?= $pct ?>%; background-color: #5b9bd5;" aria-valuenow="<?= $pct ?>" aria-valuemin="0" aria-valuemax="100">
-                    <?= number_format($job['files_processed']) ?> / <?= number_format($job['files_total']) ?> files
+                    <?= number_format($job['files_processed']) ?> / <?= number_format($job['files_total']) ?><?= $isCheckJob ? '' : ' files' ?>
                 </div>
             </div>
             <div class="text-white-50 small text-truncate" id="currentFile" style="max-width: 100%;"></div>
@@ -267,6 +270,18 @@ $taskLabel = ucfirst(str_replace('_', ' ', $job['task_type']));
                 <?php endif; ?>
             </div>
         <?php endif; ?>
+    </div>
+</div>
+<?php elseif ($job['status'] === 'completed' && $isCheckJob && !empty($job['had_warnings'])): ?>
+<div class="card border-0 shadow-sm mb-4 bg-warning-subtle">
+    <div class="card-body py-3">
+        <div class="fw-semibold text-warning-emphasis mb-1"><i class="bi bi-exclamation-triangle me-1"></i> <?= $taskLabel ?> completed with problems</div>
+        <div class="progress mb-1" style="height: 22px;">
+            <div class="progress-bar bg-warning" role="progressbar" style="width: 100%;">
+                borg reported problems
+            </div>
+        </div>
+        <div class="text-warning-emphasis small mt-1"><i class="bi bi-info-circle me-1"></i>Duration: <?= $durLabel ?> &middot; see the activity log below for what borg found</div>
     </div>
 </div>
 <?php elseif ($job['status'] === 'completed' && $isServerSide): ?>
@@ -666,7 +681,10 @@ if ($job['task_type'] === 'backup_dry_run' && !empty($job['task_result'])) {
                 '</div></div>';
         } else if (isJobActive && job.status === 'running' && pct > 0) {
             var taskLabel = (job.task_type || 'backup').replace('_',' ').replace(/^\w/, c => c.toUpperCase());
-            var bytesText = fmtBytes(job.bytes_processed) + (job.bytes_total > 0 ? ' of ' + fmtBytes(job.bytes_total) : '') + ' processed';
+            var isCheckJob = ['repo_check','repo_repair'].includes(job.task_type);
+            var headText = (isCheckJob && job.status_message) ? job.status_message : taskLabel + '... ' + pct + '%';
+            var barText = Number(job.files_processed).toLocaleString() + ' / ' + Number(job.files_total).toLocaleString() + (isCheckJob ? '' : ' files');
+            var bytesText = isCheckJob ? '' : fmtBytes(job.bytes_processed) + (job.bytes_total > 0 ? ' of ' + fmtBytes(job.bytes_total) : '') + ' processed';
             var currentFile = data.currentFile ? data.currentFile.replace(/\/+$/, '') : '';
             var fileHtml = currentFile ? '<div class="text-white-50 small text-truncate" style="max-width:100%;" title="' + esc(currentFile) + '">' + esc(currentFile) + '</div>' : '';
             var headerRow = container.querySelector('.d-flex.justify-content-between');
@@ -675,8 +693,8 @@ if ($job['task_type'] === 'backup_dry_run' && !empty($job['task_result'])) {
                 const bar = container.querySelector('.progress-bar');
                 const label = headerRow.querySelector('.fw-semibold');
                 const bytesEl = headerRow.querySelector('.text-white-50');
-                if (bar) { bar.style.width = pct + '%'; bar.textContent = Number(job.files_processed).toLocaleString() + ' / ' + Number(job.files_total).toLocaleString() + ' files'; }
-                if (label) label.textContent = taskLabel + '... ' + pct + '%';
+                if (bar) { bar.style.width = pct + '%'; bar.textContent = barText; }
+                if (label) label.textContent = headText;
                 if (bytesEl) bytesEl.textContent = bytesText;
                 var fileEl = container.querySelector('.text-truncate');
                 if (fileEl && currentFile) { fileEl.textContent = currentFile; fileEl.title = currentFile; }
@@ -684,8 +702,8 @@ if ($job['task_type'] === 'backup_dry_run' && !empty($job['task_result'])) {
             } else {
                 // Full replace (transitioning from pre-progress state)
                 container.innerHTML = '<div class="card border-0 shadow-sm mb-4 queue-progress-panel"><div class="card-body py-3">' +
-                    '<div class="d-flex justify-content-between text-white mb-1"><span class="fw-semibold">' + esc(taskLabel) + '... ' + pct + '%</span><span class="small text-white-50">' + bytesText + '</span></div>' +
-                    '<div class="progress mb-1" style="height:22px;background-color:rgba(255,255,255,0.15)"><div class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar" style="width:' + pct + '%;background-color:#5b9bd5">' + Number(job.files_processed).toLocaleString() + ' / ' + Number(job.files_total).toLocaleString() + ' files</div></div>' +
+                    '<div class="d-flex justify-content-between text-white mb-1"><span class="fw-semibold">' + esc(headText) + '</span><span class="small text-white-50">' + bytesText + '</span></div>' +
+                    '<div class="progress mb-1" style="height:22px;background-color:rgba(255,255,255,0.15)"><div class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar" style="width:' + pct + '%;background-color:#5b9bd5">' + barText + '</div></div>' +
                     fileHtml + '</div></div>';
             }
         } else if (isJobActive && job.status === 'running') {

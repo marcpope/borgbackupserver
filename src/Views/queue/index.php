@@ -269,7 +269,7 @@
                         <td class="small text-nowrap"><?= \BBS\Core\TimeHelper::format($job['queued_at'], 'M j, g:i A') ?></td>
                         <td><?= htmlspecialchars($job['agent_name']) ?></td>
                         <td class="text-nowrap"><?= jobTypeIcon($job['task_type']) ?><?= htmlspecialchars(ucfirst(str_replace('_', ' ', $job['task_type']))) ?></td>
-                        <td class="d-none d-md-table-cell"><?= number_format($job['files_total'] ?? 0) ?></td>
+                        <td class="d-none d-md-table-cell"><?= in_array($job['task_type'], ['repo_check', 'repo_repair'], true) ? '--' : number_format($job['files_total'] ?? 0) ?></td>
                         <td>
                             <?php
                             // Percent from file counts when the total is known
@@ -367,7 +367,7 @@
                         <td class="small text-nowrap" title="<?= \BBS\Core\TimeHelper::format($job['completed_at'], 'M j, Y g:i A') ?>"><?= \BBS\Core\TimeHelper::ago($job['completed_at']) ?></td>
                         <td><?= htmlspecialchars($job['agent_name']) ?></td>
                         <td class="text-nowrap"><?= jobTypeIcon($job['task_type']) ?><?= htmlspecialchars(ucfirst(str_replace('_', ' ', $job['task_type']))) ?></td>
-                        <td class="d-none d-md-table-cell"><?= number_format($job['files_total'] ?? 0) ?></td>
+                        <td class="d-none d-md-table-cell"><?= in_array($job['task_type'], ['repo_check', 'repo_repair'], true) ? '--' : number_format($job['files_total'] ?? 0) ?></td>
                         <td class="d-none d-md-table-cell"><?= htmlspecialchars($job['repo_name'] ?? '--') ?></td>
                         <td class="d-none d-md-table-cell">
                             <?php
@@ -503,7 +503,7 @@ document.querySelectorAll('[data-bs-toggle="tooltip"]').forEach(el => new bootst
             '<td class="small text-nowrap">' + formatDate(job.queued_at) + '</td>' +
             '<td>' + esc(job.agent_name) + '</td>' +
             '<td class="text-nowrap">' + jobTypeIcon(job.task_type) + esc(taskTypeLabel(job.task_type)) + '</td>' +
-            '<td class="d-none d-md-table-cell">' + Number(job.files_total || 0).toLocaleString() + '</td>' +
+            '<td class="d-none d-md-table-cell">' + (['repo_check','repo_repair'].includes(job.task_type) ? '--' : Number(job.files_total || 0).toLocaleString()) + '</td>' +
             '<td>' + progress + '</td>' +
             '<td class="d-none d-md-table-cell">' + esc(job.repo_name || '--') + '</td>' +
             '<td>' + statusBadge(job.status) + '</td>' +
@@ -534,7 +534,7 @@ document.querySelectorAll('[data-bs-toggle="tooltip"]').forEach(el => new bootst
             '<td class="small text-nowrap">' + formatDate(job.completed_at) + '</td>' +
             '<td>' + esc(job.agent_name) + '</td>' +
             '<td class="text-nowrap">' + jobTypeIcon(job.task_type) + esc(taskTypeLabel(job.task_type)) + '</td>' +
-            '<td class="d-none d-md-table-cell">' + Number(job.files_total || 0).toLocaleString() + '</td>' +
+            '<td class="d-none d-md-table-cell">' + (['repo_check','repo_repair'].includes(job.task_type) ? '--' : Number(job.files_total || 0).toLocaleString()) + '</td>' +
             '<td class="d-none d-md-table-cell">' + esc(job.repo_name || '--') + '</td>' +
             '<td class="d-none d-md-table-cell">' + durationBar(job.duration_seconds, maxDuration, job.status) + '</td>' +
             '<td class="text-center">' + statusHtml + '</td>' +

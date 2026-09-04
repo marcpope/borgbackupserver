@@ -1850,9 +1850,12 @@ foreach ($serverJobs as $sj) {
         // server_log (issue #162).
         $borgArgs = ['compact', '--verbose', $repoPath];
     } elseif ($sj['task_type'] === 'repo_check') {
-        $borgArgs = ['check', '--verbose', $repoPath];
+        // --progress --log-json makes borg report each check phase as JSON
+        // lines with current/total counts; the streaming consumer below
+        // turns those into the job's progress bar (#464).
+        $borgArgs = ['check', '--verbose', '--progress', '--log-json', $repoPath];
     } elseif ($sj['task_type'] === 'repo_repair') {
-        $borgArgs = ['check', '--repair', $repoPath];
+        $borgArgs = ['check', '--repair', '--verbose', '--progress', '--log-json', $repoPath];
     } elseif ($sj['task_type'] === 'break_lock') {
         $borgArgs = ['break-lock', $repoPath];
     } elseif ($sj['task_type'] === 'archive_delete') {
@@ -1902,6 +1905,233 @@ foreach ($serverJobs as $sj) {
     $env = \BBS\Services\BorgCommandBuilder::buildEnv($localRepo, false);
     $passphrase = $env['BORG_PASSPHRASE'] ?? '';
 
+    // Check/repair jobs stream `borg check --progress --log-json` output
+    // into the job row while borg runs (#464). Everything else keeps the
+    // buffer-to-exit behaviour.
+    $isCheckJob = in_array($sj['task_type'], ['repo_check', 'repo_repair'], true);
+    $checkProgress = null;
+    if ($isCheckJob) {
+        $checkProgress = new class($db, (int) $sj['id'], (int) $sj['agent_id']) {
+            /** Plain-text reconstruction of borg's log, for the post-run logger. */
+            public string $plainOutput = '';
+            /** WARNING/ERROR lines borg emitted, for the failure summary. */
+            public array $problems = [];
+            private string $buffer = '';
+            private float $lastWrite = 0.0;
+            private ?string $lastMsgid = null;
+            private string $lastLabel = '';
+            private int $lastTotal = 0;
+            private int $liveLogged = 0;
+            private const LIVE_LOG_CAP = 200;
+
+            public function __construct(private $db, private int $jobId, private int $agentId) {}
+
+            public function feed(string $chunk): void
+            {
+                $this->buffer .= $chunk;
+                // Records are newline-terminated; a \r shows up when borg
+                // redraws a progress line in place, so treat it as a break too.
+                while (($n = strcspn($this->buffer, "\r\n")) < strlen($this->buffer)) {
+                    $line = substr($this->buffer, 0, $n);
+                    $this->buffer = substr($this->buffer, $n + 1);
+                    $this->handleLine($line);
+                }
+            }
+
+            public function finish(): void
+            {
+                if ($this->buffer !== '') {
+                    $this->handleLine($this->buffer);
+                    $this->buffer = '';
+                }
+            }
+
+            private function handleLine(string $line): void
+            {
+                $line = trim($line);
+                if ($line === '') {
+                    return;
+                }
+                $rec = json_decode($line, true);
+                if (!is_array($rec) || empty($rec['type'])) {
+                    // Not one of borg's records (helper usage error, ssh
+                    // noise): keep it as-is so it still reaches the log.
+                    $this->plainOutput .= $line . "\n";
+                    return;
+                }
+                if ($rec['type'] === 'progress_percent') {
+                    $this->onProgress($rec);
+                } elseif ($rec['type'] === 'log_message') {
+                    $this->onLog($rec);
+                }
+            }
+
+            private function onProgress(array $rec): void
+            {
+                $msgid = (string) ($rec['msgid'] ?? '');
+                $finished = !empty($rec['finished']);
+                if ($finished) {
+                    // Phase done: pin the bar at 100% until the next phase
+                    // reports its own total.
+                    if ($this->lastTotal > 0 && $msgid === $this->lastMsgid) {
+                        $this->write([
+                            'files_processed' => $this->lastTotal,
+                            'files_total' => $this->lastTotal,
+                            'status_message' => trim($this->lastLabel . ' 100%'),
+                        ], true);
+                    }
+                    return;
+                }
+                if ($msgid === 'check.rebuild_refcounts') {
+                    // The archive phase is driven by the per-archive
+                    // "Analyzing archive X (i/N)" log line instead, which
+                    // names the archive being checked.
+                    return;
+                }
+                $current = (int) ($rec['current'] ?? 0);
+                $total = (int) ($rec['total'] ?? 0);
+                if ($total <= 0) {
+                    return;
+                }
+                $phaseChanged = $msgid !== $this->lastMsgid;
+                $this->lastMsgid = $msgid;
+                $this->lastTotal = $total;
+                // Borg's own message carries a percentage computed one step
+                // behind `current`; strip it and use the counts so the bar,
+                // the queue list and this label all agree.
+                $label = preg_replace('/\s*[\d.]+%\s*$/', '', (string) ($rec['message'] ?? '')) ?: 'Checking';
+                $this->lastLabel = $label;
+                $pct = min(100, (int) floor($current / $total * 100));
+                $this->write([
+                    'files_processed' => min($current, $total),
+                    'files_total' => $total,
+                    'status_message' => "{$label} {$pct}%",
+                ], $phaseChanged);
+            }
+
+            private function onLog(array $rec): void
+            {
+                $msg = trim((string) ($rec['message'] ?? ''));
+                if ($msg === '') {
+                    return;
+                }
+                $level = strtoupper((string) ($rec['levelname'] ?? 'INFO'));
+                $this->plainOutput .= ($level === 'INFO' ? $msg : "{$level}: {$msg}") . "\n";
+
+                if ($level === 'INFO' && preg_match('/^Analyzing archive (.+) \((\d+)\/(\d+)\)$/', $msg, $m)) {
+                    // One line per archive; the progress bar covers these,
+                    // so they don't go to server_log.
+                    $i = (int) $m[2];
+                    $n = (int) $m[3];
+                    $this->lastMsgid = 'check.rebuild_refcounts';
+                    $this->lastTotal = $n;
+                    $this->lastLabel = 'Checking archives';
+                    $this->write([
+                        'files_processed' => max(0, $i - 1),
+                        'files_total' => $n,
+                        'status_message' => mb_substr("Checking archive {$i}/{$n}: {$m[1]}", 0, 255),
+                    ], true);
+                    return;
+                }
+
+                $logLevel = 'info';
+                if ($level === 'WARNING') {
+                    $logLevel = 'warning';
+                } elseif (in_array($level, ['ERROR', 'CRITICAL'], true)) {
+                    $logLevel = 'error';
+                }
+                if ($logLevel !== 'info') {
+                    $this->problems[] = $msg;
+                }
+                // Phase messages and problems are logged as they happen so a
+                // long check reads in the activity log while it runs. Capped
+                // so a badly damaged repo can't flood server_log with one row
+                // per missing chunk.
+                if ($this->liveLogged >= self::LIVE_LOG_CAP) {
+                    if ($this->liveLogged === self::LIVE_LOG_CAP) {
+                        $this->liveLogged++;
+                        $this->db->insert('server_log', [
+                            'agent_id' => $this->agentId,
+                            'backup_job_id' => $this->jobId,
+                            'level' => 'warning',
+                            'message' => 'Further borg check messages omitted from the live log (limit reached)',
+                        ]);
+                    }
+                    return;
+                }
+                $this->liveLogged++;
+                $this->db->insert('server_log', [
+                    'agent_id' => $this->agentId,
+                    'backup_job_id' => $this->jobId,
+                    'level' => $logLevel,
+                    'message' => mb_substr($msg, 0, 2000),
+                ]);
+            }
+
+            /** Write progress to the job row, throttled unless $force. */
+            private function write(array $fields, bool $force): void
+            {
+                $now = microtime(true);
+                if (!$force && ($now - $this->lastWrite) < 2.0) {
+                    return;
+                }
+                $this->lastWrite = $now;
+                $fields['last_progress_at'] = $this->db->now();
+                $this->db->update('backup_jobs', $fields, 'id = ?', [$this->jobId]);
+            }
+        };
+    }
+
+    // Drain stdout and stderr concurrently via stream_select. Reading them
+    // serially (stdout to EOF, then stderr) deadlocks when borg fills the
+    // 64 KB stderr pipe buffer before finishing — e.g. `prune --list
+    // --log-json` emits one ~290-byte "Keeping archive" line per kept
+    // archive on stderr, so rules keeping ~225+ archives stalled
+    // indefinitely (#384). Chunks are handed to $consumer as they arrive.
+    // Returns [exit code, stdout, stderr].
+    $drainBorgProcess = function ($proc, array $pipes, $consumer = null): array {
+        $stdout = '';
+        $stderr = '';
+        stream_set_blocking($pipes[1], false);
+        stream_set_blocking($pipes[2], false);
+        $open = [1 => $pipes[1], 2 => $pipes[2]];
+        while ($open) {
+            $read = array_values($open);
+            $write = null;
+            $except = null;
+            if (stream_select($read, $write, $except, 5) === false) {
+                break;
+            }
+            foreach ($open as $i => $pipe) {
+                $chunk = fread($pipe, 65536);
+                if ($chunk !== false && $chunk !== '') {
+                    if ($i === 1) {
+                        $stdout .= $chunk;
+                    } else {
+                        $stderr .= $chunk;
+                    }
+                    if ($consumer) {
+                        $consumer->feed($chunk);
+                    }
+                }
+                if (feof($pipe)) {
+                    fclose($pipe);
+                    unset($open[$i]);
+                }
+            }
+        }
+        // If stream_select errored out, close whatever is left so
+        // proc_close can't block on open pipes.
+        foreach ($open as $pipe) {
+            fclose($pipe);
+        }
+        $exitCode = proc_close($proc);
+        if ($consumer) {
+            $consumer->finish();
+        }
+        return [$exitCode, $stdout, $stderr];
+    };
+
     // Remote SSH repos: execute via RemoteSshService
     if ($isRemoteSsh && !empty($sj['remote_ssh_config_id'])) {
         $remoteSshService = $remoteSshService ?? new RemoteSshService();
@@ -1925,10 +2155,34 @@ foreach ($serverJobs as $sj) {
             'message' => ucfirst($sj['task_type']) . " command (remote SSH): borg {$cmdStr}",
         ]);
 
-        $remoteResult = $remoteSshService->runBorgCommand($remoteConfig, $repo['path'], $borgArgs, $passphrase);
-        $result = $remoteResult['success'] ? 'completed' : 'failed';
-        $stdout = $remoteResult['output'] ?? '';
-        $errorOutput = $result === 'failed' ? trim($remoteResult['stderr'] ?? $stdout) ?: "Exit code {$remoteResult['exit_code']}" : '';
+        if ($isCheckJob) {
+            // Stream so progress reaches the UI while borg runs (#464);
+            // runBorgCommand() buffers everything until exit.
+            // openBorgProcess() doesn't inject --lock-wait, so add it here.
+            $checkArgs = $borgArgs;
+            array_splice($checkArgs, 1, 0, ['--lock-wait=600']);
+            $handle = $remoteSshService->openBorgProcess($remoteConfig, $checkArgs, $passphrase);
+            if (isset($handle['error'])) {
+                $result = 'failed';
+                $stdout = '';
+                $errorOutput = $handle['error'];
+            } else {
+                [$exitCode, $stdout, $stderr] = $drainBorgProcess($handle['proc'], $handle['pipes'], $checkProgress);
+                $remoteSshService->cleanupStreamingProcess($handle);
+                $result = $exitCode <= 1 ? 'completed' : 'failed';
+                $stdout = $checkProgress->plainOutput;
+                $errorOutput = '';
+                if ($result === 'failed') {
+                    $errorOutput = trim(implode('; ', array_slice($checkProgress->problems, 0, 5)))
+                        ?: trim($stdout) ?: "Exit code {$exitCode}";
+                }
+            }
+        } else {
+            $remoteResult = $remoteSshService->runBorgCommand($remoteConfig, $repo['path'], $borgArgs, $passphrase);
+            $result = $remoteResult['success'] ? 'completed' : 'failed';
+            $stdout = $remoteResult['output'] ?? '';
+            $errorOutput = $result === 'failed' ? trim($remoteResult['stderr'] ?? $stdout) ?: "Exit code {$remoteResult['exit_code']}" : '';
+        }
     } else {
         // Local repos: run as the repo's unix user via bbs-ssh-helper
         $runAsUser = $sj['ssh_unix_user'] ?? null;
@@ -1976,47 +2230,18 @@ foreach ($serverJobs as $sj) {
                 fwrite($pipes[0], $passphrase . "\n");
             }
             fclose($pipes[0]);
-            // Drain stdout and stderr concurrently via stream_select. Reading
-            // them serially (stdout to EOF, then stderr) deadlocks when borg
-            // fills the 64 KB stderr pipe buffer before finishing — e.g.
-            // `prune --list --log-json` emits one ~290-byte "Keeping archive"
-            // line per kept archive on stderr, so rules keeping ~225+ archives
-            // stalled indefinitely (#384).
-            stream_set_blocking($pipes[1], false);
-            stream_set_blocking($pipes[2], false);
-            $stderr = '';
-            $open = [1 => $pipes[1], 2 => $pipes[2]];
-            while ($open) {
-                $read = array_values($open);
-                $write = null;
-                $except = null;
-                if (stream_select($read, $write, $except, 5) === false) {
-                    break;
-                }
-                foreach ($open as $i => $pipe) {
-                    $chunk = fread($pipe, 65536);
-                    if ($chunk !== false && $chunk !== '') {
-                        if ($i === 1) {
-                            $stdout .= $chunk;
-                        } else {
-                            $stderr .= $chunk;
-                        }
-                    }
-                    if (feof($pipe)) {
-                        fclose($pipe);
-                        unset($open[$i]);
-                    }
-                }
+            [$exitCode, $stdout, $stderr] = $drainBorgProcess($proc, $pipes, $checkProgress);
+            if ($isCheckJob) {
+                // Swap borg's JSON for the readable log the consumer built.
+                $stdout = $checkProgress->plainOutput;
+                $stderr = '';
             }
-            // If stream_select errored out, close whatever is left so
-            // proc_close can't block on open pipes.
-            foreach ($open as $pipe) {
-                fclose($pipe);
-            }
-            $exitCode = proc_close($proc);
 
             if ($exitCode <= 1) {
                 $result = 'completed';
+            } elseif ($isCheckJob) {
+                $errorOutput = trim(implode('; ', array_slice($checkProgress->problems, 0, 5)))
+                    ?: trim($stdout) ?: "Exit code $exitCode";
             } else {
                 // Error may be in $stdout (due to 2>&1 in helper) or $stderr
                 $errorOutput = trim($stderr ?: $stdout) ?: "Exit code $exitCode";
@@ -2061,8 +2286,15 @@ foreach ($serverJobs as $sj) {
         'message' => "Server-side {$sj['task_type']} job #{$sj['id']} {$result}" . ($errorOutput ? ": $errorOutput" : ''),
     ]);
 
-    // Log borg prune/compact output for visibility
-    if ($result === 'completed' && !empty($stdout)) {
+    if ($isCheckJob && $result === 'completed' && $checkProgress && $checkProgress->problems) {
+        // Exit code 1 means borg finished but reported problems; surface
+        // that as "completed with warnings" rather than a clean pass.
+        $db->update('backup_jobs', ['had_warnings' => 1], 'id = ?', [$sj['id']]);
+    }
+
+    // Log borg prune/compact output for visibility. Check jobs already
+    // logged their phase messages live, so skip the end-of-run dump.
+    if ($result === 'completed' && !empty($stdout) && !$isCheckJob) {
         // Truncate to a reasonable size for the log
         $trimmedOutput = mb_substr(trim($stdout), 0, 2000);
         if ($trimmedOutput) {
