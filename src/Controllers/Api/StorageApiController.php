@@ -507,6 +507,7 @@ class StorageApiController extends Controller
             'borgbase_manual_quota_gb' => isset($r['borgbase_manual_quota_gb']) && $r['borgbase_manual_quota_gb'] !== null
                 ? (float) $r['borgbase_manual_quota_gb'] : null,
             'borgbase_usage_source' => $r['borgbase_usage_source'] ?? null,
+            'borgbase_account_id'  => isset($r['borgbase_account_id']) && $r['borgbase_account_id'] !== null ? (int) $r['borgbase_account_id'] : null,
             'repository_count'     => (new RemoteSshService())->getRepoCount((int) $r['id']),
             'created_at'           => $r['created_at'],
         ];

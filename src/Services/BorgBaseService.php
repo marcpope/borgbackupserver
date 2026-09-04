@@ -265,6 +265,105 @@ class BorgBaseService
     }
 
     /**
+     * The whole "new repository for a client" flow, shared by the web page
+     * and the API: create it on BorgBase, initialise borg on it, and create
+     * the client's repository row. A failed init rolls the BorgBase repo
+     * back so it doesn't count against the plan's limit.
+     *
+     * @return array{success: bool, error?: string, repository_id?: int, location_id?: int, repo?: array, path?: string}
+     */
+    public function provisionRepository(array $account, array $agent, string $name, string $region, ?float $quotaGb, string $encryption): array
+    {
+        if (!in_array($encryption, ['repokey-blake2', 'repokey', 'none'], true)) {
+            $encryption = 'repokey-blake2';
+        }
+        $limit = (int) ($account['plan_max_repos'] ?? 0);
+        $count = (int) ($account['remote_repo_count'] ?? 0);
+        if ($limit > 0 && $count >= $limit) {
+            return ['success' => false, 'error' => "This BorgBase plan allows {$limit} repositories and all are in use."];
+        }
+
+        $created = $this->createRepo($account, $name, $region, $quotaGb);
+        if (!$created['success']) {
+            return $created;
+        }
+        $locationId = (int) $created['location_id'];
+        $repoId = (string) $created['repo']['id'];
+        $agentId = (int) $agent['id'];
+
+        $remoteSshService = new RemoteSshService();
+        $config = $remoteSshService->getById($locationId);
+        $safeName = self::sanitizePathName($name);
+        $repoPath = $remoteSshService->buildRepoPath($config, $safeName);
+        $passphrase = $encryption !== 'none' ? self::generatePassphrase() : '';
+
+        // A new BorgBase repo can take a moment to accept its first login.
+        $init = ['success' => false, 'output' => ''];
+        for ($attempt = 1; $attempt <= 3; $attempt++) {
+            $init = $remoteSshService->initRepo($config, $repoPath, $encryption, $passphrase);
+            if ($init['success']) {
+                break;
+            }
+            sleep(3);
+        }
+        if (!$init['success']) {
+            $errorMsg = trim((string) ($init['stderr'] ?? $init['output'] ?? 'unknown error'));
+            $this->db->delete('remote_ssh_configs', 'id = ?', [$locationId]);
+            $rollback = $this->deleteRemoteRepo($account, $repoId);
+            $this->db->insert('server_log', [
+                'agent_id' => $agentId,
+                'level' => 'error',
+                'message' => "borg init failed on new BorgBase repo \"{$name}\" ({$repoId}): {$errorMsg}"
+                    . ($rollback['success'] ? ' — removed it from BorgBase again' : ' — could not remove it from BorgBase: ' . $rollback['error']),
+            ]);
+            return ['success' => false, 'error' => "BorgBase created the repository but borg init failed: {$errorMsg}"];
+        }
+
+        $repositoryId = $this->db->insert('repositories', [
+            'agent_id' => $agentId,
+            'storage_type' => 'remote_ssh',
+            'remote_ssh_config_id' => $locationId,
+            'name' => $safeName,
+            'path' => $repoPath,
+            'encryption' => $encryption,
+            'passphrase_encrypted' => $encryption !== 'none' ? Encryption::encrypt($passphrase) : null,
+        ]);
+        $this->db->insert('server_log', [
+            'agent_id' => $agentId,
+            'level' => 'info',
+            'message' => "Repository \"{$safeName}\" created on BorgBase ({$repoId}, {$region}) for {$agent['name']} and initialized ({$encryption})",
+        ]);
+        $this->refreshAccount((int) $account['id']);
+
+        return [
+            'success' => true,
+            'repository_id' => $repositoryId,
+            'location_id' => $locationId,
+            'repo' => $created['repo'],
+            'path' => $repoPath,
+        ];
+    }
+
+    /** Same slug rule as RepositoryController: the vanity name stays in BBS, this goes in paths. */
+    public static function sanitizePathName(string $name): string
+    {
+        $slug = mb_strtolower($name, 'UTF-8');
+        $slug = preg_replace('/[^a-z0-9_-]+/', '-', $slug);
+        $slug = preg_replace('/-{2,}/', '-', $slug);
+        $slug = trim($slug, '-');
+        return $slug ?: 'repo';
+    }
+
+    public static function generatePassphrase(): string
+    {
+        $segments = [];
+        for ($i = 0; $i < 5; $i++) {
+            $segments[] = strtoupper(substr(bin2hex(random_bytes(3)), 0, 4));
+        }
+        return implode('-', $segments);
+    }
+
+    /**
      * Add a storage location for a repository that already exists on
      * BorgBase. Uses the account's key, which BorgBase only lets in if the
      * key is on the repo's access list; the caller should test the

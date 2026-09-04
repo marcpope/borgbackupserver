@@ -4,7 +4,6 @@ namespace BBS\Controllers;
 
 use BBS\Core\Controller;
 use BBS\Services\BorgBaseService;
-use BBS\Services\Encryption;
 use BBS\Services\RemoteSshService;
 
 /**
@@ -219,68 +218,11 @@ class BorgBaseAccountController extends Controller
             $this->redirect($back);
         }
 
-        $limit = (int) ($account['plan_max_repos'] ?? 0);
-        $count = (int) ($account['remote_repo_count'] ?? 0);
-        if ($limit > 0 && $count >= $limit) {
-            $this->flash('danger', "This BorgBase plan allows {$limit} repositories and all are in use.");
+        $result = $service->provisionRepository($account, $agent, $name, $region, $quotaGb, $encryption);
+        if (!$result['success']) {
+            $this->flash('danger', $result['error']);
             $this->redirect($back);
         }
-
-        $created = $service->createRepo($account, $name, $region, $quotaGb);
-        if (!$created['success']) {
-            $this->flash('danger', 'BorgBase could not create the repository: ' . $created['error']);
-            $this->redirect($back);
-        }
-        $locationId = (int) $created['location_id'];
-        $repoId = (string) $created['repo']['id'];
-
-        // Initialise borg on it. A new BorgBase repo can take a moment to
-        // accept its first SSH login, so give it a couple of tries.
-        $remoteSshService = new RemoteSshService();
-        $config = $remoteSshService->getById($locationId);
-        $safeName = $this->sanitizePathName($name);
-        $repoPath = $remoteSshService->buildRepoPath($config, $safeName);
-        $passphrase = $encryption !== 'none' ? $this->generatePassphrase() : '';
-
-        $init = ['success' => false, 'output' => ''];
-        for ($attempt = 1; $attempt <= 3; $attempt++) {
-            $init = $remoteSshService->initRepo($config, $repoPath, $encryption, $passphrase);
-            if ($init['success']) {
-                break;
-            }
-            sleep(3);
-        }
-        if (!$init['success']) {
-            // Roll back so a failed init doesn't leave an empty repo counting
-            // against the plan's limit.
-            $errorMsg = trim((string) ($init['stderr'] ?? $init['output'] ?? 'unknown error'));
-            $this->db->delete('remote_ssh_configs', 'id = ?', [$locationId]);
-            $rollback = $service->deleteRemoteRepo($account, $repoId);
-            $this->db->insert('server_log', [
-                'agent_id' => $agentId,
-                'level' => 'error',
-                'message' => "borg init failed on new BorgBase repo \"{$name}\" ({$repoId}): {$errorMsg}"
-                    . ($rollback['success'] ? ' — removed it from BorgBase again' : ' — could not remove it from BorgBase: ' . $rollback['error']),
-            ]);
-            $this->flash('danger', "BorgBase created the repository but borg init failed: {$errorMsg}");
-            $this->redirect($back);
-        }
-
-        $this->db->insert('repositories', [
-            'agent_id' => $agentId,
-            'storage_type' => 'remote_ssh',
-            'remote_ssh_config_id' => $locationId,
-            'name' => $safeName,
-            'path' => $repoPath,
-            'encryption' => $encryption,
-            'passphrase_encrypted' => $encryption !== 'none' ? Encryption::encrypt($passphrase) : null,
-        ]);
-        $this->db->insert('server_log', [
-            'agent_id' => $agentId,
-            'level' => 'info',
-            'message' => "Repository \"{$safeName}\" created on BorgBase ({$repoId}, {$region}) for {$agent['name']} and initialized ({$encryption})",
-        ]);
-        $service->refreshAccount($id);
 
         $this->flash('success', "Repository \"{$name}\" created on BorgBase for {$agent['name']}.");
         $this->redirect($back);
@@ -356,23 +298,5 @@ class BorgBaseAccountController extends Controller
         $this->flash('success', "\"{$config['name']}\" removed" . ($deleteRemote ? ' and deleted on BorgBase.' : '. The repository still exists on BorgBase.'));
         (new BorgBaseService())->refreshAccount($id);
         $this->redirect($back);
-    }
-
-    private function sanitizePathName(string $name): string
-    {
-        $slug = mb_strtolower($name, 'UTF-8');
-        $slug = preg_replace('/[^a-z0-9_-]+/', '-', $slug);
-        $slug = preg_replace('/-{2,}/', '-', $slug);
-        $slug = trim($slug, '-');
-        return $slug ?: 'repo';
-    }
-
-    private function generatePassphrase(): string
-    {
-        $segments = [];
-        for ($i = 0; $i < 5; $i++) {
-            $segments[] = strtoupper(substr(bin2hex(random_bytes(3)), 0, 4));
-        }
-        return implode('-', $segments);
     }
 }

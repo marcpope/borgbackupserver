@@ -393,6 +393,17 @@ class App
         $this->router->map('PUT',    '/api/v1/remote-ssh-configs/[i:id]', 'Api\\StorageApiController@updateRemote');
         $this->router->map('DELETE', '/api/v1/remote-ssh-configs/[i:id]', 'Api\\StorageApiController@deleteRemote');
         $this->router->map('POST',   '/api/v1/remote-ssh-configs/[i:id]/test', 'Api\\StorageApiController@testRemote');
+
+        // BorgBase accounts (specs/borgbase.md in the app repo)
+        $this->router->map('GET',    '/api/v1/borgbase-accounts', 'Api\\BorgBaseApiController@index');
+        $this->router->map('POST',   '/api/v1/borgbase-accounts', 'Api\\BorgBaseApiController@create');
+        $this->router->map('GET',    '/api/v1/borgbase-accounts/[i:id]', 'Api\\BorgBaseApiController@show');
+        $this->router->map('PUT',    '/api/v1/borgbase-accounts/[i:id]', 'Api\\BorgBaseApiController@update');
+        $this->router->map('DELETE', '/api/v1/borgbase-accounts/[i:id]', 'Api\\BorgBaseApiController@delete');
+        $this->router->map('POST',   '/api/v1/borgbase-accounts/[i:id]/refresh', 'Api\\BorgBaseApiController@refresh');
+        $this->router->map('POST',   '/api/v1/borgbase-accounts/[i:id]/repos', 'Api\\BorgBaseApiController@createRepo');
+        $this->router->map('POST',   '/api/v1/borgbase-accounts/[i:id]/repos/import', 'Api\\BorgBaseApiController@importRepo');
+        $this->router->map('DELETE', '/api/v1/borgbase-accounts/[i:id]/locations/[i:locationId]', 'Api\\BorgBaseApiController@deleteLocation');
         $this->router->map('GET', '/api/v1/s3-credentials', 'Api\\AdminApiController@getS3Credentials');
         $this->router->map('POST', '/api/v1/s3-credentials', 'Api\\AdminApiController@setS3Credentials');
         $this->router->map('DELETE', '/api/v1/s3-credentials', 'Api\\AdminApiController@clearS3Credentials');
