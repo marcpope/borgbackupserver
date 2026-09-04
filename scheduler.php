@@ -586,8 +586,18 @@ if ($isWorker) {
         ? '>> ' . escapeshellarg($schedulerLog) . ' 2>&1'
         : '> /dev/null 2>&1';
     foreach ($queueManager->getServerSideJobs() as $pending) {
+        // The cron entry holds the scheduler's flock on an open descriptor,
+        // and a child inherits every descriptor its parent has. Left alone,
+        // the worker carries that lock for as long as its job runs, and every
+        // later minute's `flock -n` fails: nothing gets scheduled and the
+        // dashboard reports the scheduler dead, which is what the worker
+        // split was meant to end. So the worker is started with the
+        // inherited descriptors above stdio closed. The lock is fd 3 under
+        // the cron entry (stdio, then the lock file); 4-9 covers the DB
+        // socket and script handles, which the worker reopens itself.
+        // Single-digit fds only: dash rejects larger numbers in redirections.
         $cmd = sprintf(
-            'nohup %s %s --job=%d %s &',
+            'nohup %s %s --job=%d 3>&- 4>&- 5>&- 6>&- 7>&- 8>&- 9>&- %s &',
             escapeshellarg(PHP_BINARY),
             escapeshellarg(__FILE__),
             (int) $pending['id'],
