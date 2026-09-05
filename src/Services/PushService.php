@@ -258,6 +258,26 @@ class PushService
                             : 'Offline — stopped checking in',
                         'deep_link' => $clientId > 0 ? "/clients/{$clientId}" : '/clients'];
             case 'storage_low':
+                // Name the location(s) over the threshold, from the same
+                // figures the scheduler alerted on. One location: it is the
+                // title, the numbers are the body. Several: list them.
+                $low = $this->lowStorage();
+                if (count($low) === 1) {
+                    $st = $low[0];
+                    return ['title' => $st['label'] . ' is running low',
+                            'body' => $st['used_percent'] . '% used, '
+                                . ServerStats::formatBytes((int) $st['free_bytes']) . ' free of '
+                                . ServerStats::formatBytes((int) $st['total_bytes']),
+                            'deep_link' => '/storage-locations'];
+                }
+                if (count($low) > 1) {
+                    return ['title' => count($low) . ' storage locations running low',
+                            'body' => implode(', ', array_map(
+                                fn($st) => $st['label'] . ' ' . $st['used_percent'] . '%',
+                                $low
+                            )),
+                            'deep_link' => '/storage-locations'];
+                }
                 return ['title' => 'Storage running low',
                         'body' => 'A storage location passed your threshold.',
                         'deep_link' => '/storage-locations'];
@@ -271,6 +291,32 @@ class PushService
                         'body' => $title !== null ? "{$label}. Open for details." : 'Open for details.',
                         'deep_link' => $deepLink];
         }
+    }
+
+    /**
+     * Storage endpoints at or over the server-wide threshold right now.
+     * Labels lose the "Remote storage" prefix the log message carries: on a
+     * lock screen the host's name is what matters.
+     */
+    private function lowStorage(): array
+    {
+        $threshold = (int) $this->setting('storage_alert_threshold', '90');
+        if ($threshold < 1 || $threshold > 100) {
+            $threshold = 90;
+        }
+        $low = [];
+        try {
+            foreach (ServerStats::storageUsageStats($this->db) as $st) {
+                if ($st['used_percent'] < $threshold) {
+                    continue;
+                }
+                $st['label'] = preg_replace('/^Remote storage "(.*)"$/', '$1', $st['label']);
+                $low[] = $st;
+            }
+        } catch (\Throwable $e) {
+            // Fall back to the generic wording rather than lose the push.
+        }
+        return $low;
     }
 
     private function breakerOpen(): bool

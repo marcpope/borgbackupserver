@@ -641,6 +641,66 @@ class ServerStats
     }
 
     /**
+     * Usage for every storage endpoint: local locations (or the legacy
+     * storage_path) plus remote SSH hosts with a known size. One list for
+     * the scheduler's low-storage check and for the push notification that
+     * names the location, so both work from the same figures.
+     *
+     * @return array<int, array{label: string, detail: string, total_bytes: int, free_bytes: int, used_percent: float}>
+     */
+    public static function storageUsageStats(\BBS\Core\Database $db): array
+    {
+        $locations = $db->fetchAll("SELECT * FROM storage_locations ORDER BY id");
+        if (empty($locations)) {
+            $storagePathSetting = $db->fetchOne("SELECT `value` FROM settings WHERE `key` = 'storage_path'");
+            if (!empty($storagePathSetting['value'])) {
+                $locations = [['path' => $storagePathSetting['value'], 'label' => 'Default']];
+            }
+        }
+
+        $stats = [];
+        foreach ($locations as $sl) {
+            $slPath = $sl['path'] ?? '';
+            if (empty($slPath) || !is_dir($slPath)) {
+                continue;
+            }
+            // Not disk_free_space(): a WebDAV mount answers it from the local
+            // cache disk, which would mail everyone that a 100 GB share was
+            // full because the server's own disk was (#415). A location whose
+            // capacity we cannot establish is skipped.
+            $capacity = self::capacityForLocation($sl);
+            if ($capacity === null || ($capacity['free'] ?? null) === null) {
+                continue;
+            }
+            $stats[] = [
+                'label'        => $sl['label'] ?? $slPath,
+                'detail'       => $slPath,
+                'total_bytes'  => (int) $capacity['total'],
+                'free_bytes'   => (int) $capacity['free'],
+                'used_percent' => $capacity['percent'],
+            ];
+        }
+
+        $remoteConfigs = $db->fetchAll("SELECT * FROM remote_ssh_configs WHERE disk_total_bytes IS NOT NULL AND disk_total_bytes > 0");
+        foreach ($remoteConfigs as $rc) {
+            $total = (int) $rc['disk_total_bytes'];
+            $free  = (int) $rc['disk_free_bytes'];
+            if ($total <= 0) {
+                continue;
+            }
+            $stats[] = [
+                'label'        => "Remote storage \"{$rc['name']}\"",
+                'detail'       => "{$rc['remote_user']}@{$rc['remote_host']}",
+                'total_bytes'  => $total,
+                'free_bytes'   => $free,
+                'used_percent' => round((($total - $free) / $total) * 100, 1),
+            ];
+        }
+
+        return $stats;
+    }
+
+    /**
      * Why a location has no capacity figures, for the UI to explain itself.
      * Null when the figures are fine.
      */

@@ -2609,46 +2609,9 @@ if ((int) date('i') % 15 === 0) {
 // syscalls run once regardless of how many users are on the server.
 $notificationService = $notificationService ?? new NotificationService();
 
-$storageLocations = $db->fetchAll("SELECT * FROM storage_locations ORDER BY id");
-if (empty($storageLocations)) {
-    $storagePathSetting = $db->fetchOne("SELECT `value` FROM settings WHERE `key` = 'storage_path'");
-    if (!empty($storagePathSetting['value'])) {
-        $storageLocations = [['path' => $storagePathSetting['value'], 'label' => 'Default']];
-    }
-}
-
-// Collect usage for every storage endpoint once.
-$storageStats = []; // [{label, detail, total_bytes, free_bytes, used_percent}]
-foreach ($storageLocations as $sl) {
-    $slPath = $sl['path'] ?? '';
-    if (empty($slPath) || !is_dir($slPath)) continue;
-    // Not disk_free_space(): a WebDAV mount answers it from the local cache
-    // disk, which would mail everyone that a 100 GB share was full because the
-    // server's own disk was (#415). A location whose capacity we cannot
-    // establish is skipped — no figure is better than a wrong one.
-    $capacity = \BBS\Services\ServerStats::capacityForLocation($sl);
-    if ($capacity === null || ($capacity['free'] ?? null) === null) continue;
-    $storageStats[] = [
-        'label'        => $sl['label'] ?? $slPath,
-        'detail'       => $slPath,
-        'total_bytes'  => (int) $capacity['total'],
-        'free_bytes'   => (int) $capacity['free'],
-        'used_percent' => $capacity['percent'],
-    ];
-}
-$remoteConfigs = $db->fetchAll("SELECT * FROM remote_ssh_configs WHERE disk_total_bytes IS NOT NULL AND disk_total_bytes > 0");
-foreach ($remoteConfigs as $rc) {
-    $total = (int) $rc['disk_total_bytes'];
-    $free  = (int) $rc['disk_free_bytes'];
-    if ($total <= 0) continue;
-    $storageStats[] = [
-        'label'        => "Remote storage \"{$rc['name']}\"",
-        'detail'       => "{$rc['remote_user']}@{$rc['remote_host']}",
-        'total_bytes'  => $total,
-        'free_bytes'   => $free,
-        'used_percent' => round((($total - $free) / $total) * 100, 1),
-    ];
-}
+// Collect usage for every storage endpoint once. Shared with the push
+// notification, which names the low location(s) from the same figures.
+$storageStats = \BBS\Services\ServerStats::storageUsageStats($db); // [{label, detail, total_bytes, free_bytes, used_percent}]
 
 // The server-wide threshold, shared with HealthService::checkStorage().
 $thresholdRow = $db->fetchOne("SELECT `value` FROM settings WHERE `key` = 'storage_alert_threshold'");
