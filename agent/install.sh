@@ -9,6 +9,8 @@ INSTALL_DIR="/opt/bbs-agent"
 CONFIG_DIR="/etc/bbs-agent"
 SERVER_URL=""
 API_KEY=""
+CA_CERT=""
+CURL_INSECURE=""
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Colors and formatting
@@ -100,9 +102,26 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --server) SERVER_URL="$2"; shift 2 ;;
         --key)    API_KEY="$2";    shift 2 ;;
+        --ca-cert) CA_CERT="$2";   shift 2 ;;
+        --insecure) CURL_INSECURE="--insecure"; shift ;;
         *)        echo -e "${RED}Unknown option: $1${NC}"; exit 1 ;;
     esac
 done
+
+# Build SSL arguments for curl: --ca-cert for custom CA, --insecure for
+# self-signed certs. Both are opt-in; the default is normal certificate
+# verification. Without these flags, installs behind a reverse proxy with
+# a self-signed certificate fail with no obvious hint (see #476).
+CURL_SSL_ARGS=()
+if [ -n "$CA_CERT" ]; then
+    CURL_SSL_ARGS+=("--ca-cert" "$CA_CERT")
+fi
+if [ -n "$CURL_INSECURE" ]; then
+    CURL_SSL_ARGS+=("--insecure")
+    print_warning "Running with --insecure: certificate verification is disabled."
+    print_warning "This exposes the install to man-in-the-middle attacks."
+    print_warning "Prefer --ca-cert /path/to/ca.pem for a custom CA bundle."
+fi
 
 if [ -z "$SERVER_URL" ] || [ -z "$API_KEY" ]; then
     echo -e "${RED}Usage: install.sh --server https://your-server --key API_KEY${NC}"
@@ -512,11 +531,11 @@ install_agent() {
 
     # Download agent script from server
     if command -v curl &>/dev/null; then
-        curl -sf -o "$INSTALL_DIR/bbs-agent.py" "$SERVER_URL/api/agent/download?file=bbs-agent.py"
+        curl -sf "${CURL_SSL_ARGS[@]}" -o "$INSTALL_DIR/bbs-agent.py" "$SERVER_URL/api/agent/download?file=bbs-agent.py"
     elif command -v wget &>/dev/null; then
-        wget -q -O "$INSTALL_DIR/bbs-agent.py" "$SERVER_URL/api/agent/download?file=bbs-agent.py"
+        wget -q ${CURL_INSECURE:+--no-check-certificate} -O "$INSTALL_DIR/bbs-agent.py" "$SERVER_URL/api/agent/download?file=bbs-agent.py"
     elif command -v fetch &>/dev/null; then
-        fetch -q -o "$INSTALL_DIR/bbs-agent.py" "$SERVER_URL/api/agent/download?file=bbs-agent.py"
+        fetch -q ${CURL_INSECURE:+-k} -o "$INSTALL_DIR/bbs-agent.py" "$SERVER_URL/api/agent/download?file=bbs-agent.py"
     else
         stop_spinner
         print_error "curl, wget, or fetch required"
@@ -527,21 +546,21 @@ install_agent() {
 
     # Download the startup wrapper (provides auto-recovery from bad updates)
     if command -v curl &>/dev/null; then
-        curl -sf -o "$INSTALL_DIR/bbs-agent-start.sh" "$SERVER_URL/api/agent/download?file=bbs-agent-start.sh" 2>/dev/null || true
+        curl -sf "${CURL_SSL_ARGS[@]}" -o "$INSTALL_DIR/bbs-agent-start.sh" "$SERVER_URL/api/agent/download?file=bbs-agent-start.sh" 2>/dev/null || true
     elif command -v wget &>/dev/null; then
-        wget -q -O "$INSTALL_DIR/bbs-agent-start.sh" "$SERVER_URL/api/agent/download?file=bbs-agent-start.sh" 2>/dev/null || true
+        wget -q ${CURL_INSECURE:+--no-check-certificate} -O "$INSTALL_DIR/bbs-agent-start.sh" "$SERVER_URL/api/agent/download?file=bbs-agent-start.sh" 2>/dev/null || true
     elif command -v fetch &>/dev/null; then
-        fetch -q -o "$INSTALL_DIR/bbs-agent-start.sh" "$SERVER_URL/api/agent/download?file=bbs-agent-start.sh" 2>/dev/null || true
+        fetch -q ${CURL_INSECURE:+-k} -o "$INSTALL_DIR/bbs-agent-start.sh" "$SERVER_URL/api/agent/download?file=bbs-agent-start.sh" 2>/dev/null || true
     fi
     chmod +x "$INSTALL_DIR/bbs-agent-start.sh" 2>/dev/null || true
 
     # Download uninstaller
     if command -v curl &>/dev/null; then
-        curl -sf -o "$INSTALL_DIR/uninstall.sh" "$SERVER_URL/api/agent/download?file=uninstall.sh" 2>/dev/null || true
+        curl -sf "${CURL_SSL_ARGS[@]}" -o "$INSTALL_DIR/uninstall.sh" "$SERVER_URL/api/agent/download?file=uninstall.sh" 2>/dev/null || true
     elif command -v wget &>/dev/null; then
-        wget -q -O "$INSTALL_DIR/uninstall.sh" "$SERVER_URL/api/agent/download?file=uninstall.sh" 2>/dev/null || true
+        wget -q ${CURL_INSECURE:+--no-check-certificate} -O "$INSTALL_DIR/uninstall.sh" "$SERVER_URL/api/agent/download?file=uninstall.sh" 2>/dev/null || true
     elif command -v fetch &>/dev/null; then
-        fetch -q -o "$INSTALL_DIR/uninstall.sh" "$SERVER_URL/api/agent/download?file=uninstall.sh" 2>/dev/null || true
+        fetch -q ${CURL_INSECURE:+-k} -o "$INSTALL_DIR/uninstall.sh" "$SERVER_URL/api/agent/download?file=uninstall.sh" 2>/dev/null || true
     fi
     chmod +x "$INSTALL_DIR/uninstall.sh" 2>/dev/null || true
 
@@ -572,11 +591,11 @@ install_ssh_key() {
 
     local response
     if command -v curl &>/dev/null; then
-        response=$(curl -sf -H "Authorization: Bearer $API_KEY" "$SERVER_URL/api/agent/ssh-key" 2>/dev/null || echo "")
+        response=$(curl -sf "${CURL_SSL_ARGS[@]}" -H "Authorization: Bearer $API_KEY" "$SERVER_URL/api/agent/ssh-key" 2>/dev/null || echo "")
     elif command -v wget &>/dev/null; then
-        response=$(wget -q -O - --header="Authorization: Bearer $API_KEY" "$SERVER_URL/api/agent/ssh-key" 2>/dev/null || echo "")
+        response=$(wget -q ${CURL_INSECURE:+--no-check-certificate} -O - --header="Authorization: Bearer $API_KEY" "$SERVER_URL/api/agent/ssh-key" 2>/dev/null || echo "")
     elif command -v fetch &>/dev/null; then
-        response=$(fetch -q -o - "$SERVER_URL/api/agent/ssh-key" 2>/dev/null || echo "")
+        response=$(fetch -q ${CURL_INSECURE:+-k} -o - "$SERVER_URL/api/agent/ssh-key" 2>/dev/null || echo "")
     fi
 
     stop_spinner
@@ -637,7 +656,7 @@ install_service() {
         start_spinner "Configuring launchd service..."
 
         # Download the compiled macOS wrapper binary (handles FDA permissions)
-        curl -sf -o "$INSTALL_DIR/bbs-mac-agent" \
+        curl -sf "${CURL_SSL_ARGS[@]}" -o "$INSTALL_DIR/bbs-mac-agent" \
             "$SERVER_URL/api/agent/download?file=bbs-mac-agent" 2>/dev/null || true
         chmod 755 "$INSTALL_DIR/bbs-mac-agent"
 
