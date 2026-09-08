@@ -124,7 +124,7 @@ if [ -n "$CURL_INSECURE" ]; then
 fi
 
 if [ -z "$SERVER_URL" ] || [ -z "$API_KEY" ]; then
-    echo -e "${RED}Usage: install.sh --server https://your-server --key API_KEY${NC}"
+    echo -e "${RED}Usage: install.sh --server https://your-server --key API_KEY [--ca-cert /path/to/ca.pem] [--insecure]${NC}"
     exit 1
 fi
 
