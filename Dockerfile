@@ -67,7 +67,7 @@ RUN pip3 install --break-system-packages --no-cache-dir apprise wheel>=0.46.2 &&
     rm -rf /root/.cache /usr/lib/python3/dist-packages/wheel*
 
 # Install PHP extensions
-RUN docker-php-ext-install pdo pdo_mysql mbstring
+RUN docker-php-ext-install pdo pdo_mysql mbstring gd
 
 # PHP configuration: increase max_execution_time (default 30s is too short for
 # large backup operations, catalog imports, and API calls under load).
