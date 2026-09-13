@@ -271,7 +271,7 @@ apt-get update -qq
 
 PACKAGES=(
     apache2 libapache2-mod-php
-    php php-mysql php-mbstring php-xml php-curl php-memcached
+    php php-mysql php-mbstring php-xml php-curl php-memcached php-gd
     mysql-server borgbackup composer git openssh-server
     memcached certbot python3-certbot-apache
     dnsutils  # for dig
