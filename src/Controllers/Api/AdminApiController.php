@@ -1128,6 +1128,9 @@ class AdminApiController extends Controller
         if (!$plugin) {
             $this->json(['error' => "Unknown plugin: {$pluginSlug}"], 404);
         }
+        if ($pluginSlug === 'shell_hook' && ($hookProblem = \BBS\Services\PluginManager::hookConfigProblem($config)) !== null) {
+            $this->json(['error' => $hookProblem], 422);
+        }
 
         // Check duplicate name
         $existing = $this->db->fetchOne(
@@ -5151,6 +5154,9 @@ class AdminApiController extends Controller
                     continue;
                 }
                 $stored[$field] = $value;
+            }
+            if ($existing['slug'] === 'shell_hook' && ($hookProblem = \BBS\Services\PluginManager::hookConfigProblem($stored)) !== null) {
+                $this->json(['error' => $hookProblem], 422);
             }
             $data['config'] = json_encode($stored);
         }

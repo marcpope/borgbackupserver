@@ -52,7 +52,7 @@ if not hasattr(subprocess, "run"):
     subprocess.run = _subprocess_run
     subprocess.CompletedProcess = _CompletedProcess
 
-AGENT_VERSION = "2.96.1"
+AGENT_VERSION = "2.96.2"
 
 # Ed25519 public keys, hex, that may sign an update to this script and to
 # the start wrapper. Kept in step with agent/signing-key.pub. An update the
@@ -382,6 +382,8 @@ def load_config():
         "poll_interval": config.getint("agent", "poll_interval", fallback=30),
         "auto_update": auto_update,
         "require_signed_updates": require_signed,
+        # Optional: confine shell hooks to one directory on this client.
+        "hooks_dir": config.get("agent", "hooks_dir", fallback="").strip() or None,
         # TLS towards the server (#476): a CA bundle for a self-signed or
         # private-CA certificate, or no verification at all. Written by the
         # installer from --cacert / --insecure; default is normal verification.
@@ -2665,6 +2667,76 @@ def _parse_script_command(value):
     return argv, argv[0]
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# What a shell hook may run. The hook field names a script the operator put
+# on this client, with optional arguments. It never went through a shell,
+# but nothing stopped the first word from being /bin/sh, python3 or rm,
+# which turned the field into "run anything as root" for whoever controls
+# the server. The rules below run on the client, where the server cannot
+# change them: the program must be an absolute path to a regular file that
+# is not in a system binary directory and is not an interpreter, shell or
+# destructive utility by name, wherever it lives. A client can go further
+# with hooks_dir in config.ini, which confines hooks to one directory.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_HOOK_SYSTEM_DIRS = (
+    "/bin", "/sbin", "/usr/bin", "/usr/sbin", "/usr/lib", "/usr/lib32", "/usr/lib64",
+    "/usr/libexec", "/lib", "/lib32", "/lib64", "/snap", "/usr/share", "/etc/alternatives",
+    "/System", "/usr/libexec", "/opt/homebrew/bin", "/opt/homebrew/sbin", "/opt/local/bin",
+)
+
+_HOOK_DENIED_NAMES = frozenset("""
+    sh bash dash zsh ksh mksh csh tcsh fish ash busybox env sudo su doas runuser
+    python python2 python3 pypy pypy3 perl ruby php node nodejs deno bun lua luajit tclsh
+    awk gawk mawk nawk sed xargs find rm rmdir shred dd mkfs wipefs fdisk sfdisk parted
+    chmod chown chgrp mv cp ln unlink truncate install nice ionice nohup timeout setsid
+    chroot unshare nsenter systemctl service init shutdown reboot halt poweroff telinit
+    kill killall pkill curl wget nc ncat netcat socat ssh scp sftp rsync borg docker podman
+    kubectl at crontab eval exec command xdg-open open osascript launchctl
+    cmd powershell pwsh wscript cscript mshta rundll32 regsvr32 certutil bitsadmin msiexec
+""".split())
+
+
+_AGENT_CONFIG = {}
+
+
+def _hook_command_refusal(exe):
+    """Why `exe`, the program a hook names, may not run; None when it may."""
+    if not exe:
+        return "no program named"
+    if not os.path.isabs(exe):
+        return "the program must be an absolute path"
+    try:
+        real = os.path.realpath(exe)
+    except Exception:
+        real = exe
+    base = os.path.basename(real).lower()
+    stem = base
+    for suffix in (".exe", ".bat", ".cmd", ".ps1", ".com"):
+        if stem.endswith(suffix):
+            stem = stem[:-len(suffix)]
+    # python3.12, php8.4, perl5.36 name the same interpreters.
+    stem = re.sub(r"[0-9][0-9.]*$", "", stem)
+    if stem in _HOOK_DENIED_NAMES or base in _HOOK_DENIED_NAMES:
+        return "{} is a shell, interpreter or system utility; hooks must name a script of your own".format(base)
+    if IS_WINDOWS:
+        sysroot = (os.environ.get("SystemRoot") or "C:\\Windows").rstrip("\\").lower()
+        if real.lower().startswith(sysroot + "\\"):
+            return "programs under {} cannot be used as hooks".format(sysroot)
+    else:
+        for d in _HOOK_SYSTEM_DIRS:
+            if real == d or real.startswith(d + "/"):
+                return "programs under {} cannot be used as hooks; put your script elsewhere (for example /usr/local/bin or /etc/bbs-agent/hooks)".format(d)
+    hooks_dir = _AGENT_CONFIG.get("hooks_dir")
+    if hooks_dir:
+        root = os.path.realpath(hooks_dir).rstrip(os.sep) + os.sep
+        if not real.startswith(root):
+            return "this client only runs hooks from {} (hooks_dir in config.ini)".format(hooks_dir)
+    if os.path.isdir(real):
+        return "{} is a directory".format(exe)
+    return None
+
+
 def _diagnose_script_path(exe_path):
     """Return a human-readable diagnosis of why a script path isn't runnable.
     Returns None when the file exists, is readable, and is executable for the
@@ -2872,6 +2944,14 @@ def execute_plugin_shell_hook(config, task=None):
 
     pre_argv, pre_exe = _parse_script_command(pre_script)
 
+    refusal = _hook_command_refusal(pre_exe)
+    if refusal:
+        msg = "Pre-script refused: {}".format(refusal)
+        if abort_on_failure:
+            raise Exception(msg)
+        logger.warning(msg)
+        return result
+
     problem = _diagnose_script_path(pre_exe)
     if problem:
         msg = "Pre-script cannot run: {}\n{}".format(pre_exe, problem)
@@ -2940,6 +3020,11 @@ def cleanup_plugin_shell_hook(config, plugin_result, task=None, backup_result=No
         return "post-script deferred until prune and offsite sync finish"
 
     post_argv, post_exe = _parse_script_command(post_script)
+
+    refusal = _hook_command_refusal(post_exe)
+    if refusal:
+        logger.warning("Post-script refused: {}".format(refusal))
+        return "Post-script refused: {}".format(refusal)
 
     problem = _diagnose_script_path(post_exe)
     if problem:
@@ -5241,6 +5326,8 @@ def main():
         signal.signal(signal.SIGTERM, signal_handler)
 
     config = load_config()
+    global _AGENT_CONFIG
+    _AGENT_CONFIG = config
     try:
         cleanup_stale_snapshots()
     except Exception as e:
@@ -5347,4 +5434,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-# bbs-signature: v1 89sp38JKvUek6S231qW+cCPjH5QA+YLQAQ74i40F4L08ePyUgwdpS+QibwLbsYwGrrrtjjoRq1KuLymEtsk7BA==
+# bbs-signature: v1 fV9OMydq4Z5ExWwG+mGGEhbvgf2tCg+bHELQOGUL8+zhAq7ie5rW7I+giCRbYAOF1gZFetY+biLHo5pm5qlVAg==

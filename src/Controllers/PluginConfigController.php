@@ -81,6 +81,12 @@ class PluginConfigController extends Controller
 
         $config = $this->sanitizeHostedConfig($pluginId, $config);
 
+        $slugRow = $this->db->fetchOne("SELECT slug FROM plugins WHERE id = ?", [$pluginId]);
+        if (($slugRow['slug'] ?? '') === 'shell_hook' && ($hookProblem = PluginManager::hookConfigProblem($config)) !== null) {
+            $this->flash('danger', $hookProblem);
+            $this->redirect("/clients/{$id}?tab=plugins");
+        }
+
         // Duplicate names hit the unique_agent_config_name key — catch it
         // up front instead of surfacing a raw PDOException
         $duplicate = $this->db->fetchOne(
@@ -153,6 +159,12 @@ class PluginConfigController extends Controller
         }
 
         $config = $this->sanitizeHostedConfigByConfigId($configId, $config);
+
+        $slugRow = $this->db->fetchOne("SELECT p.slug FROM plugin_configs pc JOIN plugins p ON p.id = pc.plugin_id WHERE pc.id = ?", [$configId]);
+        if (($slugRow['slug'] ?? '') === 'shell_hook' && ($hookProblem = PluginManager::hookConfigProblem($config)) !== null) {
+            $this->flash('danger', $hookProblem);
+            $this->redirect("/clients/{$id}?tab=plugins");
+        }
 
         // Renaming to another config's name would hit the same unique key
         $duplicate = $this->db->fetchOne(

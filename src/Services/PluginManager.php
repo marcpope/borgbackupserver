@@ -360,6 +360,70 @@ class PluginManager
         return $plugin['slug'] ?? '';
     }
 
+
+    /**
+     * Why a shell hook's program may not run, or null when it may (#hooks).
+     * The agent enforces the same rules on the client, where the server
+     * cannot change them; this copy gives the form an answer before saving.
+     * The program must be an absolute path that is not in a system binary
+     * directory and is not a shell, interpreter or destructive utility by
+     * name. Arguments after it are fine: nothing goes through a shell.
+     */
+    public static function hookCommandProblem(string $value): ?string
+    {
+        $value = trim($value);
+        if ($value === '') {
+            return null;
+        }
+        $tokens = preg_split('/\s+/', $value);
+        $exe = trim((string) $tokens[0], "\"'");
+        if ($exe === '') {
+            return null;
+        }
+        $windows = (bool) preg_match('#^[A-Za-z]:[\\\\/]#', $exe);
+        if (!$windows && $exe[0] !== '/') {
+            return 'The script must be an absolute path, for example /usr/local/bin/pre-backup.sh';
+        }
+        $base = strtolower(basename(str_replace('\\', '/', $exe)));
+        $stem = preg_replace('/\.(exe|bat|cmd|ps1|com)$/', '', $base);
+        $stem = preg_replace('/[0-9][0-9.]*$/', '', $stem);
+        $denied = ['sh', 'bash', 'dash', 'zsh', 'ksh', 'mksh', 'csh', 'tcsh', 'fish', 'ash', 'busybox', 'env', 'sudo', 'su', 'doas', 'runuser',
+            'python', 'pypy', 'perl', 'ruby', 'php', 'node', 'nodejs', 'deno', 'bun', 'lua', 'luajit', 'tclsh',
+            'awk', 'gawk', 'mawk', 'nawk', 'sed', 'xargs', 'find', 'rm', 'rmdir', 'shred', 'dd', 'mkfs', 'wipefs', 'fdisk', 'sfdisk', 'parted',
+            'chmod', 'chown', 'chgrp', 'mv', 'cp', 'ln', 'unlink', 'truncate', 'install', 'nice', 'ionice', 'nohup', 'timeout', 'setsid',
+            'chroot', 'unshare', 'nsenter', 'systemctl', 'service', 'init', 'shutdown', 'reboot', 'halt', 'poweroff', 'telinit',
+            'kill', 'killall', 'pkill', 'curl', 'wget', 'nc', 'ncat', 'netcat', 'socat', 'ssh', 'scp', 'sftp', 'rsync', 'borg', 'docker', 'podman',
+            'kubectl', 'at', 'crontab', 'eval', 'exec', 'command', 'xdg-open', 'open', 'osascript', 'launchctl',
+            'cmd', 'powershell', 'pwsh', 'wscript', 'cscript', 'mshta', 'rundll32', 'regsvr32', 'certutil', 'bitsadmin', 'msiexec'];
+        if (in_array($stem, $denied, true) || in_array($base, $denied, true)) {
+            return "{$base} is a shell, interpreter or system utility. A hook must name a script of your own; put the commands inside it.";
+        }
+        if ($windows) {
+            if (preg_match('#^[A-Za-z]:[\\\\/]windows[\\\\/]#i', $exe)) {
+                return 'Programs under the Windows folder cannot be used as hooks.';
+            }
+            return null;
+        }
+        foreach (['/bin', '/sbin', '/usr/bin', '/usr/sbin', '/usr/lib', '/usr/lib32', '/usr/lib64', '/usr/libexec', '/lib', '/lib32', '/lib64', '/snap', '/usr/share', '/etc/alternatives', '/System', '/opt/homebrew/bin', '/opt/homebrew/sbin', '/opt/local/bin'] as $dir) {
+            if ($exe === $dir || str_starts_with($exe, $dir . '/')) {
+                return "Programs under {$dir} cannot be used as hooks. Put your script somewhere else, for example /usr/local/bin or /etc/bbs-agent/hooks.";
+            }
+        }
+        return null;
+    }
+
+    /** The first hook field of a shell_hook config that fails the rules, as a message; null when both pass. */
+    public static function hookConfigProblem(array $config): ?string
+    {
+        foreach (['pre_script' => 'Pre-backup script', 'post_script' => 'Post-backup script'] as $field => $label) {
+            $problem = self::hookCommandProblem((string) ($config[$field] ?? ''));
+            if ($problem !== null) {
+                return "{$label}: {$problem}";
+            }
+        }
+        return null;
+    }
+
     /**
      * The hosts and disks an Offsite Sync config can copy to, as
      * id => label, for the schema and the forms (#413).
@@ -751,12 +815,12 @@ class PluginManager
                 'pre_script' => [
                     'type' => 'text',
                     'label' => 'Pre-Backup Script Path',
-                    'help' => 'Absolute path to script on the client (e.g. /home/bbs/hooks/pre-backup.sh). Arguments are supported, e.g. /path/script.sh before. Runs before borg starts. Leave empty to skip.',
+                    'help' => 'Absolute path to a script of your own on the client (e.g. /usr/local/bin/pre-backup.sh), with optional arguments. Shells, interpreters and system utilities (/bin/sh -c, python3, rm) are refused: put the commands inside the script. Runs before borg starts. Leave empty to skip.',
                 ],
                 'post_script' => [
                     'type' => 'text',
                     'label' => 'Post-Backup Script Path',
-                    'help' => 'Absolute path to script on the client (e.g. /home/bbs/hooks/post-backup.sh). Arguments are supported, e.g. /path/script.sh after. Runs after borg completes. Leave empty to skip.',
+                    'help' => 'Absolute path to a script of your own on the client, with optional arguments; the same rules as the pre-backup script. Runs after borg completes. Leave empty to skip.',
                 ],
                 'post_script_timing' => [
                     'type' => 'select',
