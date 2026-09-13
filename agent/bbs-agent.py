@@ -52,7 +52,7 @@ if not hasattr(subprocess, "run"):
     subprocess.run = _subprocess_run
     subprocess.CompletedProcess = _CompletedProcess
 
-AGENT_VERSION = "2.96.2"
+AGENT_VERSION = "2.96.3"
 
 # Ed25519 public keys, hex, that may sign an update to this script and to
 # the start wrapper. Kept in step with agent/signing-key.pub. An update the
@@ -3078,6 +3078,9 @@ def test_plugin_shell_hook(config):
             results.append("{}: not configured (skipped)".format(label))
             continue
         argv, exe = _parse_script_command(value)
+        refusal = _hook_command_refusal(exe)
+        if refusal:
+            raise Exception("{} refused: {}".format(label, refusal))
         if not os.path.isfile(exe):
             raise Exception("{} not found: {}".format(label, exe))
         if not os.access(exe, os.X_OK):
@@ -5434,4 +5437,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-# bbs-signature: v1 fV9OMydq4Z5ExWwG+mGGEhbvgf2tCg+bHELQOGUL8+zhAq7ie5rW7I+giCRbYAOF1gZFetY+biLHo5pm5qlVAg==
+# bbs-signature: v1 x29LhOwcBByhs1h7OB8SOvAOtt3OUbnrYWa1Y73uKnh8Ol7xksL/LBH8zsOTXXVjmuMODnJF5WH1uxmyVgXKAw==
