@@ -52,7 +52,7 @@ if not hasattr(subprocess, "run"):
     subprocess.run = _subprocess_run
     subprocess.CompletedProcess = _CompletedProcess
 
-AGENT_VERSION = "2.96.4"
+AGENT_VERSION = "2.96.5"
 
 # Ed25519 public keys, hex, that may sign an update to this script and to
 # the start wrapper. Kept in step with agent/signing-key.pub. An update the
@@ -4032,6 +4032,8 @@ class SnapshotSession(object):
                 vg, lv, lv_size, vg_free = detail
                 size = max(512 * 1024 * 1024, lv_size // 10)
                 size = min(size, vg_free)
+                # lvcreate wants whole 512-byte sectors (#498).
+                size -= size % 512
                 self._sh([_snapshot_tool("lvcreate"), "-s", "-n", name, "-L", "{}b".format(size),
                           "{}/{}".format(vg, lv)], "lvcreate for {}".format(m["mount"]))
                 self.snapshots.append(("lvm", "{}/{}".format(vg, name)))
@@ -5472,4 +5474,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-# bbs-signature: v1 TppISGWjt1jAuuMPxfbtc5wMAO9+Gf5UKxtt3iwlQvEUZ8xItq0divEZnxo05yCT9E1MSmXhsXcEvszWhF9nCQ==
+# bbs-signature: v1 AH7aigtF47bzMhOkyoIjAWSMnl3SoAFdlGfuIUpdLor3Zqj47hlLN7RTQCXr6vQVK/1A6SD4tA/njotU+IptBA==

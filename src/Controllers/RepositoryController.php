@@ -1471,7 +1471,28 @@ class RepositoryController extends Controller
             'message' => "S3 sync enabled for repository \"{$repo['name']}\" to destination \"{$pluginConfig['name']}\"",
         ]);
 
-        $this->flash('success', "Offsite destination \"{$pluginConfig['name']}\" added for repository \"{$repo['name']}\".");
+        $this->flash('success', "Saved: repository \"{$repo['name']}\" now copies to \"{$pluginConfig['name']}\" after each backup. Use Sync now to run the first copy right away.");
+        $this->redirect("/clients/{$agentId}/repo/{$id}");
+    }
+
+    /**
+     * Queue an offsite sync to one destination now (#501).
+     */
+    public function s3SyncRun(int $agentId, int $id): void
+    {
+        $this->requireAuth();
+        $this->verifyCsrf();
+        if (!$this->canAccessAgent($agentId)) {
+            $this->flash('danger', 'Repository not found.');
+            $this->redirect('/clients');
+        }
+        $this->requirePermission(PermissionService::MANAGE_REPOS, $agentId);
+        $result = (new S3SyncService())->queueSync($agentId, $id, (int) ($_POST['plugin_config_id'] ?? 0));
+        if (!$result['ok']) {
+            $this->flash($result['code'] === 409 ? 'warning' : 'danger', $result['error']);
+        } else {
+            $this->flash('success', "Offsite sync queued (job #{$result['job_id']})." . ($result['note'] ? ' ' . $result['note'] : ''));
+        }
         $this->redirect("/clients/{$agentId}/repo/{$id}");
     }
 

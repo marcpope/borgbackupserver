@@ -41,7 +41,7 @@ $sizeLabel = $totalSize > 0 ? \BBS\Services\ServerStats::formatBytes((int) $tota
                 <?php endif; ?>
             </div>
             <?php if ($activeJob): ?>
-            <span class="badge text-bg-info"><i class="bi bi-hourglass-split me-1"></i>Active: <?= $activeJob['task_type'] ?></span>
+            <span class="badge text-bg-info"><i class="bi bi-hourglass-split me-1"></i>Active: <?= htmlspecialchars(\BBS\Core\JobType::label($activeJob['task_type'])) ?></span>
             <?php endif; ?>
         </div>
 
@@ -121,6 +121,13 @@ $sizeLabel = $totalSize > 0 ? \BBS\Services\ServerStats::formatBytes((int) $tota
                             Last sync: <strong><?= $dest['last_s3_sync'] ? \BBS\Core\TimeHelper::ago($dest['last_s3_sync']) : 'Never' ?></strong>
                         </p>
                     </div>
+                    <form method="POST" action="/clients/<?= $agentId ?>/repo/<?= $repo['id'] ?>/s3-sync/run" class="d-inline" title="<?= $activeJob ? 'Runs after the job that is on this repository now' : 'Copy the repository to this destination now' ?>">
+                        <input type="hidden" name="csrf_token" value="<?= $this->csrfToken() ?>">
+                        <input type="hidden" name="plugin_config_id" value="<?= $dest['plugin_config_id'] ?>">
+                        <button type="submit" class="btn btn-sm btn-outline-info me-1">
+                            <i class="bi bi-arrow-repeat me-1"></i>Sync now
+                        </button>
+                    </form>
                     <form method="POST" action="/clients/<?= $agentId ?>/repo/<?= $repo['id'] ?>/s3-config/delete" class="d-inline" data-confirm="Stop syncing to &quot;<?= htmlspecialchars($dest['config_name'], ENT_QUOTES) ?>&quot;?&#10;&#10;The repository will no longer sync to this destination after backups. The copy already there stays.">
                         <input type="hidden" name="csrf_token" value="<?= $this->csrfToken() ?>">
                         <input type="hidden" name="plugin_config_id" value="<?= $dest['plugin_config_id'] ?>">
@@ -146,7 +153,7 @@ $sizeLabel = $totalSize > 0 ? \BBS\Services\ServerStats::formatBytes((int) $tota
                 <form method="POST" action="/clients/<?= $agentId ?>/repo/<?= $repo['id'] ?>/s3-config" class="<?= !empty($s3SyncConfigs) ? 'mt-3' : '' ?>">
                     <input type="hidden" name="csrf_token" value="<?= $this->csrfToken() ?>">
                     <?php if (empty($s3SyncConfigs)): ?>
-                    <p class="text-muted small mb-3">Copy this repository to another place after each backup: an S3 bucket, an SSH host, or a second disk. You can add more than one destination.</p>
+                    <p class="text-muted small mb-3">Copy this repository to another place after each backup: an S3 bucket, an SSH host, or a second disk. You can add more than one destination. Saving takes effect at once; there is nothing else to submit on this page.</p>
                     <?php endif; ?>
                     <div class="row g-2 align-items-end">
                         <div class="col-auto">
@@ -159,7 +166,7 @@ $sizeLabel = $totalSize > 0 ? \BBS\Services\ServerStats::formatBytes((int) $tota
                         </div>
                         <div class="col-auto">
                             <button type="submit" class="btn btn-sm btn-info">
-                                <i class="bi bi-cloud-plus me-1"></i><?= !empty($s3SyncConfigs) ? 'Add Destination' : 'Enable Offsite Sync' ?>
+                                <i class="bi bi-cloud-plus me-1"></i><?= !empty($s3SyncConfigs) ? 'Save destination' : 'Save and enable' ?>
                             </button>
                         </div>
                     </div>
@@ -370,7 +377,7 @@ $sizeLabel = $totalSize > 0 ? \BBS\Services\ServerStats::formatBytes((int) $tota
                                 <td class="small" style="white-space: nowrap;">
                                     <?= $job['completed_at'] ? \BBS\Core\TimeHelper::ago($job['completed_at']) : \BBS\Core\TimeHelper::ago($job['queued_at']) ?>
                                 </td>
-                                <td><?= $job['task_type'] ?></td>
+                                <td><?= htmlspecialchars(\BBS\Core\JobType::label($job['task_type'])) ?></td>
                                 <td>
                                     <?php
                                     // Full class tokens with text-color pairings so warning/info
@@ -870,7 +877,19 @@ if (renameToggle && renameForm) {
             responsive: true, maintainAspectRatio: false,
             interaction: { mode: 'index', intersect: false },
             plugins: {
-                legend: { position: 'bottom', labels: { boxWidth: 10, font: { size: 10 }, padding: 10, color: tc } },
+                legend: {
+                    position: 'bottom', labels: { boxWidth: 10, font: { size: 10 }, padding: 10, color: tc },
+                    // Clicking a series shows only that series; clicking it again
+                    // shows both. Chart.js's default hides the clicked one, which
+                    // reads backwards (#500).
+                    onClick: (e, item, legend) => {
+                        const chart = legend.chart;
+                        const n = chart.data.datasets.length;
+                        const onlyThis = [...Array(n).keys()].every(i => i === item.datasetIndex ? chart.isDatasetVisible(i) : !chart.isDatasetVisible(i));
+                        for (let i = 0; i < n; i++) chart.setDatasetVisibility(i, onlyThis ? true : i === item.datasetIndex);
+                        chart.update();
+                    },
+                },
                 tooltip: {
                     callbacks: {
                         title: items => { const p = pts[items[0].dataIndex]; return p.full + (p.plan ? ' \u00B7 ' + p.plan : ''); },

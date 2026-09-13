@@ -31,7 +31,7 @@ $isActive = in_array($job['status'], ['queued', 'sent', 'running']);
 // than files, with the phase named in status_message (#464).
 $isCheckJob = in_array($job['task_type'], ['repo_check', 'repo_repair'], true);
 $isServerSide = $isCheckJob || in_array($job['task_type'], ['prune', 'compact', 's3_sync', 's3_restore', 'catalog_sync', 'catalog_rebuild', 'catalog_rebuild_full']);
-$taskLabel = ucfirst(str_replace('_', ' ', $job['task_type']));
+$taskLabel = \BBS\Core\JobType::label($job['task_type']);
 ?>
 
 <style>
@@ -162,11 +162,11 @@ $taskLabel = ucfirst(str_replace('_', ' ', $job['task_type']));
 <div class="card border-0 shadow-sm mb-4 queue-progress-panel">
     <div class="card-body py-3">
         <?php if ($isServerSide && !$isCheckJob && $job['status'] === 'running'): ?>
-            <div class="text-white fw-semibold mb-1"><i class="bi bi-hdd me-1"></i> <?= ucfirst($job['task_type']) ?> running on server...</div>
+            <div class="text-white fw-semibold mb-1"><i class="bi bi-hdd me-1"></i> <?= htmlspecialchars($taskLabel) ?> running on server...</div>
             <div class="progress mb-1" style="height: 22px; background-color: rgba(255,255,255,0.15);">
                 <div class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar"
                      style="width: 100%; background-color: #5b9bd5;">
-                    Server-side <?= $job['task_type'] ?>
+                    Server-side <?= htmlspecialchars(strtolower($taskLabel)) ?>
                 </div>
             </div>
             <div class="text-white-50 small">This task runs directly on the backup server — no agent involved</div>
@@ -178,7 +178,7 @@ $taskLabel = ucfirst(str_replace('_', ' ', $job['task_type']));
                     Queued for server
                 </div>
             </div>
-            <div class="text-white-50 small">This <?= $job['task_type'] ?> job runs server-side and will be picked up by the scheduler within 60 seconds</div>
+            <div class="text-white-50 small">This <?= htmlspecialchars(strtolower($taskLabel)) ?> job runs server-side and will be picked up by the scheduler within 60 seconds</div>
         <?php elseif ($job['status'] === 'running' && $pct > 0): ?>
             <div class="d-flex justify-content-between text-white mb-1">
                 <span class="fw-semibold"><?= $isCheckJob && !empty($job['status_message']) ? htmlspecialchars($job['status_message']) : $taskLabel . '... ' . $pct . '%' ?></span>
@@ -235,7 +235,7 @@ $taskLabel = ucfirst(str_replace('_', ' ', $job['task_type']));
             </div>
             <div class="text-white-50 small">
                 <i class="bi bi-clock text-info me-1"></i>
-                This <?= $job['task_type'] ?> job will run server-side when a queue slot opens
+                This <?= htmlspecialchars(strtolower($taskLabel)) ?> job will run server-side when a queue slot opens
             </div>
         <?php else: ?>
             <?php
@@ -287,10 +287,10 @@ $taskLabel = ucfirst(str_replace('_', ' ', $job['task_type']));
 <?php elseif ($job['status'] === 'completed' && $isServerSide): ?>
 <div class="card border-0 shadow-sm mb-4 bg-success-subtle">
     <div class="card-body py-3">
-        <div class="fw-semibold text-success mb-1"><i class="bi bi-hdd me-1"></i> <?= ucfirst($job['task_type']) ?> Completed</div>
+        <div class="fw-semibold text-success mb-1"><i class="bi bi-hdd me-1"></i> <?= htmlspecialchars($taskLabel) ?> Completed</div>
         <div class="progress mb-1" style="height: 22px;">
             <div class="progress-bar bg-success" role="progressbar" style="width: 100%;">
-                Server-side <?= $job['task_type'] ?> finished
+                Server-side <?= htmlspecialchars(strtolower($taskLabel)) ?> finished
             </div>
         </div>
         <div class="text-muted small">Duration: <?= $durLabel ?> &middot; See activity log below for details</div>
@@ -675,7 +675,7 @@ if ($job['task_type'] === 'backup_dry_run' && !empty($job['task_result'])) {
         if (job.status === 'completed') {
             if (isServerSide) {
                 container.innerHTML = '<div class="card border-0 shadow-sm mb-4 bg-success-subtle"><div class="card-body py-3">' +
-                    '<div class="fw-semibold text-success mb-1"><i class="bi bi-hdd me-1"></i> ' + esc(job.task_type[0].toUpperCase()+job.task_type.slice(1)) + ' Completed</div>' +
+                    '<div class="fw-semibold text-success mb-1"><i class="bi bi-hdd me-1"></i> ' + esc(window.bbsTaskLabel(job.task_type)) + ' Completed</div>' +
                     '<div class="progress mb-1" style="height:22px"><div class="progress-bar bg-success" style="width:100%">Server-side ' + esc(job.task_type) + ' finished</div></div>' +
                     '<div class="text-muted small">Duration: ' + window.BBS.formatDuration(job.duration_seconds) + ' &middot; See activity log below for details</div></div></div>';
             } else {
@@ -691,7 +691,7 @@ if ($job['task_type'] === 'backup_dry_run' && !empty($job['task_result'])) {
                 (job.error_log ? '<div class="text-danger small mt-1"><i class="bi bi-exclamation-triangle me-1"></i>' + esc(job.error_log.substring(0,200)) + '</div>' : '') +
                 '</div></div>';
         } else if (isJobActive && job.status === 'running' && pct > 0) {
-            var taskLabel = (job.task_type || 'backup').replace('_',' ').replace(/^\w/, c => c.toUpperCase());
+            var taskLabel = window.bbsTaskLabel(job.task_type || 'backup');
             var isCheckJob = ['repo_check','repo_repair'].includes(job.task_type);
             var headText = (isCheckJob && job.status_message) ? job.status_message : taskLabel + '... ' + pct + '%';
             var barText = Number(job.files_processed).toLocaleString() + ' / ' + Number(job.files_total).toLocaleString() + (isCheckJob ? '' : ' files');

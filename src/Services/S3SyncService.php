@@ -166,6 +166,59 @@ class S3SyncService
         return $env;
     }
 
+    /**
+     * Queue a sync of one repository to one of its destinations now, rather
+     * than waiting for the next prune (#501). Returns ['ok' => bool,
+     * 'code' => int, 'error' => ?string, 'job_id' => ?int, 'note' => ?string].
+     * The queue runs one job per repository at a time, so a sync queued
+     * while a backup runs waits for it; 'note' says so.
+     */
+    public function queueSync(int $agentId, int $repoId, int $pluginConfigId): array
+    {
+        $repo = $this->db->fetchOne("SELECT id, name, storage_type FROM repositories WHERE id = ? AND agent_id = ?", [$repoId, $agentId]);
+        if (!$repo) {
+            return ['ok' => false, 'code' => 404, 'error' => 'Repository not found', 'job_id' => null, 'note' => null];
+        }
+        if (($repo['storage_type'] ?? 'local') !== 'local') {
+            return ['ok' => false, 'code' => 400, 'error' => 'Only local repositories are copied offsite', 'job_id' => null, 'note' => null];
+        }
+        $dest = $this->db->fetchOne(
+            "SELECT pc.name FROM repository_s3_configs rsc JOIN plugin_configs pc ON pc.id = rsc.plugin_config_id
+             WHERE rsc.repository_id = ? AND rsc.plugin_config_id = ?",
+            [$repoId, $pluginConfigId]
+        );
+        if (!$dest) {
+            return ['ok' => false, 'code' => 404, 'error' => 'That destination is not attached to this repository', 'job_id' => null, 'note' => null];
+        }
+        $pending = $this->db->fetchOne(
+            "SELECT id, status FROM backup_jobs WHERE repository_id = ? AND task_type = 's3_sync' AND plugin_config_id = ?
+               AND status IN ('queued', 'sent', 'running') LIMIT 1",
+            [$repoId, $pluginConfigId]
+        );
+        if ($pending) {
+            return ['ok' => false, 'code' => 409, 'error' => "A sync to \"{$dest['name']}\" is already {$pending['status']} (job #{$pending['id']})", 'job_id' => (int) $pending['id'], 'note' => null];
+        }
+        $active = $this->db->fetchOne(
+            "SELECT id, task_type FROM backup_jobs WHERE repository_id = ? AND status IN ('queued', 'sent', 'running') LIMIT 1",
+            [$repoId]
+        );
+        $jobId = (int) $this->db->insert('backup_jobs', [
+            'agent_id' => $agentId,
+            'repository_id' => $repoId,
+            'task_type' => 's3_sync',
+            'plugin_config_id' => $pluginConfigId,
+            'status' => 'queued',
+        ]);
+        $this->db->insert('server_log', [
+            'agent_id' => $agentId,
+            'backup_job_id' => $jobId,
+            'level' => 'info',
+            'message' => "Offsite sync to \"{$dest['name']}\" queued by request (job #{$jobId})",
+        ]);
+        $note = $active ? "It runs after the {$active['task_type']} job #{$active['id']} that is on this repository now, so the copy is taken from a settled repository." : null;
+        return ['ok' => true, 'code' => 202, 'error' => null, 'job_id' => $jobId, 'note' => $note];
+    }
+
     /** Destination types an Offsite Sync config can point at (#413). */
     public const TYPE_S3 = 's3';
     public const TYPE_SFTP = 'sftp';

@@ -1353,7 +1353,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 }
                 html += '<tr style="cursor:pointer" onclick="window.location=\'/queue/' + j.id + '\'">'
                     + '<td>' + escHtml(j.agent_name) + '</td>'
-                    + '<td>' + escHtml(ucfirst(j.task_type)) + '</td>'
+                    + '<td>' + escHtml(window.bbsTaskLabel(j.task_type)) + '</td>'
                     + '<td class="d-table-cell-md">' + escHtml(j.repo_name || '--') + '</td>'
                     + '<td>' + statusHtml + '</td></tr>';
             });
@@ -1477,7 +1477,7 @@ document.addEventListener('DOMContentLoaded', function () {
                     : j.status === 'failed' ? 'bi-x-circle-fill text-danger'
                     : 'bi-slash-circle-fill text-secondary';
                 const taskIcon = TASK_ICONS[j.task_type] || 'bi-gear text-muted';
-                const taskLabel = (j.task_type||'').charAt(0).toUpperCase() + (j.task_type||'').slice(1);
+                const taskLabel = window.bbsTaskLabel(j.task_type);
                 html += '<tr style="cursor:pointer" onclick="window.location=\'/queue/'+j.id+'\'">'
                     + '<td>' + esc(j.agent_name) + '</td>'
                     + '<td class="text-nowrap"><i class="bi ' + taskIcon + ' me-1"></i>' + esc(taskLabel) + '</td>'

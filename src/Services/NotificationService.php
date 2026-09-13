@@ -15,6 +15,18 @@ class NotificationService
 
     // Success/info events should always send (not deduplicate) since users want
     // to know every time a backup completes. Failure events deduplicate to avoid spam.
+    /**
+     * Events that describe one run rather than an ongoing state. A backup
+     * that finishes with warnings tonight is a new event, not the same one
+     * as last night, so the previous entry is resolved before this one is
+     * recorded and every run reaches email, Apprise and push (#496).
+     * Failures stay stateful on purpose: one alert per state change, with
+     * the periodic re-emit from #249.
+     */
+    private const PER_RUN_EVENTS = [
+        'backup_warning',
+    ];
+
     private const ALWAYS_SEND_EVENTS = [
         'backup_completed',
         'restore_completed',
@@ -53,7 +65,7 @@ class NotificationService
 
         // For success events, resolve any previous unresolved notification first
         // so a fresh one is always created and notifications always fire
-        if ($alwaysSend) {
+        if ($alwaysSend || in_array($type, self::PER_RUN_EVENTS, true)) {
             $this->resolve($type, $agentId, $referenceId, $userId);
         }
 

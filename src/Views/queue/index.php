@@ -268,7 +268,7 @@
                     <tr style="cursor: pointer;" onclick="window.location='/queue/<?= $job['id'] ?>'">
                         <td class="small text-nowrap"><?= \BBS\Core\TimeHelper::format($job['queued_at'], 'M j, g:i A') ?></td>
                         <td><?= htmlspecialchars($job['agent_name']) ?></td>
-                        <td class="text-nowrap"><?= jobTypeIcon($job['task_type']) ?><?= htmlspecialchars(ucfirst(str_replace('_', ' ', $job['task_type']))) ?></td>
+                        <td class="text-nowrap"><?= jobTypeIcon($job['task_type']) ?><?= htmlspecialchars(\BBS\Core\JobType::label($job['task_type'])) ?></td>
                         <td class="d-none d-md-table-cell"><?= in_array($job['task_type'], ['repo_check', 'repo_repair'], true) ? '--' : number_format($job['files_total'] ?? 0) ?></td>
                         <td>
                             <?php
@@ -366,7 +366,7 @@
                     <tr style="cursor: pointer;" onclick="window.location='/queue/<?= $job['id'] ?>'">
                         <td class="small text-nowrap" title="<?= \BBS\Core\TimeHelper::format($job['completed_at'], 'M j, Y g:i A') ?>"><?= \BBS\Core\TimeHelper::ago($job['completed_at']) ?></td>
                         <td><?= htmlspecialchars($job['agent_name']) ?></td>
-                        <td class="text-nowrap"><?= jobTypeIcon($job['task_type']) ?><?= htmlspecialchars(ucfirst(str_replace('_', ' ', $job['task_type']))) ?></td>
+                        <td class="text-nowrap"><?= jobTypeIcon($job['task_type']) ?><?= htmlspecialchars(\BBS\Core\JobType::label($job['task_type'])) ?></td>
                         <td class="d-none d-md-table-cell"><?= in_array($job['task_type'], ['repo_check', 'repo_repair'], true) ? '--' : number_format($job['files_total'] ?? 0) ?></td>
                         <td class="d-none d-md-table-cell"><?= htmlspecialchars($job['repo_name'] ?? '--') ?></td>
                         <td class="d-none d-md-table-cell">
@@ -444,10 +444,7 @@ document.querySelectorAll('[data-bs-toggle="tooltip"]').forEach(el => new bootst
         return '<span class="badge text-bg-' + (colors[status] || 'secondary') + '">' + esc(status) + '</span>';
     }
 
-    function taskTypeLabel(type) {
-        const s = String(type || '').replace(/_/g, ' ');
-        return s.charAt(0).toUpperCase() + s.slice(1);
-    }
+    function taskTypeLabel(type) { return window.bbsTaskLabel(type); }
 
     function jobTypeIcon(type) {
         const icons = {

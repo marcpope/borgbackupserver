@@ -170,7 +170,7 @@
                         <td data-sort="<?= (int) $agent['restore_points'] ?>"><?= number_format($agent['restore_points']) ?></td>
                         <td data-sort="<?= (int) $agent['total_size'] ?>"><?php $sz = (int) $agent['total_size']; echo $sz > 0 ? \BBS\Services\ServerStats::formatBytes($sz) : '--'; ?></td>
                         <td class="text-center" data-sort="<?= (int) $agent['schedule_count'] ?>"><?= $agent['schedule_count'] ?></td>
-                        <td class="text-center" data-sort="<?= (int) $agent['repo_count'] ?>"><?= $agent['repo_count'] ?></td>
+                        <td class="text-center" data-sort="<?= (int) $agent['repo_count'] ?>" title="<?= htmlspecialchars($agent['storage_names'] ?? '') ?>"><?= $agent['repo_count'] ?><?php if (!empty($agent['storage_names'])): ?><div class="small text-muted text-truncate" style="max-width: 11rem;"><?= htmlspecialchars($agent['storage_names']) ?></div><?php endif; ?></td>
                         <td>
                             <?php if (!empty($agent['profile_name'])): ?>
                                 <span class="badge bg-body-secondary text-body border fw-normal"><?= htmlspecialchars($agent['profile_name']) ?></span>

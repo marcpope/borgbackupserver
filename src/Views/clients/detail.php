@@ -617,7 +617,7 @@ $sizeDisplay = $totalSize > 0 ? \BBS\Services\ServerStats::formatBytes((int) $to
                             <td class="text-center"<?= $iconTitle ? ' title="' . htmlspecialchars($iconTitle) . '"' : '' ?>>
                                 <i class="bi bi-<?= $jIcon ?>"></i>
                             </td>
-                            <td><?= ucfirst($job['task_type']) ?></td>
+                            <td><?= htmlspecialchars(\BBS\Core\JobType::label($job['task_type'])) ?></td>
                             <td class="text-truncate" style="max-width:240px;" title="<?= htmlspecialchars($job['repo_name'] ?? '') ?>">
                                 <?= htmlspecialchars($job['repo_name'] ?? '—') ?>
                             </td>

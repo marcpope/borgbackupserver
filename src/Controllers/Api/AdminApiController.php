@@ -37,7 +37,12 @@ class AdminApiController extends Controller
                    a.borg_version, a.agent_version, a.status, a.last_heartbeat,
                    a.created_at, u.username as owner,
                    a.client_profile_id, cp.name AS client_profile_name,
-                   a.snapshot_capable
+                   a.snapshot_capable,
+                   (SELECT GROUP_CONCAT(DISTINCT COALESCE(sl.label, rsc.name, 'Local') SEPARATOR '\n')
+                      FROM repositories r
+                      LEFT JOIN storage_locations sl ON sl.id = r.storage_location_id
+                      LEFT JOIN remote_ssh_configs rsc ON rsc.id = r.remote_ssh_config_id
+                     WHERE r.agent_id = a.id) AS storage_names
             FROM agents a
             LEFT JOIN users u ON u.id = a.user_id
             LEFT JOIN client_profiles cp ON cp.id = a.client_profile_id
@@ -46,6 +51,8 @@ class AdminApiController extends Controller
         ", $agentParams);
         foreach ($agents as &$a) {
             $a['snapshot_capable'] = $a['snapshot_capable'] === null ? null : (bool) $a['snapshot_capable'];
+            // Names of the storage locations and SSH hosts holding this client's repositories (#474).
+            $a['storage_names'] = $a['storage_names'] !== null && $a['storage_names'] !== '' ? explode("\n", $a['storage_names']) : [];
         }
         unset($a);
 
@@ -3350,6 +3357,25 @@ class AdminApiController extends Controller
             's3_config_id' => (int) $pluginConfig['id'],
             's3_config_name' => $pluginConfig['name'],
         ], $existing ? 200 : 201);
+    }
+
+    /**
+     * POST /api/v1/repositories/{id}/s3-sync/run — {"plugin_config_id": N}
+     * Queues an offsite sync to that destination now (#501). 202 with the
+     * job id; 409 when one is already queued or running for it.
+     */
+    public function runRepositoryS3Sync(int $repoId): void
+    {
+        $ctx = $this->requireApiAuth();
+        $repo = $this->s3RepoForCaller($ctx, $repoId);
+        $agentId = (int) $repo['agent_id'];
+        $this->apiRequirePermission($ctx, \BBS\Services\PermissionService::MANAGE_REPOS, $agentId);
+        $input = $this->getJsonInput();
+        $result = (new \BBS\Services\S3SyncService())->queueSync($agentId, $repoId, (int) ($input['plugin_config_id'] ?? 0));
+        if (!$result['ok']) {
+            $this->json(['error' => $result['error'], 'job_id' => $result['job_id']], $result['code']);
+        }
+        $this->json(['status' => 'queued', 'job_id' => $result['job_id'], 'note' => $result['note']], 202);
     }
 
     /**

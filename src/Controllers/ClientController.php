@@ -35,7 +35,14 @@ class ClientController extends Controller
                            (SELECT MAX(sj2.completed_at) FROM backup_jobs sj2
                              WHERE sj2.agent_id = a.id AND sj2.task_type = 'backup' AND sj2.status = 'completed'),
                            '1970-01-01 00:00:00')
-                   ) as missed_since_success
+                   ) as missed_since_success,
+                   -- Where this client's repositories live (#474): local
+                   -- storage locations and remote SSH hosts, by name.
+                   (SELECT GROUP_CONCAT(DISTINCT COALESCE(sl.label, rsc.name, 'Local') SEPARATOR ', ')
+                      FROM repositories r
+                      LEFT JOIN storage_locations sl ON sl.id = r.storage_location_id
+                      LEFT JOIN remote_ssh_configs rsc ON rsc.id = r.remote_ssh_config_id
+                     WHERE r.agent_id = a.id) as storage_names
             FROM agents a
             LEFT JOIN users u ON u.id = a.user_id
             LEFT JOIN client_profiles cp ON cp.id = a.client_profile_id

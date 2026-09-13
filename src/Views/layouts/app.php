@@ -329,6 +329,9 @@
     <script>
     window.BBS_TIME_24H = <?= json_encode(($_SESSION['time_format'] ?? '12h') === '24h') ?>;
     window.BBS_TIMEZONE = <?= json_encode($_SESSION['timezone'] ?? 'America/New_York') ?>;
+    // Job type names (#497): the type strings never change, the words do.
+    window.BBS_TASK_LABELS = <?= json_encode(\BBS\Core\JobType::labels()) ?>;
+    window.bbsTaskLabel = function (t) { t = String(t || ''); return window.BBS_TASK_LABELS[t] || (t.replace(/_/g, ' ').replace(/^\w/, c => c.toUpperCase())); };
     </script>
     <!-- bootstrap.bundle moved to <head> (see comment there) — no second tag here. -->
     <script>
