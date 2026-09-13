@@ -52,7 +52,7 @@ if not hasattr(subprocess, "run"):
     subprocess.run = _subprocess_run
     subprocess.CompletedProcess = _CompletedProcess
 
-AGENT_VERSION = "2.96.3"
+AGENT_VERSION = "2.96.4"
 
 # Ed25519 public keys, hex, that may sign an update to this script and to
 # the start wrapper. Kept in step with agent/signing-key.pub. An update the
@@ -2139,6 +2139,37 @@ def test_plugin_mysql_dump(config):
     return "Connection successful. Found {} database(s): {}".format(len(dbs), ', '.join(dbs[:10]))
 
 
+def _pg_dump_for_server(host, port, user, pg_env):
+    """The pg_dump to use for this server: the one matching the server's major
+    version when it is installed (pg_dump refuses a server newer than
+    itself, #495), else whatever is on PATH. Returns (path, note)."""
+    major = None
+    try:
+        r = subprocess.run(["psql", "-h", host, "-p", port, "-U", user, "-d", "postgres", "-tAc",
+                            "SHOW server_version_num"],
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=pg_env, timeout=30)
+        if r.returncode == 0:
+            num = int(r.stdout.decode("utf-8", "replace").strip() or 0)
+            major = num // 10000 if num >= 100000 else num // 10000
+    except Exception:
+        major = None
+    if not major:
+        return "pg_dump", "server version unknown, using pg_dump from PATH"
+    candidates = [
+        "/usr/lib/postgresql/{}/bin/pg_dump".format(major),          # Debian, Ubuntu
+        "/usr/pgsql-{}/bin/pg_dump".format(major),                    # RHEL, Rocky, Alma
+        "/opt/homebrew/opt/postgresql@{}/bin/pg_dump".format(major),  # macOS Homebrew
+        "/usr/local/opt/postgresql@{}/bin/pg_dump".format(major),
+        "/Library/PostgreSQL/{}/bin/pg_dump".format(major),           # EDB installer
+    ]
+    for c in candidates:
+        if os.path.isfile(c) and os.access(c, os.X_OK):
+            return c, "server is PostgreSQL {}, using {}".format(major, c)
+    default = shutil.which("pg_dump") or "pg_dump"
+    return default, ("server is PostgreSQL {}; no matching pg_dump installed, using {} "
+                     "(install postgresql-client-{} if the versions do not match)").format(major, default, major)
+
+
 def execute_plugin_pg_dump(config):
     """Dump PostgreSQL databases before backup."""
     dump_dir = config.get("dump_dir", "/home/bbs/pgdump")
@@ -2183,13 +2214,15 @@ def execute_plugin_pg_dump(config):
         databases = [d.strip() for d in databases.split(",") if d.strip()]
 
     dump_files = []
+    pg_dump_bin, pg_note = _pg_dump_for_server(host, port, user, pg_env)
+    logger.info("PostgreSQL plugin: {}".format(pg_note))
 
     for db in databases:
         filename = "{}.sql.gz".format(db) if compress else "{}.sql".format(db)
         dump_path = os.path.join(dump_dir, filename)
         logger.info("Dumping PostgreSQL database {} to {}".format(db, dump_path))
 
-        cmd = ["pg_dump", "-h", host, "-p", port, "-U", user]
+        cmd = [pg_dump_bin, "-h", host, "-p", port, "-U", user]
         if extra_options:
             cmd.extend(extra_options.split())
         cmd.append(db)
@@ -2213,6 +2246,8 @@ def execute_plugin_pg_dump(config):
                 dump_proc.wait()
             if dump_proc.returncode != 0:
                 stderr = dump_proc.stderr.read().decode() if dump_proc.stderr else ""
+                if "server version mismatch" in stderr:
+                    stderr += " Install the PostgreSQL client that matches the server (Debian/Ubuntu: postgresql-client-<major> from the PostgreSQL apt repository); the agent picks the matching pg_dump when it is present."
                 raise Exception("pg_dump failed for {}: {}".format(db, stderr))
         else:
             with open(dump_path, "w") as f:
@@ -5437,4 +5472,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-# bbs-signature: v1 x29LhOwcBByhs1h7OB8SOvAOtt3OUbnrYWa1Y73uKnh8Ol7xksL/LBH8zsOTXXVjmuMODnJF5WH1uxmyVgXKAw==
+# bbs-signature: v1 TppISGWjt1jAuuMPxfbtc5wMAO9+Gf5UKxtt3iwlQvEUZ8xItq0divEZnxo05yCT9E1MSmXhsXcEvszWhF9nCQ==
