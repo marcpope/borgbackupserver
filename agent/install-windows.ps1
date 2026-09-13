@@ -38,7 +38,7 @@ $ErrorActionPreference = "Stop"
 # refusing to install or run. Bail out with a clear message rather than
 # letting the user discover incompatibility halfway through a partial
 # install. Affected versions that hit this check: Server 2012 / 2012 R2,
-# Windows 8 / 8.1, Windows 7, Server 2008 R2 — all are out of mainstream
+# Windows 8 / 8.1, Windows 7, Server 2008 R2 - all are out of mainstream
 # Microsoft support and should be upgraded before running the agent.
 $osVersion = [Environment]::OSVersion.Version
 $osBuild   = $osVersion.Build
@@ -227,7 +227,7 @@ $sshExe = "$sshDir\usr\bin\ssh.exe"
 $sshPathFile = "$AgentDir\ssh-path"
 
 # Ensure the agent directory exists before writing the ssh-path marker file.
-# On fresh installs, ProgramData\bbs-agent doesn't exist yet — WriteAllText
+# On fresh installs, ProgramData\bbs-agent doesn't exist yet - WriteAllText
 # fails with "Parts of the Path could not be found" (#195).
 New-Item -ItemType Directory -Path $AgentDir -Force | Out-Null
 

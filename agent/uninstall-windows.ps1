@@ -58,7 +58,7 @@ if ($svc) {
 if (Test-Path $AgentDir) {
     Write-Step "Removing agent directory..."
 
-    # Older agents (<= 2.60.1) could create a file literally named "NUL" here —
+    # Older agents (<= 2.60.1) could create a file literally named "NUL" here -
     # a reserved DOS device name that Explorer/PowerShell and a plain
     # Remove-Item refuse to delete ("Invalid MS-DOS function"), which would
     # otherwise abort the whole recursive removal (#300). Delete any
@@ -94,7 +94,7 @@ if (Test-Path $AgentDir) {
     }
 
     if (Test-Path $AgentDir) {
-        Write-Warn "Some files in $AgentDir could not be removed automatically — remove the folder manually."
+        Write-Warn "Some files in $AgentDir could not be removed automatically - remove the folder manually."
     } else {
         Write-Ok "Removed $AgentDir"
     }
