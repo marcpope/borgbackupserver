@@ -261,6 +261,16 @@ ensure_dir /var/bbs/home            www-data:www-data   755
 ensure_dir /var/bbs/cache           www-data:www-data   755
 ensure_dir /var/bbs/backups         www-data:www-data   750
 ensure_dir /var/bbs/tmp             www-data:www-data   1777
+
+# PHP sessions live in TMPDIR (/var/bbs/tmp), which is on the persisted
+# volume. If the app UID drifts across a container recreate, the session
+# files written by the old www-data become unreadable to the new one
+# (mode 600, owner mismatch), so everyone who was logged in when the
+# update ran gets "Permission denied" from session_start() and cannot log
+# in until they clear the cookie (#508). Reset ownership of the session
+# files to the current app user on every start; they are tiny, so this is
+# instant even with many.
+find /var/bbs/tmp -maxdepth 1 -type f -name 'sess_*' -exec chown www-data:www-data {} + 2>/dev/null || true
 ensure_dir /var/bbs/config          www-data:www-data   755
 ensure_dir /var/bbs/clickhouse      clickhouse:clickhouse 750
 ensure_dir /var/bbs/mysql           mysql:mysql         750

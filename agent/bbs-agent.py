@@ -52,7 +52,7 @@ if not hasattr(subprocess, "run"):
     subprocess.run = _subprocess_run
     subprocess.CompletedProcess = _CompletedProcess
 
-AGENT_VERSION = "2.96.5"
+AGENT_VERSION = "2.96.6"
 
 # Ed25519 public keys, hex, that may sign an update to this script and to
 # the start wrapper. Kept in step with agent/signing-key.pub. An update the
@@ -4006,7 +4006,11 @@ class SnapshotSession(object):
 
         # Volumes to bring into the tree: the one each directory lives on,
         # plus any real mount below a directory, so the backup covers what a
-        # live run of the same directories would.
+        # live run of the same directories would. With --one-file-system in
+        # the plan's options, borg would NOT cross into those sub-mounts, so
+        # neither do we — otherwise a CIFS or vfat mount nested under /home
+        # got pulled in against the user's wishes (#498).
+        one_fs = "--one-file-system" in command
         wanted = {}
         for d in dirs:
             if not os.path.isdir(d):
@@ -4015,6 +4019,8 @@ class SnapshotSession(object):
             if m is None:
                 raise RuntimeError("no mount found for {}".format(d))
             wanted[m["mount"]] = m
+            if one_fs:
+                continue
             for sub in mounts:
                 if sub["mount"] != d and sub["mount"].startswith(d.rstrip("/") + "/"):
                     wanted[sub["mount"]] = sub
@@ -5474,4 +5480,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-# bbs-signature: v1 AH7aigtF47bzMhOkyoIjAWSMnl3SoAFdlGfuIUpdLor3Zqj47hlLN7RTQCXr6vQVK/1A6SD4tA/njotU+IptBA==
+# bbs-signature: v1 Ayqp9tApBPiG7VKUMEFmxs7FjkYxipGnaW328GqqvEBdKDFwmUHN/fROcMMjKfcC5fyOhpm1J+lL8GfzbD5tCg==

@@ -478,10 +478,14 @@ $sizeDisplay = $totalSize > 0 ? \BBS\Services\ServerStats::formatBytes((int) $to
                         <div style="position: relative; height: 180px;">
                             <canvas id="storageChart"></canvas>
                         </div>
+                        <?php // Same palette as the doughnut and the poll's re-render, so the
+                              // dots are coloured on first paint rather than grey until the
+                              // first status poll ~30s later (#504).
+                              $storageDotColors = ['#0d6efd', '#198754', '#ffc107', '#0dcaf0', '#6f42c1', '#fd7e14', '#d63384', '#20c997']; ?>
                         <div class="mt-3" id="storage-legend">
-                            <?php foreach ($repositories as $repo): ?>
+                            <?php foreach ($repositories as $i => $repo): ?>
                             <div class="d-flex justify-content-between small mb-1">
-                                <span><i class="bi bi-circle-fill me-1" style="font-size: 0.5rem; vertical-align: middle;"></i> <?= htmlspecialchars($repo['name']) ?></span>
+                                <span><i class="bi bi-circle-fill me-1" style="font-size: 0.5rem; vertical-align: middle; color: <?= $storageDotColors[$i % count($storageDotColors)] ?>;"></i> <?= htmlspecialchars($repo['name']) ?></span>
                                 <span class="fw-semibold">
                                     <?php
                                     $s = $repo['size_bytes'];

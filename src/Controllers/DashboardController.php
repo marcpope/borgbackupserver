@@ -362,7 +362,11 @@ class DashboardController extends Controller
             JOIN agents a ON a.id = bj.agent_id
             LEFT JOIN repositories r ON r.id = bj.repository_id
             WHERE bj.status IN ('queued', 'running', 'sent') {$jobScope}
-            ORDER BY bj.queued_at ASC
+            -- id is the tiebreaker: several jobs queued in the same second
+            -- (a plan queues backup, prune and sync together) otherwise come
+            -- back in an order MySQL is free to vary between polls, so the
+            -- widget reshuffled every 10s (#503).
+            ORDER BY bj.queued_at ASC, bj.id ASC
         ", $agentParams);
 
         $runningJobs = 0;
