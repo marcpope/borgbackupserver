@@ -732,6 +732,22 @@ STORAGE_PATH="${STORAGE_PATH:-/var/bbs/home}"
 RESTORED_USERS=0
 
 echo "Recreating SSH users from database..."
+# The catalog channel writes files into <home>/.catalog-logs, which the web
+# user (www-data) then reads to import. That works because the SSH user is a
+# member of the www-data group and the directory is group-owned by www-data
+# (setgid). Both are lost when a container recreate reassigns www-data's GID
+# or rebuilds the SSH user without the group, so www-data can no longer
+# traverse the directory and the catalog silently never imports (#506).
+# Re-apply both on every start, for existing and freshly created users.
+reconcile_catalog_access() {
+    local user="$1" home="$2"
+    usermod -a -G www-data "$user" 2>/dev/null || true
+    local cat_dir="$home/.catalog-logs"
+    mkdir -p "$cat_dir" 2>/dev/null || true
+    chown "$user":www-data "$cat_dir" 2>/dev/null || true
+    chmod 2770 "$cat_dir" 2>/dev/null || true
+}
+
 mysql -u bbs -p"$DB_PASS" bbs -N -e "SELECT ssh_unix_user, id, IFNULL(ssh_home_dir, '') FROM agents WHERE ssh_unix_user IS NOT NULL AND ssh_unix_user != ''" 2>/dev/null | while read SSH_USER AGENT_ID SSH_HOME_DIR; do
     # Use stored ssh_home_dir if available, fall back to STORAGE_PATH/AGENT_ID for pre-migration agents
     USER_HOME="${SSH_HOME_DIR:-$STORAGE_PATH/$AGENT_ID}"
@@ -749,6 +765,7 @@ mysql -u bbs -p"$DB_PASS" bbs -N -e "SELECT ssh_unix_user, id, IFNULL(ssh_home_d
         if [ -d "$CACHE_DIR" ]; then
             chown -R "$SSH_UID:$SSH_GID" "$CACHE_DIR"
         fi
+        reconcile_catalog_access "$SSH_USER" "$USER_HOME"
         continue
     fi
 
@@ -802,6 +819,8 @@ mysql -u bbs -p"$DB_PASS" bbs -N -e "SELECT ssh_unix_user, id, IFNULL(ssh_home_d
     if [ -d "$CACHE_DIR" ]; then
         chown -R "$STORED_UID:$STORED_UID" "$CACHE_DIR"
     fi
+
+    reconcile_catalog_access "$SSH_USER" "$USER_HOME"
 
     # Save UID for future restarts
     echo "$STORED_UID" > "$USER_HOME/.uid"

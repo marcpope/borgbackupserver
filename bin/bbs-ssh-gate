@@ -81,12 +81,15 @@ case "${SSH_ORIGINAL_COMMAND:-}" in
             chmod 640 "$TARGET" 2>/dev/null || true
             echo "chgrp=ok final=$(stat -c '%A %U:%G' "$TARGET" 2>&1)" >> "$DIAG_LOG" 2>&1 || true
         else
-            # Fallback for setups where chgrp to www-data failed (existing
-            # users created before the supplementary-group fix, or filesystems
-            # that map ownership through a translation layer): make the file
-            # world-readable so www-data can import it via "other" permissions.
+            # Fallback for setups where chgrp to www-data failed (the SSH
+            # user is not in the www-data group, or a translation-layer
+            # filesystem): make the file world-readable AND the directory
+            # world-traversable, so www-data can reach and import the file
+            # through "other" permissions without group access (#506). We own
+            # the directory here, so this needs no root.
             chmod 644 "$TARGET" 2>/dev/null || true
-            echo "chgrp=FAILED fallback=644 final=$(stat -c '%A %U:%G' "$TARGET" 2>&1)" >> "$DIAG_LOG" 2>&1 || true
+            chmod o+rx "$LOG_DIR" 2>/dev/null || true
+            echo "chgrp=FAILED fallback=644+o+rx final=$(stat -c '%A %U:%G' "$TARGET" 2>&1) dir=$(stat -c '%A' "$LOG_DIR" 2>&1)" >> "$DIAG_LOG" 2>&1 || true
         fi
         ;;
 
