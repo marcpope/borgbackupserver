@@ -34,6 +34,7 @@ class SettingsApiController extends Controller
     private const SECTIONS = [
         'general' => [
             'max_queue' => 'int',
+            's3_max_concurrent' => 'int',
             'agent_poll_interval' => 'int',
             'stall_timeout_minutes' => 'int',
             'agent_offline_notify_minutes' => 'int',
@@ -122,6 +123,7 @@ class SettingsApiController extends Controller
      */
     private const DEFAULTS = [
         'max_queue' => '4',
+        's3_max_concurrent' => '4',
         'agent_poll_interval' => '30',
         'stall_timeout_minutes' => '120',
         'agent_offline_notify_minutes' => '5',

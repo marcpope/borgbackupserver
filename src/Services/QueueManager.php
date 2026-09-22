@@ -157,6 +157,22 @@ class QueueManager
         $serverSideTypes = ['prune', 'compact', 's3_sync', 's3_restore', 'repo_check', 'repo_repair', 'break_lock', 'catalog_sync', 'catalog_rebuild', 'catalog_rebuild_full', 'archive_delete', 'archive_lock'];
         $managementTypes = ['update_borg', 'update_agent'];
 
+        // Offsite syncs are capped on their own, independently of max_queue.
+        //
+        // They are server-side, so they never counted as active — max_queue
+        // limits how many are PROMOTED in one pass, not how many run. Nothing
+        // stopped them accumulating: two hundred repositories finishing their
+        // prune within the same few minutes produced sixty-seven concurrent
+        // rclone processes, a load average of 790 on sixteen cores, and a
+        // combined throughput lower than a single transfer achieved alone.
+        //
+        // 0 means no limit, which is what every install did before this.
+        $s3Setting = $this->db->fetchOne("SELECT `value` FROM settings WHERE `key` = 's3_max_concurrent'");
+        $s3Cap = max(0, (int) ($s3Setting['value'] ?? 0));
+        $s3Types = ['s3_sync', 's3_restore'];
+        $s3Active = $s3Cap > 0 ? (int) $this->db->count('backup_jobs',
+            "status IN ('sent', 'running') AND task_type IN ('s3_sync', 's3_restore')") : 0;
+
         // Get agents that currently have a backup/restore running (for management task gating)
         $busyAgents = $this->db->fetchAll(
             "SELECT DISTINCT agent_id FROM backup_jobs
@@ -167,6 +183,12 @@ class QueueManager
 
         foreach ($queuedJobs as $job) {
             $isManagement = in_array($job['task_type'], $managementTypes);
+
+            // `continue`, not `break`: a queue full of syncs must not stop a
+            // backup or a prune behind them from being promoted.
+            if ($s3Cap > 0 && $s3Active >= $s3Cap && in_array($job['task_type'], $s3Types, true)) {
+                continue;
+            }
 
             // Management tasks (update_borg, update_agent) bypass queue slots
             // but wait if the agent has an active backup
@@ -453,6 +475,12 @@ class QueueManager
                 // in FIFO order hits the `break` below. #206
                 if (!$isManagement) {
                     $promotedCount++;
+                }
+                // Counted where it is actually promoted, not where it is
+                // considered: a job that fails its claim or cannot build a
+                // payload must not eat a slot it never used.
+                if (in_array($job['task_type'], $s3Types, true)) {
+                    $s3Active++;
                 }
 
                 // Mark this repo and plan as busy for remaining iterations
