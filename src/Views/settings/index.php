@@ -2590,9 +2590,20 @@ document.getElementById('appIconFileInput').addEventListener('change', function(
 <?php endif; ?>
 
 <?php if ($activeTab === 'api'): ?>
+<?php
+$metricsEnabled = ($settings['metrics_enabled'] ?? '0') === '1';
+$metricsAcl = \BBS\Services\MetricsAccess::parseAcl($settings['metrics_acl'] ?? '[]');
+$metricsProxies = \BBS\Services\MetricsAccess::parseCidrList($settings['metrics_trusted_proxies'] ?? '[]');
+if ($metricsAcl === []) {
+    $metricsAcl = [['cidr' => '127.0.0.1/32', 'token' => true, 'note' => 'localhost']];
+}
+if ($metricsProxies === []) {
+    $metricsProxies = [''];
+}
+?>
 <div class="settings-page-head">
     <h1 class="settings-page-title">API</h1>
-    <p class="settings-page-lede mb-0">Tokens for automated access to the provisioning API. A token carries full admin access, so treat one like a password.</p>
+    <p class="settings-page-lede mb-0">Tokens for automated access to the provisioning API. A token carries full admin access, so treat one like a password &mdash; except a monitoring token, which only reads.</p>
 </div>
 <div>
     <div>
@@ -2636,6 +2647,9 @@ document.getElementById('appIconFileInput').addEventListener('change', function(
                             <?php else: ?>
                             <i class="bi bi-key me-1 text-muted"></i><?= htmlspecialchars($token['name']) ?>
                             <?php endif; ?>
+                            <?php if (($token['kind'] ?? 'user') === 'metrics'): ?>
+                            <span class="badge bg-secondary-subtle text-secondary-emphasis ms-2" title="Reads /api/v1/metrics and /api/v1/health only — no write access, no secrets"><i class="bi bi-graph-up me-1"></i>monitoring</span>
+                            <?php endif; ?>
                             <?php if (!empty($token['can_read_secrets'])): ?>
                             <span class="badge bg-warning text-dark ms-2" title="This token can read repository passphrases and S3 credentials"><i class="bi bi-eye me-1"></i>secrets</span>
                             <?php endif; ?>
@@ -2657,6 +2671,18 @@ document.getElementById('appIconFileInput').addEventListener('change', function(
         <?php endif; ?>
 
         <h6>Create Token</h6>
+        <script>
+        document.addEventListener('DOMContentLoaded', function () {
+            const kind = document.getElementById('tokenKind');
+            const wrap = document.getElementById('tokenSecretsWrap');
+            if (!kind || !wrap) return;
+            // Showing a toggle that the chosen type ignores reads as a promise
+            // the server will not keep.
+            const sync = () => { wrap.hidden = kind.value === 'metrics'; };
+            kind.addEventListener('change', sync);
+            sync();
+        });
+        </script>
         <form method="POST" action="/settings/api/tokens/create">
             <input type="hidden" name="csrf_token" value="<?= $this->csrfToken() ?>">
             <div class="row g-3 align-items-end">
@@ -2664,7 +2690,15 @@ document.getElementById('appIconFileInput').addEventListener('change', function(
                     <label class="form-label fw-semibold">Token Name</label>
                     <input type="text" class="form-control" name="name" required placeholder="e.g. ansible-provisioner">
                 </div>
-                <div class="col-md-6">
+                <div class="col-md-3">
+                    <label class="form-label fw-semibold">Type</label>
+                    <select class="form-select" name="kind" id="tokenKind">
+                        <option value="user">Full access (admin)</option>
+                        <option value="metrics">Monitoring (read-only)</option>
+                    </select>
+                    <div class="form-text small">A monitoring token reads <code>/api/v1/metrics</code> and <code>/api/v1/health</code> and nothing else &mdash; it cannot change anything, whatever the account it was created under. Use it for Prometheus.</div>
+                </div>
+                <div class="col-md-3" id="tokenSecretsWrap">
                     <div class="form-check mb-2">
                         <input class="form-check-input" type="checkbox" name="can_read_secrets" value="1" id="canReadSecrets">
                         <label class="form-check-label fw-semibold" for="canReadSecrets">Display Secrets</label>
@@ -2679,6 +2713,151 @@ document.getElementById('appIconFileInput').addEventListener('change', function(
     </div>
 </div>
 
+<h5 class="settings-group mt-4">Monitoring</h5>
+<p class="settings-page-lede mb-3">Lets a monitoring system read <code>/api/v1/metrics</code> and <code>/api/v1/health</code> without an admin token. Callers are admitted by address; each range decides whether a token is also required.</p>
+
+<form method="POST" action="/settings/monitoring">
+    <input type="hidden" name="csrf_token" value="<?= $this->csrfToken() ?>">
+
+    <div class="settings-row">
+        <div>
+            <div class="settings-row-label">Allow monitoring access</div>
+            <p class="settings-row-help">While this is off, the monitoring endpoints behave exactly as before: admin token only, from anywhere.</p>
+        </div>
+        <div class="settings-row-control">
+            <div class="form-check form-switch">
+                <input class="form-check-input" type="checkbox" role="switch" name="metrics_enabled" value="1" id="metricsEnabled" <?= $metricsEnabled ? 'checked' : '' ?>>
+            </div>
+        </div>
+        <div class="settings-row-default">Default: off</div>
+    </div>
+
+    <div class="mb-3">
+        <label class="form-label fw-semibold">Allowed ranges</label>
+        <div class="table-responsive">
+            <table class="table table-sm align-middle mb-2">
+                <thead>
+                    <tr>
+                        <th style="min-width:200px">Address or range</th>
+                        <th style="width:130px" class="text-center">Token required</th>
+                        <th>Note</th>
+                        <th style="width:44px"></th>
+                    </tr>
+                </thead>
+                <tbody id="metricsAclRows">
+                    <?php foreach ($metricsAcl as $i => $entry): ?>
+                    <tr>
+                        <td><input type="text" class="form-control form-control-sm font-monospace" name="acl_cidr[<?= $i ?>]" value="<?= htmlspecialchars($entry['cidr']) ?>" placeholder="10.0.0.0/27"></td>
+                        <td class="text-center"><input class="form-check-input" type="checkbox" name="acl_token[]" value="<?= $i ?>" <?= !empty($entry['token']) ? 'checked' : '' ?>></td>
+                        <td><input type="text" class="form-control form-control-sm" name="acl_note[<?= $i ?>]" value="<?= htmlspecialchars($entry['note']) ?>" placeholder="prometheus cluster"></td>
+                        <td class="text-end"><button type="button" class="btn btn-sm btn-outline-secondary js-acl-del" title="Remove this range"><i class="bi bi-x"></i></button></td>
+                    </tr>
+                    <?php endforeach; ?>
+                </tbody>
+            </table>
+        </div>
+        <button type="button" class="btn btn-sm btn-outline-secondary" id="metricsAclAdd"><i class="bi bi-plus-circle me-1"></i>Add a range</button>
+        <div class="form-text small mt-2">
+            One row per network: <code>10.0.0.0/27</code> and <code>10.0.2.40/27</code> are two rows, each revocable on its own. A bare address means that address alone.
+            The most specific range wins, so a narrow exception beats the wide range around it.
+            Host bits are cleared on save (<code>10.0.0.5/27</code> becomes <code>10.0.0.0/27</code>) and the result is shown back to you.
+            A range reachable from everywhere must keep <strong>token required</strong> ticked.
+        </div>
+    </div>
+
+    <div class="mb-3">
+        <label class="form-label fw-semibold">Trusted proxies <span class="text-muted fw-normal">&mdash; optional</span></label>
+        <div id="metricsProxyRows">
+            <?php foreach ($metricsProxies as $proxy): ?>
+            <div class="input-group input-group-sm mb-2" style="max-width:420px">
+                <input type="text" class="form-control font-monospace" name="proxy_cidr[]" value="<?= htmlspecialchars($proxy) ?>" placeholder="10.0.1.0/24">
+                <button type="button" class="btn btn-outline-secondary js-proxy-del" title="Remove"><i class="bi bi-x"></i></button>
+            </div>
+            <?php endforeach; ?>
+        </div>
+        <button type="button" class="btn btn-sm btn-outline-secondary" id="metricsProxyAdd"><i class="bi bi-plus-circle me-1"></i>Add a proxy</button>
+        <div class="form-text small mt-2">
+            Behind a reverse proxy or an ingress, every request arrives from the proxy, so the ranges above would match <em>it</em> rather than the scraper.
+            List the proxy here and its <code>X-Forwarded-For</code> is believed &mdash; its last hop only. Leave empty and only the real socket address counts, which is what you want when BBS is reached directly.
+        </div>
+    </div>
+
+    <div class="settings-row">
+        <div>
+            <div class="settings-row-label">Scrape rate limit</div>
+            <p class="settings-row-help">Requests per minute, per calling address. A scrape every minute is the usual cadence; this only stops a runaway loop.</p>
+        </div>
+        <div class="settings-row-control">
+            <input type="number" class="form-control form-control-narrow" name="metrics_rate_per_minute" min="1" max="600" value="<?= (int) ($settings['metrics_rate_per_minute'] ?? 12) ?>">
+            <span class="settings-row-unit">per minute</span>
+        </div>
+        <div class="settings-row-default">Default: 12</div>
+    </div>
+
+    <div class="settings-row">
+        <div>
+            <div class="settings-row-label">Metrics cache</div>
+            <p class="settings-row-help">How long a rendered snapshot is reused. The queries behind it read the whole job history, so on a large fleet this is what keeps frequent scraping cheap. 0 disables the cache.</p>
+        </div>
+        <div class="settings-row-control">
+            <input type="number" class="form-control form-control-narrow" name="metrics_cache_seconds" min="0" max="3600" value="<?= (int) ($settings['metrics_cache_seconds'] ?? 30) ?>">
+            <span class="settings-row-unit">seconds</span>
+        </div>
+        <div class="settings-row-default">Default: 30 seconds</div>
+    </div>
+
+    <div class="settings-actions">
+        <button type="submit" class="btn btn-sm btn-success"><i class="bi bi-check-lg me-1"></i>Save monitoring access</button>
+    </div>
+</form>
+
+<script>
+(function () {
+    const rows = document.getElementById('metricsAclRows');
+    const addRow = document.getElementById('metricsAclAdd');
+    if (!rows || !addRow) return;
+
+    // Row indexes have to stay unique for the whole life of the page: the
+    // checkbox carries the index of the row it belongs to, so reusing one
+    // after a delete would tie two rows to the same "token required" box.
+    let next = rows.querySelectorAll('tr').length;
+
+    addRow.addEventListener('click', function () {
+        const i = next++;
+        const tr = document.createElement('tr');
+        tr.innerHTML = '<td><input type="text" class="form-control form-control-sm font-monospace" name="acl_cidr[' + i + ']" placeholder="10.0.0.0/27"></td>'
+            + '<td class="text-center"><input class="form-check-input" type="checkbox" name="acl_token[]" value="' + i + '" checked></td>'
+            + '<td><input type="text" class="form-control form-control-sm" name="acl_note[' + i + ']" placeholder="prometheus cluster"></td>'
+            + '<td class="text-end"><button type="button" class="btn btn-sm btn-outline-secondary js-acl-del" title="Remove this range"><i class="bi bi-x"></i></button></td>';
+        rows.appendChild(tr);
+        tr.querySelector('input').focus();
+    });
+
+    rows.addEventListener('click', function (e) {
+        const btn = e.target.closest('.js-acl-del');
+        if (btn) btn.closest('tr').remove();
+    });
+
+    const proxies = document.getElementById('metricsProxyRows');
+    const addProxy = document.getElementById('metricsProxyAdd');
+    if (proxies && addProxy) {
+        addProxy.addEventListener('click', function () {
+            const div = document.createElement('div');
+            div.className = 'input-group input-group-sm mb-2';
+            div.style.maxWidth = '420px';
+            div.innerHTML = '<input type="text" class="form-control font-monospace" name="proxy_cidr[]" placeholder="10.0.1.0/24">'
+                + '<button type="button" class="btn btn-outline-secondary js-proxy-del" title="Remove"><i class="bi bi-x"></i></button>';
+            proxies.appendChild(div);
+            div.querySelector('input').focus();
+        });
+        proxies.addEventListener('click', function (e) {
+            const btn = e.target.closest('.js-proxy-del');
+            if (btn) btn.closest('.input-group').remove();
+        });
+    }
+})();
+</script>
+
 <div class="card border-0 shadow-sm mt-4">
     <div class="card-header fw-semibold">
         <i class="bi bi-book me-1"></i> API Reference
@@ -2692,7 +2871,8 @@ document.getElementById('appIconFileInput').addEventListener('change', function(
             </thead>
             <tbody>
                 <tr><td><span class="badge bg-success">GET</span></td><td><code>/api/v1/summary</code></td><td>Summary of each client's backup plans and latest backup result</td></tr>
-                <tr><td><span class="badge bg-success">GET</span></td><td><code>/api/v1/metrics</code></td><td>Monitoring snapshot: client/queue counts, per-plan last run &amp; last success, job totals, repo sizes</td></tr>
+                <tr><td><span class="badge bg-success">GET</span></td><td><code>/api/v1/metrics</code></td><td>Monitoring snapshot: client/queue counts, per-plan last run &amp; last success, job totals, repo sizes. Readable by a monitoring token.</td></tr>
+                <tr><td><span class="badge bg-success">GET</span></td><td><code>/api/v1/health</code></td><td>Database, scheduler, storage, catalog, clients, backups and maintenance checks. Readable by a monitoring token; 503 when critical.</td></tr>
                 <tr><td><span class="badge bg-success">GET</span></td><td><code>/api/v1/clients</code></td><td>List all clients</td></tr>
                 <tr><td><span class="badge bg-primary">POST</span></td><td><code>/api/v1/clients</code></td><td>Create a client (returns api_key for agent install)</td></tr>
                 <tr><td><span class="badge bg-success">GET</span></td><td><code>/api/v1/clients/{id}</code></td><td>Get client details with repos &amp; plans</td></tr>

@@ -174,7 +174,11 @@ class AdminApiController extends Controller
      */
     public function metrics(): void
     {
-        $this->requireApiToken();
+        // Monitoring gate rather than requireApiToken(): a scraper is admitted
+        // by address, and by a read-only token when its range asks for one.
+        // With monitoring off this falls back to the admin token this endpoint
+        // has always required, so no existing automation changes behaviour.
+        $this->requireMetricsAccess(true);
 
         $clients = ['total' => 0, 'online' => 0, 'offline' => 0, 'error' => 0, 'setup' => 0];
         foreach ($this->db->fetchAll("SELECT status, COUNT(*) AS c FROM agents GROUP BY status") as $row) {
@@ -4706,7 +4710,7 @@ class AdminApiController extends Controller
         // overdue client and describes scheduler and storage state, which a
         // token scoped to one agent has no business reading. The app hiding
         // the screen is presentation; this is the enforcement.
-        $this->requireApiToken();
+        $this->requireMetricsAccess(true);
         $result = (new \BBS\Services\HealthService())->check();
         $this->json($result, $result['status'] === \BBS\Services\HealthService::CRITICAL ? 503 : 200);
     }

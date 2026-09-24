@@ -197,6 +197,7 @@ class App
         $this->router->map('GET', '/health', 'Api\\AdminApiController@healthLive');
         $this->router->map('POST', '/settings/oidc', 'SettingsController@saveOidc');
         $this->router->map('POST', '/settings/api/tokens/create', 'SettingsController@createApiToken');
+        $this->router->map('POST', '/settings/monitoring', 'SettingsController@saveMonitoring');
         $this->router->map('POST', '/settings/api/tokens/[i:id]/revoke', 'SettingsController@revokeApiToken');
         $this->router->map('POST', '/settings/docker-setup', 'SettingsController@dockerSetup');
         $this->router->map('POST', '/settings/test-smtp', 'SettingsController@testSmtp');
