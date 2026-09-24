@@ -172,6 +172,29 @@ class AdminApiController extends Controller
      * are returned both as datetime strings and unix epochs so time-series
      * tools can consume them directly.
      */
+    /**
+     * GET /metrics — the same snapshot in Prometheus' text format.
+     *
+     * Separate from the JSON endpoint rather than a format switch on it: the
+     * JSON shape is an API contract other tools depend on, while this one has
+     * to follow the exposition format's own rules about naming and absence.
+     */
+    public function prometheus(): void
+    {
+        $this->requireMetricsAccess();
+
+        $svc = new \BBS\Services\PrometheusMetrics($this->db);
+        $result = $svc->respond();
+
+        http_response_code(200);
+        header('Content-Type: ' . \BBS\Services\PrometheusMetrics::CONTENT_TYPE);
+        // The cache is ours; a proxy holding a second copy would only make
+        // the age reported by the body wrong.
+        header('Cache-Control: no-store');
+        echo $result['body'];
+        exit;
+    }
+
     public function metrics(): void
     {
         // Monitoring gate rather than requireApiToken(): a scraper is admitted

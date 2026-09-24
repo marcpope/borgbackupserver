@@ -195,6 +195,9 @@ class App
 
         // Unauthenticated liveness probe for uptime monitors / container checks
         $this->router->map('GET', '/health', 'Api\\AdminApiController@healthLive');
+        // Prometheus scrape target. Gated by Settings → API → Monitoring,
+        // not by the admin token the JSON endpoints accept.
+        $this->router->map('GET', '/metrics', 'Api\\AdminApiController@prometheus');
         $this->router->map('POST', '/settings/oidc', 'SettingsController@saveOidc');
         $this->router->map('POST', '/settings/api/tokens/create', 'SettingsController@createApiToken');
         $this->router->map('POST', '/settings/monitoring', 'SettingsController@saveMonitoring');
