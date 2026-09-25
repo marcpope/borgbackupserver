@@ -382,6 +382,13 @@ INSERT INTO settings (`key`, `value`) VALUES
     ('s3_path_prefix', ''),
     ('s3_sync_server_backups', '0'),
     ('s3_max_concurrent', '4'),
+    -- Monitoring endpoints: off until an operator opens them (see
+    -- migrations/124_metrics_access.sql for why the default is loopback-only).
+    ('metrics_enabled', '0'),
+    ('metrics_acl', '[{"cidr":"127.0.0.1/32","token":true,"note":"localhost"},{"cidr":"::1/128","token":true,"note":"localhost"}]'),
+    ('metrics_trusted_proxies', '[]'),
+    ('metrics_cache_seconds', '30'),
+    ('metrics_rate_per_minute', '12'),
     ('ssh_port', '22'),
     ('apprise_urls', ''),
     ('apprise_on_backup_failed', '1'),

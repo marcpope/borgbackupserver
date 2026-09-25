@@ -50,7 +50,7 @@ class SettingsController extends Controller
                    t.created_at, t.last_used_at, t.can_read_secrets, u.username
             FROM api_tokens t
             JOIN users u ON u.id = t.user_id
-            WHERE t.kind IN ('user', 'mobile')
+            WHERE t.kind IN ('user', 'mobile', 'metrics')
             ORDER BY t.created_at
         ");
 
@@ -517,17 +517,110 @@ class SettingsController extends Controller
 
         $token = 'bbs_tok_' . bin2hex(random_bytes(24));
         $hash = hash('sha256', $token);
-        $canReadSecrets = !empty($_POST['can_read_secrets']) ? 1 : 0;
+
+        // A monitoring token reads the monitoring endpoints and nothing else,
+        // so the secrets toggle is not merely unchecked — it cannot apply.
+        $kind = ($_POST['kind'] ?? 'user') === 'metrics' ? 'metrics' : 'user';
+        $canReadSecrets = ($kind === 'user' && !empty($_POST['can_read_secrets'])) ? 1 : 0;
 
         $this->db->insert('api_tokens', [
             'name' => $name,
             'token_hash' => $hash,
+            'kind' => $kind,
             'user_id' => $_SESSION['user_id'],
             'can_read_secrets' => $canReadSecrets,
         ]);
 
         $_SESSION['new_api_token'] = $token;
         $this->flash('success', 'API token created. Copy it now — it will not be shown again.');
+        $this->redirect('/settings?tab=api');
+    }
+
+    /**
+     * POST /settings/monitoring — who may read the monitoring endpoints.
+     *
+     * Its own handler rather than the general settings form: the allowed
+     * ranges are a list of rows, each validated on its own so the page can
+     * point at the line that is wrong instead of rejecting the lot.
+     */
+    public function saveMonitoring(): void
+    {
+        $this->requireAdmin();
+        $this->verifyCsrf();
+
+        $enabled = !empty($_POST['metrics_enabled']) ? '1' : '0';
+
+        $cidrs = (array) ($_POST['acl_cidr'] ?? []);
+        $tokens = (array) ($_POST['acl_token'] ?? []);
+        $notes = (array) ($_POST['acl_note'] ?? []);
+
+        $acl = [];
+        $normalised = [];
+        foreach ($cidrs as $i => $raw) {
+            $raw = trim((string) $raw);
+            if ($raw === '') {
+                continue;
+            }
+            $cidr = \BBS\Services\MetricsAccess::normaliseCidr($raw);
+            if ($cidr === null) {
+                $this->flash('danger', "\"{$raw}\" is not an address or range. Use 10.0.0.0/27, 192.168.1.10 or 2001:db8::/64.");
+                $this->redirect('/settings?tab=api');
+            }
+            if (isset($acl[$cidr])) {
+                continue; // same range twice: keep the first row
+            }
+            if ($cidr !== $raw) {
+                $normalised[] = "{$raw} → {$cidr}";
+            }
+            $acl[$cidr] = [
+                'cidr' => $cidr,
+                // An unchecked box posts nothing, so the value carries the
+                // row index: absent means "no token for this range".
+                'token' => in_array((string) $i, array_map('strval', $tokens), true),
+                'note' => mb_substr(trim((string) ($notes[$i] ?? '')), 0, 120),
+            ];
+        }
+        $acl = array_values($acl);
+
+        if ($enabled === '1' && $acl === []) {
+            $this->flash('danger', 'Monitoring is on but no range is allowed, which would refuse every scraper. Add a range, or turn monitoring off.');
+            $this->redirect('/settings?tab=api');
+        }
+        if (\BBS\Services\MetricsAccess::isWorldOpenWithoutToken($acl)) {
+            $this->flash('danger', 'A range open to every address must require a token. Narrow the range, or tick "token required" on it.');
+            $this->redirect('/settings?tab=api');
+        }
+
+        $proxies = [];
+        foreach ((array) ($_POST['proxy_cidr'] ?? []) as $raw) {
+            $raw = trim((string) $raw);
+            if ($raw === '') {
+                continue;
+            }
+            $cidr = \BBS\Services\MetricsAccess::normaliseCidr($raw);
+            if ($cidr === null) {
+                $this->flash('danger', "\"{$raw}\" is not a valid proxy address or range.");
+                $this->redirect('/settings?tab=api');
+            }
+            $proxies[$cidr] = $cidr;
+        }
+
+        $rate = max(1, min(600, (int) ($_POST['metrics_rate_per_minute'] ?? 12)));
+        $cache = max(0, min(3600, (int) ($_POST['metrics_cache_seconds'] ?? 30)));
+
+        $this->saveSetting('metrics_enabled', $enabled);
+        $this->saveSetting('metrics_acl', json_encode($acl));
+        $this->saveSetting('metrics_trusted_proxies', json_encode(array_values($proxies)));
+        $this->saveSetting('metrics_rate_per_minute', (string) $rate);
+        $this->saveSetting('metrics_cache_seconds', (string) $cache);
+
+        $message = 'Monitoring access saved.';
+        if ($normalised !== []) {
+            // Host bits are cleared on save. Saying so here is the only moment
+            // the operator can still tell us they meant a single address.
+            $message .= ' Ranges normalised to their network address: ' . implode(', ', $normalised) . '.';
+        }
+        $this->flash('success', $message);
         $this->redirect('/settings?tab=api');
     }
 

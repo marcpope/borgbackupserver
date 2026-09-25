@@ -148,11 +148,90 @@ class Controller
     }
 
     /**
+     * The gate in front of the monitoring endpoints.
+     *
+     * A scraper is a machine on a network: it is admitted by address first
+     * (metrics_acl), then — if that range asks for one — by a token. The
+     * decision itself lives in MetricsAccess so it can be exercised without a
+     * request; this method is the plumbing around it.
+     *
+     * $legacyAdminFallback keeps the JSON endpoints working exactly as before
+     * on an install that has never opened the feature: monitoring off means
+     * "nothing changed", not "your automation broke".
+     *
+     * @return array the token context, or [] when the range needs no token
+     */
+    protected function requireMetricsAccess(bool $legacyAdminFallback = false): array
+    {
+        $setting = function (string $key, string $default): string {
+            $row = $this->db->fetchOne("SELECT `value` FROM settings WHERE `key` = ?", [$key]);
+            $value = $row['value'] ?? '';
+            return $value === '' ? $default : (string) $value;
+        };
+
+        if ($setting('metrics_enabled', '0') !== '1') {
+            if ($legacyAdminFallback) {
+                return $this->requireApiToken();
+            }
+            // 404, not 403: an endpoint nobody turned on should not announce
+            // itself, exactly as denyIfHosted() reasons about hosted surfaces.
+            $this->json(['error' => 'Not found'], 404);
+        }
+
+        $acl = \BBS\Services\MetricsAccess::parseAcl($setting('metrics_acl', '[]'));
+        $proxies = \BBS\Services\MetricsAccess::parseCidrList($setting('metrics_trusted_proxies', '[]'));
+        $ip = \BBS\Services\MetricsAccess::resolveClientIp(
+            $_SERVER['REMOTE_ADDR'] ?? '',
+            $_SERVER['HTTP_X_FORWARDED_FOR'] ?? null,
+            $proxies
+        );
+
+        $decision = \BBS\Services\MetricsAccess::decide(true, $acl, $ip);
+        if ($decision['verdict'] !== \BBS\Services\MetricsAccess::ALLOW) {
+            // Naming the address costs nothing — the caller already knows its
+            // own — and is the difference between a five-second fix and an
+            // afternoon, especially behind Docker or an ingress where the
+            // address BBS sees is not the one the operator expects.
+            $this->json([
+                'error' => "Monitoring access denied for {$ip}. Add it to the allowed ranges in Settings → API.",
+            ], 403);
+        }
+
+        $rate = (int) $setting('metrics_rate_per_minute', '12');
+        if ($rate < 1) {
+            $rate = 1;
+        }
+        if (!$this->checkRateLimit('metrics', $rate, 60, $ip)) {
+            header('Retry-After: 60');
+            $this->json(['error' => "Rate limit exceeded ({$rate} requests per minute)"], 429);
+        }
+
+        if (!$decision['require_token']) {
+            return [];
+        }
+
+        // Its own budget, tighter than the scrape budget and separate from
+        // admin_api: a scraper left with a revoked token must not lock the
+        // admin API out for everything else coming from that address.
+        if (!$this->checkRateLimit('metrics_auth', 10, 300, $ip)) {
+            header('Retry-After: 300');
+            $this->json(['error' => 'Too many failed attempts. Try again later.'], 429);
+        }
+
+        $ctx = $this->authenticateBearer(true, 'metrics_auth');
+        if (($ctx['token_kind'] ?? 'user') !== 'metrics' && ($ctx['role'] ?? '') !== 'admin') {
+            $this->json(['error' => 'Token must be a monitoring token or belong to an admin user'], 403);
+        }
+
+        return $ctx;
+    }
+
+    /**
      * Shared Bearer-token authentication: hash lookup, rate limit,
      * expiry check, last_used_at / last_seen_ip bump. Role enforcement
      * is the caller's job.
      */
-    protected function authenticateBearer(): array
+    protected function authenticateBearer(bool $allowMetricsKind = false, string $rateLimitKey = 'admin_api'): array
     {
         $header = $_SERVER['HTTP_AUTHORIZATION'] ?? $_SERVER['REDIRECT_HTTP_AUTHORIZATION'] ?? '';
         $token = '';
@@ -164,7 +243,7 @@ class Controller
             $this->json(['error' => 'Missing authorization token. Use: Authorization: Bearer <token>'], 401);
         }
 
-        if (!$this->checkRateLimit('admin_api', 20, 300)) {
+        if (!$this->checkRateLimit($rateLimitKey, 20, 300)) {
             $this->json(['error' => 'Too many failed attempts. Try again later.'], 429);
         }
 
@@ -182,7 +261,15 @@ class Controller
             $this->json(['error' => 'API token has expired'], 401);
         }
 
-        $this->resetRateLimit('admin_api');
+        // A monitoring token is read-only by construction: it opens the
+        // monitoring endpoints and nothing else, whatever the role of the user
+        // it was minted under. Enforced here rather than in each caller, so a
+        // route added later cannot accidentally accept one.
+        if (($apiToken['kind'] ?? 'user') === 'metrics' && !$allowMetricsKind) {
+            $this->json(['error' => 'This token may only read the monitoring endpoints'], 403);
+        }
+
+        $this->resetRateLimit($rateLimitKey);
 
         $ip = $_SERVER['REMOTE_ADDR'] ?? null;
         $this->db->query(
@@ -397,9 +484,12 @@ class Controller
     /**
      * Check rate limit. Returns true if allowed, false if rate-limited.
      */
-    protected function checkRateLimit(string $endpoint, int $maxAttempts = 10, int $windowSeconds = 300): bool
+    protected function checkRateLimit(string $endpoint, int $maxAttempts = 10, int $windowSeconds = 300, ?string $ipOverride = null): bool
     {
-        $ip = $_SERVER['REMOTE_ADDR'] ?? '0.0.0.0';
+        // $ipOverride exists for callers that resolved the address themselves
+        // (the monitoring gate, which may read it from a trusted proxy): the
+        // budget has to follow the scraper, not the proxy in front of it.
+        $ip = $ipOverride ?? ($_SERVER['REMOTE_ADDR'] ?? '0.0.0.0');
 
         // Clean old entries
         $this->db->query(

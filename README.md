@@ -73,6 +73,55 @@ All documentation lives on the **[GitHub Wiki](https://github.com/marcpope/borgb
 
 ---
 
+## Monitoring (Prometheus)
+
+`GET /metrics` serves the exposition format, alongside the JSON at `/api/v1/metrics`.
+Turn it on in **Settings → API → Monitoring**, where you choose which addresses may
+read it and whether each range must also present a token. Create the token there too,
+with type **Monitoring (read-only)** — it opens the monitoring endpoints and nothing
+else, so it is safe to leave in a scrape configuration.
+
+```yaml
+scrape_configs:
+  - job_name: bbs
+    scrape_interval: 60s
+    static_configs:
+      - targets: ['bbs.example.com']
+    authorization:
+      # A file, not the token inline: scrape configs end up in Git.
+      credentials_file: /etc/prometheus/bbs.token
+```
+
+Four alerts cover most of what goes wrong. Each one fires whether BBS is healthy or
+not, which is the point of evaluating them outside BBS:
+
+```yaml
+# Each plan carries its own threshold — the one BBS itself uses, client
+# profile included — so a two-hourly plan and a laptop backed up on Mondays
+# do not need the same number.
+- alert: BackupOverdue
+  expr: |
+    (time() - bbs_plan_last_success_timestamp_seconds)
+      > on (instance, client, plan, repo) bbs_plan_overdue_seconds
+- alert: BackupNeverRan
+  expr: bbs_plan_enabled == 1 unless bbs_plan_last_success_timestamp_seconds
+- alert: OffsiteCopyOverdue
+  expr: time() - bbs_repo_last_sync_timestamp_seconds > 86400
+- alert: SchedulerStopped
+  expr: time() - bbs_scheduler_last_run_timestamp_seconds > 300
+- alert: BorgUnusable          # agent reporting in, borg not runnable
+  expr: bbs_client_info{borg_version=""} == 1
+- alert: QueueNotDraining
+  expr: bbs_queue_oldest_seconds > 3600
+```
+
+A value that is not known is omitted rather than zeroed, so a plan that has never
+succeeded has no `bbs_plan_last_success_timestamp_seconds` series at all — alert on
+`absent()` for those. Rendered snapshots are cached (30s by default) because the
+queries behind them read the whole job history.
+
+---
+
 ## Architecture
 
 <img width="100%" alt="Borg Backup Server Web GUI Architecture" src="https://github.com/user-attachments/assets/5163abe0-c2aa-44f0-b4c9-5feb6f2436fb" />
