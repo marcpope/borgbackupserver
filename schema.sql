@@ -381,6 +381,7 @@ INSERT INTO settings (`key`, `value`) VALUES
     ('s3_secret_key', ''),
     ('s3_path_prefix', ''),
     ('s3_sync_server_backups', '0'),
+    ('s3_max_concurrent', '4'),
     ('ssh_port', '22'),
     ('apprise_urls', ''),
     ('apprise_on_backup_failed', '1'),

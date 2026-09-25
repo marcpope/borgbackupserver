@@ -293,6 +293,19 @@ $sslEnabled = str_starts_with(\BBS\Core\Config::get('APP_URL', 'https://'), 'htt
 
     <div class="settings-row">
         <div>
+            <div class="settings-row-label">Max Concurrent Offsite Syncs</div>
+            <p class="settings-row-help">How many offsite syncs and restores may run at once across all repositories. The others wait their turn; backups are never held up behind them. 0 for unlimited.</p>
+        </div>
+        <div class="settings-row-control">
+            <input type="number" class="form-control form-control-narrow" name="s3_max_concurrent"
+                   value="<?= (int) ($settings['s3_max_concurrent'] ?? 4) ?>" min="0" max="50">
+            <span class="settings-row-unit">syncs</span>
+        </div>
+        <div class="settings-row-default">Default: 4 syncs</div>
+    </div>
+
+    <div class="settings-row">
+        <div>
             <div class="settings-row-label">Low-Storage Alert At</div>
             <p class="settings-row-help">How full a storage location may get before it raises a low-space alert. The same figure decides when <code>/api/v1/health</code> reports a storage warning.</p>
         </div>
