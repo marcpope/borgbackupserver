@@ -544,7 +544,7 @@ $sizeDisplay = $totalSize > 0 ? \BBS\Services\ServerStats::formatBytes((int) $to
                     $isManual = $freq === 'manual' || empty($plan['schedule_id']);
                     $sched = ucfirst(str_replace(['10min','15min','30min'], ['Every 10 min','Every 15 min','Every 30 min'], $freq));
                     if (!empty($plan['times']) && in_array($freq, ['daily','weekly','monthly'])) $sched .= ' @ ' . htmlspecialchars($plan['times']);
-                    if ($freq === 'weekly' && isset($plan['day_of_week'])) { $dn = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat']; $sched = ($dn[$plan['day_of_week']] ?? '') . 's @ ' . htmlspecialchars($plan['times'] ?? '00:00'); }
+                    if ($freq === 'weekly' && isset($plan['day_of_week'])) { $sched = \BBS\Services\SchedulerService::daysOfWeekLabel($plan['day_of_week']) . ' @ ' . htmlspecialchars($plan['times'] ?? '00:00'); }
                     if ($freq === 'monthly' && isset($plan['day_of_month'])) { $dom = $plan['day_of_month']; $sched = 'Monthly on ' . ($dom === 'last' ? 'last day' : $dom) . ' @ ' . htmlspecialchars($plan['times'] ?? '00:00'); }
                     if ($isManual) $sched = 'Manual (no schedule)';
                     $isRemote = ($plan['repo_storage_type'] ?? 'local') === 'remote_ssh';
@@ -1894,8 +1894,7 @@ $sizeDisplay = $totalSize > 0 ? \BBS\Services\ServerStats::formatBytes((int) $to
                 $schedSummary .= ' @ ' . htmlspecialchars($plan['times']);
             }
             if ($freq === 'weekly' && isset($plan['day_of_week'])) {
-                $dayNames = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
-                $schedSummary = ($dayNames[$plan['day_of_week']] ?? '') . 's @ ' . htmlspecialchars($plan['times'] ?? '00:00');
+                $schedSummary = \BBS\Services\SchedulerService::daysOfWeekLabel($plan['day_of_week']) . ' @ ' . htmlspecialchars($plan['times'] ?? '00:00');
             }
             if ($freq === 'monthly' && isset($plan['day_of_month'])) {
                 $dom = $plan['day_of_month'];
@@ -2038,7 +2037,7 @@ $sizeDisplay = $totalSize > 0 ? \BBS\Services\ServerStats::formatBytes((int) $to
                     <?php
                     $editFreq = $plan['frequency'] ?? 'daily';
                     $editTimes = $plan['times'] ?? '';
-                    $editDow = $plan['day_of_week'] ?? 1;
+                    $editDays = \BBS\Services\SchedulerService::parseDaysOfWeek($plan['day_of_week'] ?? '') ?: [1];
                     $editDom = $plan['day_of_month'] ?? '1';
                     // Parse times to get selected hours and minute offset
                     $editTimeList = array_filter(array_map('trim', explode(',', $editTimes)));
@@ -2115,15 +2114,15 @@ $sizeDisplay = $totalSize > 0 ? \BBS\Services\ServerStats::formatBytes((int) $to
                     </div>
 
                     <div class="row mb-3 schedule-weekly-row <?= $editFreq !== 'weekly' ? 'd-none' : '' ?>">
-                        <label class="col-md-3 col-form-label fw-semibold"><i class="bi bi-calendar-week me-1"></i> Day & Time</label>
+                        <label class="col-md-3 col-form-label fw-semibold"><i class="bi bi-calendar-week me-1"></i> Days & Time</label>
                         <div class="col-md-9">
                             <div class="btn-group btn-group-sm mb-2 schedule-day-btns">
                                 <?php $dayLabels = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat']; ?>
                                 <?php foreach ($dayLabels as $di => $dl): ?>
-                                <button type="button" class="btn <?= (int)$editDow === $di ? 'btn-primary active' : 'btn-outline-primary' ?> day-btn" data-day="<?= $di ?>"><?= $dl ?></button>
+                                <button type="button" class="btn <?= in_array($di, $editDays, true) ? 'btn-primary active' : 'btn-outline-primary' ?> day-btn" data-day="<?= $di ?>"><?= $dl ?></button>
                                 <?php endforeach; ?>
                             </div>
-                            <input type="hidden" name="day_of_week" class="schedule-dow-hidden" value="<?= (int)$editDow ?>">
+                            <input type="hidden" name="day_of_week" class="schedule-dow-hidden" value="<?= implode(',', $editDays) ?>">
                             <div class="input-group" style="max-width:300px">
                                 <span class="input-group-text">@ time of day</span>
                                 <input type="time" class="form-control schedule-time-input" value="<?= htmlspecialchars(trim(explode(',', $editTimes ?: '00:00')[0])) ?>">
@@ -2445,7 +2444,7 @@ $sizeDisplay = $totalSize > 0 ? \BBS\Services\ServerStats::formatBytes((int) $to
                 </div>
 
                 <div class="row mb-3 schedule-weekly-row d-none">
-                    <label class="col-md-3 col-form-label fw-semibold"><i class="bi bi-calendar-week me-1"></i> Day & Time</label>
+                    <label class="col-md-3 col-form-label fw-semibold"><i class="bi bi-calendar-week me-1"></i> Days & Time</label>
                     <div class="col-md-9">
                         <div class="btn-group btn-group-sm mb-2 schedule-day-btns">
                             <button type="button" class="btn btn-outline-primary day-btn" data-day="0">Sun</button>
@@ -2765,18 +2764,18 @@ $sizeDisplay = $totalSize > 0 ? \BBS\Services\ServerStats::formatBytes((int) $to
             syncHourly();
         }
 
-        // Day-of-week toggle (single select)
+        // Day-of-week toggles (weekly, several days allowed, at least one stays on)
         container.querySelectorAll('.schedule-day-btns .day-btn').forEach(btn => {
             btn.addEventListener('click', function(e) {
                 e.preventDefault();
-                this.parentElement.querySelectorAll('.btn').forEach(b => {
-                    b.classList.remove('active', 'btn-primary');
-                    b.classList.add('btn-outline-primary');
-                });
-                this.classList.add('active', 'btn-primary');
-                this.classList.remove('btn-outline-primary');
+                this.blur();
+                const group = this.parentElement;
+                if (this.classList.contains('active') && group.querySelectorAll('.day-btn.active').length === 1) return;
+                this.classList.toggle('active');
+                this.classList.toggle('btn-primary');
+                this.classList.toggle('btn-outline-primary');
                 const hidden = container.querySelector('.schedule-dow-hidden');
-                if (hidden) hidden.value = this.dataset.day;
+                if (hidden) hidden.value = [...group.querySelectorAll('.day-btn.active')].map(b => b.dataset.day).join(',');
             });
         });
 

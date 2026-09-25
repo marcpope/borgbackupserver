@@ -169,6 +169,64 @@ class SchedulerService
     }
 
     /**
+     * Weekly schedule days as sorted ints, 0=Sunday (PHP's `w`). Takes the
+     * stored comma list, a single number, or an array. Invalid entries are
+     * dropped; nothing valid gives [].
+     */
+    public static function parseDaysOfWeek($value): array
+    {
+        $parts = is_array($value) ? $value : explode(',', (string) $value);
+        $days = [];
+        foreach ($parts as $d) {
+            $d = trim((string) $d);
+            if ($d !== '' && ctype_digit($d) && (int) $d <= 6) {
+                $days[(int) $d] = (int) $d;
+            }
+        }
+        ksort($days);
+        return array_values($days);
+    }
+
+    /** Stored form of weekly days: "1,3,5", or NULL when none are valid. */
+    public static function formatDaysOfWeek($value): ?string
+    {
+        $days = self::parseDaysOfWeek($value);
+        return $days ? implode(',', $days) : null;
+    }
+
+    /** "Mon, Wed, Fri" for a weekly schedule's days. */
+    public static function daysOfWeekLabel($value): string
+    {
+        $names = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+        $days = self::parseDaysOfWeek($value) ?: [1];
+        return implode(', ', array_map(fn($d) => $names[$d], $days));
+    }
+
+    /**
+     * Next run of a weekly schedule, in UTC: the first of its days, from
+     * today on, whose time is still ahead. No valid day falls back to Monday.
+     */
+    public static function nextWeeklyRun($daysOfWeek, string $time, \DateTimeZone $tz): string
+    {
+        $days = self::parseDaysOfWeek($daysOfWeek) ?: [1];
+        $parts = explode(':', trim($time));
+        $now = new \DateTime('now', $tz);
+        for ($offset = 0; $offset <= 7; $offset++) {
+            $candidate = new \DateTime('today', $tz);
+            if ($offset > 0) {
+                $candidate->modify("+{$offset} days");
+            }
+            $candidate->setTime((int) ($parts[0] ?? 0), (int) ($parts[1] ?? 0));
+            if ($candidate > $now && in_array((int) $candidate->format('w'), $days, true)) {
+                $candidate->setTimezone(new \DateTimeZone('UTC'));
+                return $candidate->format('Y-m-d H:i:s');
+            }
+        }
+        // Unreachable: 8 consecutive days always include every weekday.
+        return gmdate('Y-m-d H:i:s', time() + 7 * 86400);
+    }
+
+    /**
      * The next time a schedule should fire, in UTC.
      *
      * Public because anything that rewrites a schedule's frequency, times or
@@ -219,12 +277,7 @@ class SchedulerService
         }
 
         if ($schedule['frequency'] === 'weekly') {
-            $days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-            $dayName = $days[$schedule['day_of_week'] ?? 1] ?? 'Monday';
-            $firstTime = $timeList[0] ?? '01:00';
-            $next = new \DateTime("next {$dayName} {$firstTime}", $scheduleTz);
-            $next->setTimezone($utcTz);
-            return $next->format('Y-m-d H:i:s');
+            return self::nextWeeklyRun($schedule['day_of_week'] ?? null, $timeList[0] ?? '01:00', $scheduleTz);
         }
 
         if ($schedule['frequency'] === 'monthly') {

@@ -21,7 +21,7 @@ class BackupPlanController extends Controller
         $advancedOptions = trim($_POST['advanced_options'] ?? '');
         $frequency = $_POST['frequency'] ?? 'daily';
         $times = trim($_POST['times'] ?? '');
-        $dayOfWeek = !empty($_POST['day_of_week']) ? (int) $_POST['day_of_week'] : null;
+        $dayOfWeek = \BBS\Services\SchedulerService::formatDaysOfWeek($_POST['day_of_week'] ?? '');
         $dayOfMonth = !empty($_POST['day_of_month']) ? $_POST['day_of_month'] : null;
 
         $pruneMinutes = (int) ($_POST['prune_minutes'] ?? 0);
@@ -172,7 +172,7 @@ class BackupPlanController extends Controller
         if (isset($_POST['frequency'])) {
             $frequency = $_POST['frequency'];
             $times = trim($_POST['times'] ?? '');
-            $dayOfWeek = isset($_POST['day_of_week']) && $_POST['day_of_week'] !== '' ? (int) $_POST['day_of_week'] : null;
+            $dayOfWeek = \BBS\Services\SchedulerService::formatDaysOfWeek($_POST['day_of_week'] ?? '');
             $dayOfMonth = isset($_POST['day_of_month']) && $_POST['day_of_month'] !== '' ? $_POST['day_of_month'] : null;
             $nextRun = $this->calculateNextRun($frequency, $times, $dayOfWeek, $dayOfMonth);
 
@@ -450,7 +450,7 @@ class BackupPlanController extends Controller
         return null;
     }
 
-    private function calculateNextRun(string $frequency, string $times, ?int $dayOfWeek, ?int $dayOfMonth): ?string
+    private function calculateNextRun(string $frequency, string $times, ?string $dayOfWeek, $dayOfMonth): ?string
     {
         if ($frequency === 'manual') {
             return null;
@@ -500,10 +500,7 @@ class BackupPlanController extends Controller
         }
 
         if ($frequency === 'weekly' && $dayOfWeek !== null) {
-            $days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-            $next = new \DateTime("next {$days[$dayOfWeek]} {$firstTime}", $userTz);
-            $next->setTimezone($utcTz);
-            return $next->format('Y-m-d H:i:s');
+            return \BBS\Services\SchedulerService::nextWeeklyRun($dayOfWeek, $firstTime, $userTz);
         }
 
         if ($frequency === 'monthly' && $dayOfMonth !== null) {

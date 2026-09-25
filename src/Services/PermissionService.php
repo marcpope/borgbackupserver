@@ -95,6 +95,19 @@ class PermissionService
     }
 
     /**
+     * Can this user add clients? Admins always; other users when an admin
+     * turned it on for them (#481).
+     */
+    public function canCreateClients(int $userId): bool
+    {
+        if ($this->isAdmin($userId)) {
+            return true;
+        }
+        $user = $this->db->fetchOne("SELECT can_create_clients FROM users WHERE id = ?", [$userId]);
+        return !empty($user['can_create_clients']);
+    }
+
+    /**
      * Get all agents a user can access.
      */
     public function getAccessibleAgentIds(int $userId): array

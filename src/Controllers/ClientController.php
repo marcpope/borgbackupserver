@@ -213,11 +213,21 @@ class ClientController extends Controller
         ]);
     }
 
+    private function requireCreateClients(): void
+    {
+        $this->requireAuth();
+        if (!(new PermissionService())->canCreateClients((int) $_SESSION['user_id'])) {
+            http_response_code(403);
+            echo 'Access denied';
+            exit;
+        }
+    }
+
     public function add(): void
     {
-        $this->requireAdmin();
+        $this->requireCreateClients();
 
-        $users = $this->db->fetchAll("SELECT id, username FROM users ORDER BY username");
+        $users = $this->isAdmin() ? $this->db->fetchAll("SELECT id, username FROM users ORDER BY username") : [];
 
         $this->view('clients/add', [
             'pageTitle' => 'Clients',
@@ -228,7 +238,7 @@ class ClientController extends Controller
 
     public function store(): void
     {
-        $this->requireAdmin();
+        $this->requireCreateClients();
         $this->verifyCsrf();
 
         $name = trim($_POST['name'] ?? '');
@@ -238,7 +248,10 @@ class ClientController extends Controller
         }
 
         $apiKey = bin2hex(random_bytes(32));
-        $userId = !empty($_POST['user_id']) ? (int) $_POST['user_id'] : null;
+        // A non-admin always owns the clients they add (#481)
+        $userId = $this->isAdmin()
+            ? (!empty($_POST['user_id']) ? (int) $_POST['user_id'] : null)
+            : (int) $_SESSION['user_id'];
 
         // Falls back to the default profile rather than null, so failure
         // settings and plan defaults always resolve to something.

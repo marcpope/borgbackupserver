@@ -25,10 +25,11 @@
                         <div class="form-text">
                             What kind of machine this is. The profile decides what its first backup plan is filled in
                             with — directories, schedule and retention — and how patient BBS is when it drops out
-                            mid-backup. <a href="/settings?tab=profiles">Manage profiles</a>.
+                            mid-backup.<?php if (($_SESSION['user_role'] ?? '') === 'admin'): ?> <a href="/settings?tab=profiles">Manage profiles</a>.<?php endif; ?>
                         </div>
                     </div>
 
+                    <?php if (($_SESSION['user_role'] ?? '') === 'admin'): ?>
                     <div class="mb-4">
                         <label class="form-label fw-semibold">Assign to User</label>
                         <select class="form-select" name="user_id">
@@ -39,6 +40,9 @@
                         </select>
                         <div class="form-text">Optional. Assign this client to a specific user.</div>
                     </div>
+                    <?php else: ?>
+                    <div class="mb-4 form-text">This client will be assigned to you.</div>
+                    <?php endif; ?>
 
                     <button type="submit" class="btn btn-success">
                         <i class="bi bi-plus-circle me-1"></i> Create Client

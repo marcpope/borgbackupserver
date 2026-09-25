@@ -1178,17 +1178,13 @@ function bbs_histogram_ticks(int $max): array
 
                 <div id="ct-dow-section" class="mb-3" style="display: none;">
                     <label class="form-label small">
-                        <i class="bi bi-calendar-event me-1"></i>Day of week
+                        <i class="bi bi-calendar-event me-1"></i>Days of week
                     </label>
-                    <select id="ct-dow" class="form-select form-select-sm">
-                        <option value="1">Monday</option>
-                        <option value="2">Tuesday</option>
-                        <option value="3">Wednesday</option>
-                        <option value="4">Thursday</option>
-                        <option value="5">Friday</option>
-                        <option value="6">Saturday</option>
-                        <option value="0">Sunday</option>
-                    </select>
+                    <div id="ct-dow" class="btn-group btn-group-sm d-flex flex-wrap">
+                        <?php foreach ([1 => 'Mon', 2 => 'Tue', 3 => 'Wed', 4 => 'Thu', 5 => 'Fri', 6 => 'Sat', 0 => 'Sun'] as $dv => $dl): ?>
+                        <button type="button" class="btn btn-outline-primary ct-dow-btn" data-day="<?= $dv ?>"><?= $dl ?></button>
+                        <?php endforeach; ?>
+                    </div>
                 </div>
 
                 <div class="mb-2">
@@ -1521,6 +1517,12 @@ document.addEventListener('DOMContentLoaded', function () {
     const ctTimesList = document.getElementById('ct-times-list');
     const ctDowSection = document.getElementById('ct-dow-section');
     const ctDow = document.getElementById('ct-dow');
+    ctDow.querySelectorAll('.ct-dow-btn').forEach(b => b.addEventListener('click', () => {
+        b.classList.toggle('active');
+        b.classList.toggle('btn-primary');
+        b.classList.toggle('btn-outline-primary');
+        b.blur();
+    }));
     const ctContext = document.getElementById('ct-context');
     const ctError = document.getElementById('ct-error');
 
@@ -1570,7 +1572,13 @@ document.addEventListener('DOMContentLoaded', function () {
         // Weekly schedules get the day picker, else hide it
         if (s.frequency === 'weekly') {
             ctDowSection.style.display = '';
-            ctDow.value = String(s.day_of_week ?? 1);
+            const on = (s.days_of_week && s.days_of_week.length) ? s.days_of_week : [s.day_of_week ?? 1];
+            ctDow.querySelectorAll('.ct-dow-btn').forEach(b => {
+                const active = on.includes(Number(b.dataset.day));
+                b.classList.toggle('active', active);
+                b.classList.toggle('btn-primary', active);
+                b.classList.toggle('btn-outline-primary', !active);
+            });
         } else {
             ctDowSection.style.display = 'none';
         }
@@ -1596,7 +1604,14 @@ document.addEventListener('DOMContentLoaded', function () {
         }
         const body = { times: times };
         const s = scheduleMap[activeScheduleId];
-        if (s && s.frequency === 'weekly') body.day_of_week = Number(ctDow.value);
+        if (s && s.frequency === 'weekly') {
+            body.day_of_week = [...ctDow.querySelectorAll('.ct-dow-btn.active')].map(b => Number(b.dataset.day));
+            if (body.day_of_week.length === 0) {
+                ctError.textContent = 'Pick at least one day.';
+                ctError.style.display = '';
+                return;
+            }
+        }
 
         try {
             const resp = await fetch('/schedules/' + activeScheduleId + '/time', {

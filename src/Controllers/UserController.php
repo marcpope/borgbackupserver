@@ -135,6 +135,7 @@ class UserController extends Controller
             $data['password_hash'] = password_hash($_POST['password'], PASSWORD_BCRYPT);
         }
         $data['all_clients'] = isset($_POST['all_clients']) ? 1 : 0;
+        $data['can_create_clients'] = isset($_POST['can_create_clients']) ? 1 : 0;
 
         if (!empty($data)) {
             $this->db->update('users', $data, 'id = ?', [$id]);

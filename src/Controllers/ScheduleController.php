@@ -70,11 +70,12 @@ class ScheduleController extends Controller
 
         $update = ['times' => $timesStr];
         if ($schedule['frequency'] === 'weekly' && $dow !== null) {
-            $dowInt = (int) $dow;
-            if ($dowInt < 0 || $dowInt > 6) {
-                $this->json(['error' => 'day_of_week must be 0..6 (Sunday=0).'], 422);
+            // One day (0..6, Sunday=0) or a list of them
+            $days = \BBS\Services\SchedulerService::formatDaysOfWeek(is_array($dow) ? $dow : (string) $dow);
+            if ($days === null) {
+                $this->json(['error' => 'day_of_week must be 0..6 (Sunday=0), or a list of them.'], 422);
             }
-            $update['day_of_week'] = $dowInt;
+            $update['day_of_week'] = $days;
         }
 
         // Recompute next_run to reflect the new times immediately
@@ -131,12 +132,7 @@ class ScheduleController extends Controller
         }
 
         if ($frequency === 'weekly') {
-            $days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-            $dayName = $days[(int) ($dayOfWeek ?? 1)] ?? 'Monday';
-            $firstTime = $timeList[0];
-            $next = new \DateTime("next {$dayName} {$firstTime}", $tz);
-            $next->setTimezone($utc);
-            return $next->format('Y-m-d H:i:s');
+            return \BBS\Services\SchedulerService::nextWeeklyRun($dayOfWeek, $timeList[0], $tz);
         }
 
         return null; // Monthly/interval — caller can leave as-is
@@ -292,8 +288,10 @@ class ScheduleController extends Controller
             if ($s['frequency'] === 'daily') {
                 $daysToShow = [0, 1, 2, 3, 4, 5, 6];
             } elseif ($s['frequency'] === 'weekly') {
-                $dowSun0 = (int) ($s['day_of_week'] ?? 1); // 0=Sun
-                $daysToShow = [($dowSun0 + 6) % 7]; // convert to 0=Mon
+                $daysToShow = array_map(
+                    fn($d) => ($d + 6) % 7, // 0=Sun → 0=Mon
+                    \BBS\Services\SchedulerService::parseDaysOfWeek($s['day_of_week'] ?? '') ?: [1]
+                );
             }
 
             // Pick a reference Monday to generate concrete DateTime objects. We
@@ -399,6 +397,7 @@ class ScheduleController extends Controller
                 'frequency' => $s['frequency'],
                 'times' => $s['times'],
                 'day_of_week' => $s['day_of_week'] !== null ? (int) $s['day_of_week'] : null,
+                'days_of_week' => \BBS\Services\SchedulerService::parseDaysOfWeek($s['day_of_week'] ?? ''),
                 'timezone' => $s['timezone'],
             ];
         }

@@ -86,6 +86,12 @@ $columnLabels = [
                 </div>
             </div>
 
+            <div class="form-check mb-3">
+                <input class="form-check-input" type="checkbox" name="can_create_clients" id="canCreateClientsCheck" value="1" <?= !empty($user['can_create_clients']) ? 'checked' : '' ?>>
+                <label class="form-check-label fw-semibold" for="canCreateClientsCheck">Can Add Clients</label>
+                <div class="text-muted small">Clients this user adds are assigned to them with all permissions.</div>
+            </div>
+
             <!-- All Clients Permissions (shown when all_clients is checked) -->
             <div id="allClientsPermsDiv" style="<?= $user['all_clients'] ? '' : 'display:none' ?>">
                 <p class="text-muted small mb-2">Grant permissions for all clients:</p>

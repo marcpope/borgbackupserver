@@ -99,7 +99,7 @@
     <?php else: ?>
     <div></div>
     <?php endif; ?>
-    <?php if (($_SESSION['user_role'] ?? '') === 'admin'): ?>
+    <?php if (($_SESSION['user_role'] ?? '') === 'admin' || (new \BBS\Services\PermissionService())->canCreateClients((int) ($_SESSION['user_id'] ?? 0))): ?>
     <a href="/clients/add" class="btn btn-sm btn-success">
         <i class="bi bi-plus-circle me-1"></i><span class="d-none d-sm-inline"> Add Client</span>
     </a>

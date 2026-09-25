@@ -409,6 +409,8 @@ class AdminApiController extends Controller
             $p['enabled'] = (bool) $p['enabled'];
             $p['snapshot'] = (bool) ($p['snapshot'] ?? 0);
             $p['priority'] = $p['priority'] ?? 'normal';
+            $p['days_of_week'] = \BBS\Services\SchedulerService::parseDaysOfWeek($p['day_of_week'] ?? '');
+            $p['day_of_week'] = $p['days_of_week'][0] ?? null;
             $p['repository_id'] = $p['repository_id'] !== null ? (int) $p['repository_id'] : null;
             foreach (['prune_minutes', 'prune_hours', 'prune_days',
                       'prune_weeks', 'prune_months', 'prune_years'] as $k) {
@@ -899,6 +901,8 @@ class AdminApiController extends Controller
             $p['enabled'] = (bool) $p['enabled'];
             $p['snapshot'] = (bool) ($p['snapshot'] ?? 0);
             $p['priority'] = $p['priority'] ?? 'normal';
+            $p['days_of_week'] = \BBS\Services\SchedulerService::parseDaysOfWeek($p['day_of_week'] ?? '');
+            $p['day_of_week'] = $p['days_of_week'][0] ?? null;
             $p['repository_id'] = $p['repository_id'] !== null ? (int) $p['repository_id'] : null;
             // Signed: a negative keep count is borg's "no limit" (#386), so
             // these must not be coerced to unsigned or clamped at zero.
@@ -934,7 +938,8 @@ class AdminApiController extends Controller
         $advancedOptions = trim($input['advanced_options'] ?? '--compression lz4 --exclude-caches --noatime');
         $frequency = $input['frequency'] ?? 'daily';
         $times = $input['times'] ?? '02:00';
-        $dayOfWeek = $input['day_of_week'] ?? null;
+        // days_of_week (a list) wins over the older single day_of_week
+        $dayOfWeek = \BBS\Services\SchedulerService::formatDaysOfWeek($input['days_of_week'] ?? (isset($input['day_of_week']) ? (string) $input['day_of_week'] : ''));
         $dayOfMonth = $input['day_of_month'] ?? null;
         $pruneMinutes = (int) ($input['prune_minutes'] ?? 0);
         $pruneHours = (int) ($input['prune_hours'] ?? 0);
@@ -1778,7 +1783,9 @@ class AdminApiController extends Controller
             $schedData = [];
             if (isset($input['frequency'])) $schedData['frequency'] = $input['frequency'];
             if (isset($input['times'])) $schedData['times'] = $input['times'];
-            if (isset($input['day_of_week'])) $schedData['day_of_week'] = $input['day_of_week'];
+            if (isset($input['days_of_week']) || isset($input['day_of_week'])) {
+                $schedData['day_of_week'] = \BBS\Services\SchedulerService::formatDaysOfWeek($input['days_of_week'] ?? (string) $input['day_of_week']);
+            }
             if (isset($input['day_of_month'])) $schedData['day_of_month'] = $input['day_of_month'];
             if (isset($input['timezone'])) $schedData['timezone'] = $input['timezone'];
 
@@ -1791,7 +1798,7 @@ class AdminApiController extends Controller
             if (!empty($schedData)) {
                 $freq = $input['frequency'] ?? $schedule['frequency'];
                 $times = $input['times'] ?? $schedule['times'] ?? '02:00';
-                $dow = $input['day_of_week'] ?? $schedule['day_of_week'];
+                $dow = array_key_exists('day_of_week', $schedData) ? $schedData['day_of_week'] : $schedule['day_of_week'];
                 $dom = $input['day_of_month'] ?? $schedule['day_of_month'];
                 $tz = $input['timezone'] ?? $schedule['timezone'] ?? 'UTC';
                 $schedData['next_run'] = $this->calcNextRun($freq, $times, $dow, $dom, $tz);
@@ -2695,13 +2702,7 @@ class AdminApiController extends Controller
         }
 
         if ($frequency === 'weekly' && $dayOfWeek !== null) {
-            $days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-            $dayName = $days[(int) $dayOfWeek] ?? 'Monday';
-            $parts = explode(':', $firstTime);
-            $next = new \DateTime("next {$dayName}", $tz);
-            $next->setTime((int)($parts[0] ?? 0), (int)($parts[1] ?? 0));
-            $next->setTimezone($utcTz);
-            return $next->format('Y-m-d H:i:s');
+            return \BBS\Services\SchedulerService::nextWeeklyRun($dayOfWeek, $firstTime, $tz);
         }
 
         if ($frequency === 'monthly') {
@@ -3566,6 +3567,7 @@ class AdminApiController extends Controller
             'email'         => $row['email'],
             'role'          => $row['role'],
             'all_clients'   => (bool) $row['all_clients'],
+            'can_create_clients' => (bool) ($row['can_create_clients'] ?? false),
             'auth_provider' => $row['auth_provider'] ?? 'local',
             'oidc_status'   => $row['oidc_status'] ?? 'active',
             'totp_enabled'  => (bool) ($row['totp_enabled'] ?? false),
@@ -3639,7 +3641,7 @@ class AdminApiController extends Controller
 
     /**
      * PUT /api/v1/users/{id}
-     * Body: any of email / password / role / all_clients / timezone / time_format.
+     * Body: any of email / password / role / all_clients / can_create_clients / timezone / time_format.
      * username changes are NOT supported via this endpoint (creates session
      * inconsistency for the in-flight user; do it via the UI if you really
      * need to). Pass reset_totp:true to clear the user's 2FA secret.
@@ -3687,6 +3689,9 @@ class AdminApiController extends Controller
         }
         if (isset($input['all_clients'])) {
             $updates['all_clients'] = $input['all_clients'] ? 1 : 0;
+        }
+        if (isset($input['can_create_clients'])) {
+            $updates['can_create_clients'] = $input['can_create_clients'] ? 1 : 0;
         }
         if (isset($input['timezone'])) {
             $updates['timezone'] = (string) $input['timezone'];
@@ -3840,8 +3845,10 @@ class AdminApiController extends Controller
             $r['repository_id']   = (int) $r['repository_id'];
             $r['plan_enabled']    = (bool) $r['plan_enabled'];
             $r['schedule_enabled']= isset($r['schedule_enabled']) ? (bool) $r['schedule_enabled'] : null;
-            $r['day_of_week']     = isset($r['day_of_week']) && $r['day_of_week'] !== null
-                                    ? (int) $r['day_of_week'] : null;
+            // day_of_week stays a single int (the first day) for older app
+            // builds; days_of_week carries the full list.
+            $r['days_of_week']    = \BBS\Services\SchedulerService::parseDaysOfWeek($r['day_of_week'] ?? '');
+            $r['day_of_week']     = $r['days_of_week'][0] ?? null;
         }
         unset($r);
 
@@ -4097,7 +4104,7 @@ class AdminApiController extends Controller
                 return true;
             case 'weekly':
                 // Schema stores day_of_week as 0=Sunday, matching PHP's `w`.
-                return (int) ($schedule['day_of_week'] ?? 0) === (int) $day->format('w');
+                return in_array((int) $day->format('w'), \BBS\Services\SchedulerService::parseDaysOfWeek($schedule['day_of_week'] ?? '') ?: [1], true);
             case 'monthly':
                 return (int) ($schedule['day_of_month'] ?? 0) === (int) $day->format('j');
             default:
