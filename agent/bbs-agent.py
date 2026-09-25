@@ -5272,13 +5272,21 @@ def clear_stale_cache_locks():
     Older borg used %LOCALAPPDATA%\\borg\\Cache on Windows. Forceful kills
     (cancel, service stop, crash) leave lock.exclusive behind; borg's own
     stale-PID detection is unreliable on Windows, so the next run hits a
-    lock timeout. We check both paths plus BORG_CACHE_DIR if set.
+    lock timeout. We check both paths plus the locations borg derives from
+    BORG_CACHE_DIR, XDG_CACHE_HOME and BORG_BASE_DIR. The Docker agent sets
+    BORG_BASE_DIR, so its cache lives under /etc/bbs-agent/borg/.cache (#517).
     """
     import shutil
     candidates = []
     env_cache = os.environ.get("BORG_CACHE_DIR")
     if env_cache:
         candidates.append(env_cache)
+    xdg_cache = os.environ.get("XDG_CACHE_HOME")
+    if xdg_cache:
+        candidates.append(os.path.join(xdg_cache, "borg"))
+    base_dir = os.environ.get("BORG_BASE_DIR")
+    if base_dir:
+        candidates.append(os.path.join(base_dir, ".cache", "borg"))
     candidates.append(os.path.expanduser("~/.cache/borg"))
     if IS_WINDOWS:
         local_appdata = os.environ.get("LOCALAPPDATA")
@@ -5480,4 +5488,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-# bbs-signature: v1 Ayqp9tApBPiG7VKUMEFmxs7FjkYxipGnaW328GqqvEBdKDFwmUHN/fROcMMjKfcC5fyOhpm1J+lL8GfzbD5tCg==
+# bbs-signature: v1 u7JrhaRDXLbQn61ma118a03F3EVFL4xPRSXbDo6oka9OOXrvaYsIXDHaaQsXM+rB05qimZODBJ4lhrcZiylMCA==

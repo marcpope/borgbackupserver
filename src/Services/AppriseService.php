@@ -13,10 +13,37 @@ class AppriseService
         $this->db = Database::getInstance();
     }
 
+    private static ?string $binary = null;
+
+    /**
+     * Absolute path to the apprise binary, or '' when it isn't installed.
+     * pip puts it in /usr/local/bin, which is not on cron's default PATH
+     * (/usr/bin:/bin), so a PATH lookup alone missed it for every
+     * scheduler-sent notification (#516).
+     */
+    public function appriseBinary(): string
+    {
+        if (self::$binary === null) {
+            self::$binary = '';
+            foreach (['/usr/local/bin/apprise', '/usr/bin/apprise'] as $path) {
+                if (is_executable($path)) {
+                    self::$binary = $path;
+                    break;
+                }
+            }
+            if (self::$binary === '') {
+                exec('command -v apprise 2>/dev/null', $output, $code);
+                if ($code === 0 && !empty($output[0])) {
+                    self::$binary = trim($output[0]);
+                }
+            }
+        }
+        return self::$binary;
+    }
+
     public function isAppriseInstalled(): bool
     {
-        exec('which apprise 2>/dev/null', $output, $code);
-        return $code === 0;
+        return $this->appriseBinary() !== '';
     }
 
     /**
@@ -55,7 +82,7 @@ class AppriseService
             $urlEscaped = escapeshellarg($service['apprise_url']);
 
             // Run synchronously so we can capture success/failure
-            $cmd = "apprise -t {$titleEscaped} -b {$bodyEscaped} {$urlEscaped} 2>&1";
+            $cmd = escapeshellarg($this->appriseBinary()) . " -t {$titleEscaped} -b {$bodyEscaped} {$urlEscaped} 2>&1";
             exec($cmd, $output, $exitCode);
 
             // Update last_used_at
@@ -97,11 +124,18 @@ class AppriseService
      */
     public function sendForEvent(string $eventType, string $title, string $body, ?int $agentId = null): int
     {
-        if (!$this->isAppriseInstalled()) {
+        $services = $this->getEnabledServicesForEvent($eventType);
+        if (empty($services)) {
             return 0;
         }
 
-        $services = $this->getEnabledServicesForEvent($eventType);
+        if (!$this->isAppriseInstalled()) {
+            $this->db->insert('server_log', [
+                'level' => 'warning',
+                'message' => "Push notification not sent: apprise is not installed ({$title})",
+            ] + ($agentId !== null ? ['agent_id' => $agentId] : []));
+            return 0;
+        }
         $sent = 0;
 
         foreach ($services as $service) {
@@ -182,7 +216,7 @@ class AppriseService
             $bodyEscaped = escapeshellarg($body);
             $urlArgs = implode(' ', array_map('escapeshellarg', $urls));
 
-            $cmd = "apprise -t {$titleEscaped} -b {$bodyEscaped} {$urlArgs} > /dev/null 2>&1 &";
+            $cmd = escapeshellarg($this->appriseBinary()) . " -t {$titleEscaped} -b {$bodyEscaped} {$urlArgs} > /dev/null 2>&1 &";
             exec($cmd);
 
             return true;
@@ -212,7 +246,7 @@ class AppriseService
             $body = escapeshellarg('This is a test notification from Borg Backup Server. If you receive this, Apprise is configured correctly.');
             $urlArgs = implode(' ', array_map('escapeshellarg', $urls));
 
-            $cmd = "apprise -t {$title} -b {$body} {$urlArgs} 2>&1";
+            $cmd = escapeshellarg($this->appriseBinary()) . " -t {$title} -b {$body} {$urlArgs} 2>&1";
             exec($cmd, $output, $code);
 
             if ($code === 0) {

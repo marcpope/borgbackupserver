@@ -889,6 +889,7 @@ touch /var/log/bbs-scheduler.log
 chown www-data:www-data /var/log/bbs-scheduler.log
 cat > /etc/cron.d/bbs-scheduler << 'CRON'
 TMPDIR=/var/bbs/tmp
+PATH=/usr/local/bin:/usr/bin:/bin
 # Run the scheduler as root cron + `su` to www-data, NOT a `www-data`
 # user-field entry. In some container environments (e.g. Unraid's Docker)
 # /etc/cron.d entries with a non-root user field silently never execute —
