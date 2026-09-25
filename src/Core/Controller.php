@@ -178,6 +178,14 @@ class Controller
             $this->json(['error' => 'Not found'], 404);
         }
 
+        // /api/v1/metrics and /api/v1/health took an admin token before the
+        // monitoring gate existed, from any address (the app calls /health).
+        // A regular token there keeps that check; the address list governs
+        // monitoring tokens and token-less callers only.
+        if ($legacyAdminFallback && $this->presentedTokenKind() === 'user') {
+            return $this->requireApiToken();
+        }
+
         $acl = \BBS\Services\MetricsAccess::parseAcl($setting('metrics_acl', '[]'));
         $proxies = \BBS\Services\MetricsAccess::parseCidrList($setting('metrics_trusted_proxies', '[]'));
         $ip = \BBS\Services\MetricsAccess::resolveClientIp(
@@ -210,15 +218,11 @@ class Controller
             return [];
         }
 
-        // Its own budget, tighter than the scrape budget and separate from
-        // admin_api: a scraper left with a revoked token must not lock the
-        // admin API out for everything else coming from that address.
-        if (!$this->checkRateLimit('metrics_auth', 10, 300, $ip)) {
-            header('Retry-After: 300');
-            $this->json(['error' => 'Too many failed attempts. Try again later.'], 429);
-        }
-
-        $ctx = $this->authenticateBearer(true, 'metrics_auth');
+        // Its own budget, separate from admin_api: a scraper left with a
+        // revoked token must not lock the admin API out for everything else
+        // coming from that address. Keyed to the resolved address, so the
+        // reset after a good token clears the same row behind a proxy.
+        $ctx = $this->authenticateBearer(true, 'metrics_auth', $ip);
         if (($ctx['token_kind'] ?? 'user') !== 'metrics' && ($ctx['role'] ?? '') !== 'admin') {
             $this->json(['error' => 'Token must be a monitoring token or belong to an admin user'], 403);
         }
@@ -227,11 +231,28 @@ class Controller
     }
 
     /**
+     * Kind of the Bearer token on this request, without authenticating it:
+     * 'user', 'metrics', or null when none was sent or it matches nothing.
+     */
+    private function presentedTokenKind(): ?string
+    {
+        $header = $_SERVER['HTTP_AUTHORIZATION'] ?? $_SERVER['REDIRECT_HTTP_AUTHORIZATION'] ?? '';
+        if (!str_starts_with($header, 'Bearer ') || strlen($header) <= 7) {
+            return null;
+        }
+        $row = $this->db->fetchOne(
+            "SELECT kind FROM api_tokens WHERE token_hash = ?",
+            [hash('sha256', substr($header, 7))]
+        );
+        return $row ? (($row['kind'] ?? 'user') === 'metrics' ? 'metrics' : 'user') : null;
+    }
+
+    /**
      * Shared Bearer-token authentication: hash lookup, rate limit,
      * expiry check, last_used_at / last_seen_ip bump. Role enforcement
      * is the caller's job.
      */
-    protected function authenticateBearer(bool $allowMetricsKind = false, string $rateLimitKey = 'admin_api'): array
+    protected function authenticateBearer(bool $allowMetricsKind = false, string $rateLimitKey = 'admin_api', ?string $ipOverride = null): array
     {
         $header = $_SERVER['HTTP_AUTHORIZATION'] ?? $_SERVER['REDIRECT_HTTP_AUTHORIZATION'] ?? '';
         $token = '';
@@ -243,7 +264,7 @@ class Controller
             $this->json(['error' => 'Missing authorization token. Use: Authorization: Bearer <token>'], 401);
         }
 
-        if (!$this->checkRateLimit($rateLimitKey, 20, 300)) {
+        if (!$this->checkRateLimit($rateLimitKey, 20, 300, $ipOverride)) {
             $this->json(['error' => 'Too many failed attempts. Try again later.'], 429);
         }
 
@@ -269,9 +290,9 @@ class Controller
             $this->json(['error' => 'This token may only read the monitoring endpoints'], 403);
         }
 
-        $this->resetRateLimit($rateLimitKey);
+        $this->resetRateLimit($rateLimitKey, $ipOverride);
 
-        $ip = $_SERVER['REMOTE_ADDR'] ?? null;
+        $ip = $ipOverride ?? ($_SERVER['REMOTE_ADDR'] ?? null);
         $this->db->query(
             "UPDATE api_tokens SET last_used_at = NOW(), last_seen_ip = ? WHERE id = ?",
             [$ip, $apiToken['id']]
@@ -491,10 +512,11 @@ class Controller
         // budget has to follow the scraper, not the proxy in front of it.
         $ip = $ipOverride ?? ($_SERVER['REMOTE_ADDR'] ?? '0.0.0.0');
 
-        // Clean old entries
+        // Clean old entries for this endpoint only. Endpoints use different
+        // windows; a short one must not clear a longer one's attempts early.
         $this->db->query(
-            "DELETE FROM rate_limits WHERE window_start < DATE_SUB(NOW(), INTERVAL ? SECOND)",
-            [$windowSeconds]
+            "DELETE FROM rate_limits WHERE endpoint = ? AND window_start < DATE_SUB(NOW(), INTERVAL ? SECOND)",
+            [$endpoint, $windowSeconds]
         );
 
         $row = $this->db->fetchOne(
@@ -523,9 +545,9 @@ class Controller
     /**
      * Reset rate limit on successful action (e.g. after login).
      */
-    protected function resetRateLimit(string $endpoint): void
+    protected function resetRateLimit(string $endpoint, ?string $ipOverride = null): void
     {
-        $ip = $_SERVER['REMOTE_ADDR'] ?? '0.0.0.0';
+        $ip = $ipOverride ?? ($_SERVER['REMOTE_ADDR'] ?? '0.0.0.0');
         $this->db->delete('rate_limits', 'ip_address = ? AND endpoint = ?', [$ip, $endpoint]);
     }
 
