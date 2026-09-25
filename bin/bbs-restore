@@ -327,13 +327,32 @@ else
         echo "  No agents with SSH users found"
     else
         COUNT=0
+        PATHS_COUNT=0
         while IFS=$'\t' read -r AGENT_ID UNIX_USER PUBLIC_KEY; do
             [ -z "$UNIX_USER" ] && continue
             HOME_DIR="${STORAGE_PATH%/}/${AGENT_ID}"
             /usr/local/bin/bbs-ssh-helper create-user "$UNIX_USER" "$HOME_DIR" "$PUBLIC_KEY" >/dev/null 2>&1 || true
             COUNT=$((COUNT + 1))
+
+            # bbs-ssh-gate only allows the home dir plus the paths listed in
+            # $HOME_DIR/.storage-paths. That file is not part of the backup, so
+            # rebuild it the way SshKeyManager::updateAgentStoragePaths() does —
+            # otherwise every repo on a non-default storage location fails with
+            # "Repository path not allowed".
+            EXTRA_PATHS=()
+            while IFS= read -r LOC_PATH; do
+                LOC_PATH="${LOC_PATH%/}"
+                [ -z "$LOC_PATH" ] || [ "$LOC_PATH" = "${STORAGE_PATH%/}" ] && continue
+                EXTRA_PATHS+=("$LOC_PATH/$AGENT_ID")
+            done < <(mysql -h "${DB_HOST:-localhost}" -u "$DB_USER" -p"$DB_PASS" "$DB_NAME" -N -e \
+                "SELECT DISTINCT sl.path FROM repositories r JOIN storage_locations sl ON sl.id = r.storage_location_id WHERE r.agent_id = ${AGENT_ID} AND r.storage_type = 'local'" </dev/null 2>/dev/null || true)
+            if [ ${#EXTRA_PATHS[@]} -gt 0 ]; then
+                /usr/local/bin/bbs-ssh-helper update-storage-paths "$HOME_DIR" "${EXTRA_PATHS[@]}" >/dev/null 2>&1 || true
+                PATHS_COUNT=$((PATHS_COUNT + 1))
+            fi
         done <<< "$AGENTS"
         ok "Recreated $COUNT Unix user(s)"
+        if [ "$PATHS_COUNT" -gt 0 ]; then ok "Restored storage location access for $PATHS_COUNT agent(s)"; fi
     fi
 fi
 
