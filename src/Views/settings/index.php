@@ -1095,12 +1095,19 @@ const serviceSchemas = {
             const port = f.smtp_port || '587';
             const to = encodeURIComponent(f.smtp_to || '');
             const from = encodeURIComponent(f.smtp_from || f.smtp_user || f.smtp_to || '');
-            let mode = '';
-            if (f.smtp_secure === 'ssl') mode = 'mailtos';
-            else if (f.smtp_secure === 'none') mode = 'mailto';
-            else mode = 'mailto'; // starttls is default
+            // Keep this in sync with the standalone notification-services
+            // view. Apprise chooses the mail security mode from the scheme,
+            // not the port, unless mode= is explicit.
+            let scheme = 'mailtos';
+            let urlMode = 'starttls';
+            if (f.smtp_secure === 'ssl') {
+                urlMode = 'ssl';
+            } else if (f.smtp_secure === 'none') {
+                scheme = 'mailto';
+                urlMode = 'insecure';
+            }
             const auth = (f.smtp_user || f.smtp_pass) ? `${user}:${pass}@` : '';
-            return `${mode}://${auth}${host}:${port}?to=${to}&from=${from}`;
+            return `${scheme}://${auth}${host}:${port}?to=${to}&from=${from}&mode=${urlMode}`;
         }
     },
     discord: {
