@@ -205,6 +205,9 @@ class StorageApiController extends Controller
         if ($name === '' || $host === '' || $user === '' || $key === '') {
             $this->json(['error' => 'name, remote_host, remote_user and ssh_private_key are required'], 422);
         }
+        if ($fieldErr = RemoteSshService::fieldError($host, $user, trim((string) ($input['borg_remote_path'] ?? '')))) {
+            $this->json(['error' => $fieldErr], 422);
+        }
 
         $provider = $this->normaliseProvider($input['provider'] ?? null, $host);
         if ($provider === false) {
@@ -295,6 +298,15 @@ class StorageApiController extends Controller
         }
         if (array_key_exists('append_repo_name', $input)) {
             $data['append_repo_name'] = filter_var($input['append_repo_name'], FILTER_VALIDATE_BOOLEAN) ? 1 : 0;
+        }
+        // Checked on the values the host will have after this update
+        $fieldErr = RemoteSshService::fieldError(
+            $data['remote_host'] ?? $existing['remote_host'],
+            $data['remote_user'] ?? $existing['remote_user'],
+            array_key_exists('borg_remote_path', $data) ? $data['borg_remote_path'] : $existing['borg_remote_path']
+        );
+        if ($fieldErr) {
+            $this->json(['error' => $fieldErr], 422);
         }
         if (array_key_exists('provider', $input)) {
             $provider = $this->normaliseProvider($input['provider'], $data['remote_host'] ?? $existing['remote_host']);
@@ -408,6 +420,9 @@ class StorageApiController extends Controller
 
         if ($host === '' || $user === '' || $key === '') {
             $this->json(['status' => 'error', 'error' => 'remote_host, remote_user and ssh_private_key are required'], 422);
+        }
+        if ($fieldErr = RemoteSshService::fieldError($host, $user, trim((string) ($input['borg_remote_path'] ?? '')))) {
+            $this->json(['status' => 'error', 'error' => $fieldErr], 422);
         }
 
         // testConnection() falls back to treating the stored value as plaintext

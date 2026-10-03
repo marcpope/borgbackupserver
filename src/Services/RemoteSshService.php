@@ -81,6 +81,37 @@ class RemoteSshService
     }
 
     /**
+     * Validate the fields of a Remote SSH host that end up on an ssh or borg
+     * command line. A value starting with "-" there is read as an option, and
+     * ssh's ProxyCommand runs a program locally before connecting
+     * (GHSA-4jqx-9f92-rc8p). Returns an error message, or null when valid.
+     */
+    public static function fieldError(?string $host, ?string $user, ?string $borgRemotePath): ?string
+    {
+        if (!preg_match('/^[A-Za-z0-9._:\[\]][A-Za-z0-9._:\[\]-]*$/', (string) $host)) {
+            return 'Host must be a hostname or IP address.';
+        }
+        if (!preg_match('/^[A-Za-z0-9._][A-Za-z0-9._-]*$/', (string) $user)) {
+            return 'User may contain only letters, digits, dot, dash and underscore, and cannot start with a dash.';
+        }
+        if ($borgRemotePath !== null && $borgRemotePath !== '' && self::safeBorgPath($borgRemotePath) === null) {
+            return 'Remote Borg Path must be a command name or path (for example borg-1.4 or /usr/local/bin/borg), with no spaces, and cannot start with a dash.';
+        }
+        return null;
+    }
+
+    /**
+     * The Remote Borg Path if it is a plain command name or path, else null.
+     * Checked again where it is used, so a value stored before validation
+     * existed can never reach a command line.
+     */
+    public static function safeBorgPath(?string $path): ?string
+    {
+        $path = trim((string) $path);
+        return preg_match('#^[A-Za-z0-9_./~][A-Za-z0-9_./~+-]*$#', $path) ? $path : null;
+    }
+
+    /**
      * Test connection to remote SSH host.
      * Runs borg --version (or custom borg_remote_path) over SSH.
      */
@@ -91,7 +122,10 @@ class RemoteSshService
             $sshKey = $this->decryptKey($config);
             $keyFile = $this->writeTempKey($sshKey);
 
-            $borgBin = $config['borg_remote_path'] ?: 'borg';
+            if (!empty($config['borg_remote_path']) && self::safeBorgPath($config['borg_remote_path']) === null) {
+                return ['success' => false, 'error' => 'Invalid Remote Borg Path'];
+            }
+            $borgBin = self::safeBorgPath($config['borg_remote_path'] ?? '') ?? 'borg';
             $port = (int) ($config['remote_port'] ?? 22);
 
             $sshCmd = [
@@ -103,6 +137,7 @@ class RemoteSshService
                 '-o', 'BatchMode=yes',
                 '-o', 'LogLevel=ERROR',
                 '-o', 'ConnectTimeout=10',
+                '--',
                 "{$config['remote_user']}@{$config['remote_host']}",
                 "{$borgBin} --version",
             ];
@@ -139,7 +174,7 @@ class RemoteSshService
      */
     public function initRepo(array $config, string $repoPath, string $encryption, string $passphrase = ''): array
     {
-        $borgRemotePath = $config['borg_remote_path'] ?? null;
+        $borgRemotePath = self::safeBorgPath($config['borg_remote_path'] ?? null);
         $cmd = ['borg', 'init', '--encryption=' . $encryption];
         if ($borgRemotePath) {
             $cmd[] = '--remote-path=' . $borgRemotePath;
@@ -171,7 +206,7 @@ class RemoteSshService
      */
     public function runBorgCommand(array $config, string $repoPath, array $borgArgs, string $passphrase = '', array $extraEnv = []): array
     {
-        $borgRemotePath = $config['borg_remote_path'] ?? null;
+        $borgRemotePath = self::safeBorgPath($config['borg_remote_path'] ?? null);
 
         $cmd = array_merge(['borg'], $borgArgs);
 
@@ -303,6 +338,7 @@ class RemoteSshService
                 '-o', 'BatchMode=yes',
                 '-o', 'LogLevel=ERROR',
                 '-o', 'ConnectTimeout=10',
+                '--',
                 "{$config['remote_user']}@{$config['remote_host']}",
                 "df -k {$basePath}",
             ];
@@ -580,6 +616,7 @@ class RemoteSshService
                 '-o', 'BatchMode=yes',
                 '-o', 'LogLevel=ERROR',
                 '-o', 'ConnectTimeout=30',
+                '--',
                 "{$config['remote_user']}@{$config['remote_host']}",
                 'du -sk -- ' . escapeshellarg($remotePath),
             ];
@@ -702,7 +739,7 @@ class RemoteSshService
      */
     public function openBorgProcess(array $config, array $borgArgs, string $passphrase = ''): array
     {
-        $borgRemotePath = $config['borg_remote_path'] ?? null;
+        $borgRemotePath = self::safeBorgPath($config['borg_remote_path'] ?? null);
         $cmd = array_merge(['borg'], $borgArgs);
         if ($borgRemotePath && count($borgArgs) >= 1) {
             array_splice($cmd, 2, 0, ['--remote-path=' . $borgRemotePath]);

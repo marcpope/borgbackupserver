@@ -33,6 +33,10 @@ class RemoteSshConfigController extends Controller
             $this->flash('danger', 'Name, host, user, and SSH private key are required.');
             $this->redirect('/storage-locations');
         }
+        if ($fieldErr = \BBS\Services\RemoteSshService::fieldError($remoteHost, $remoteUser, $borgRemotePath)) {
+            $this->flash('danger', $fieldErr);
+            $this->redirect('/storage-locations');
+        }
 
         if ($remotePort < 1 || $remotePort > 65535) {
             $remotePort = 22;
@@ -115,6 +119,10 @@ class RemoteSshConfigController extends Controller
 
         if (empty($name) || empty($remoteHost) || empty($remoteUser)) {
             $this->flash('danger', 'Name, host, and user are required.');
+            $this->redirect('/storage-locations');
+        }
+        if ($fieldErr = \BBS\Services\RemoteSshService::fieldError($remoteHost, $remoteUser, $borgRemotePath)) {
+            $this->flash('danger', $fieldErr);
             $this->redirect('/storage-locations');
         }
 
@@ -315,6 +323,10 @@ class RemoteSshConfigController extends Controller
 
         if (empty($remoteHost) || empty($remoteUser) || empty($sshPrivateKey)) {
             $this->json(['status' => 'error', 'error' => 'Host, user, and SSH key are required']);
+            return;
+        }
+        if ($fieldErr = \BBS\Services\RemoteSshService::fieldError($remoteHost, $remoteUser, $borgRemotePath)) {
+            $this->json(['status' => 'error', 'error' => $fieldErr]);
             return;
         }
 

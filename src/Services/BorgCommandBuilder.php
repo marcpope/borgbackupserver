@@ -417,6 +417,9 @@ class BorgCommandBuilder
      */
     public static function appendRemotePath(array $cmd, ?string $borgRemotePath): array
     {
+        // Only a plain command name or path: borg puts this right after the
+        // host in its ssh call, where "-o..." is an ssh option (GHSA-4jqx-9f92-rc8p)
+        $borgRemotePath = RemoteSshService::safeBorgPath($borgRemotePath);
         if ($borgRemotePath) {
             // Insert --remote-path after 'borg <subcommand>'
             array_splice($cmd, 2, 0, ['--remote-path=' . $borgRemotePath]);

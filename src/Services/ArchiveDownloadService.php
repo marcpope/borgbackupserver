@@ -147,8 +147,8 @@ class ArchiveDownloadService
                 $env['BORG_RSH'] = "ssh -i {$remoteSshKeyFile} -p {$port} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o BatchMode=yes -o ServerAliveInterval=10 -o ServerAliveCountMax=30 -o LogLevel=ERROR";
 
                 $cmd = ['borg', 'extract'];
-                if (!empty($archive['borg_remote_path'])) {
-                    $cmd[] = '--remote-path=' . $archive['borg_remote_path'];
+                if (RemoteSshService::safeBorgPath($archive['borg_remote_path'] ?? null) !== null) {
+                    $cmd[] = '--remote-path=' . RemoteSshService::safeBorgPath($archive['borg_remote_path']);
                 }
                 $cmd = array_merge($cmd, $borgArgs);
 
