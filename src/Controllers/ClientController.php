@@ -1707,6 +1707,13 @@ class ClientController extends Controller
             $this->json(['error' => 'Client not found'], 404);
         }
 
+        // Rotating revokes the running agent and returns the new key, which
+        // authenticates as that agent. Same rule as delete and the Install
+        // tab: admins, or the client's owner (GHSA-f9mm-7r3c-wmw2).
+        if (!$this->isAdmin() && (int) ($agent['user_id'] ?? 0) !== (int) ($_SESSION['user_id'] ?? 0)) {
+            $this->json(['error' => "Only an admin or the client's owner can rotate its key."], 403);
+        }
+
         $svc = new \BBS\Services\AgentKeyService();
         $key = $svc->rotate($id, $_SESSION['username'] ?? null);
         [$location, $instructions] = $svc->reconfigureHint($agent);
