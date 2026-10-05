@@ -5811,6 +5811,9 @@ class AdminApiController extends Controller
         if (!$this->apiCanAccessAgent($ctx, $id)) {
             $this->json(['error' => 'Client not found'], 404);
         }
+        // Lists directories on the client; it is the folder picker for backup
+        // plans, so it needs the plan permission, not just access.
+        $this->apiRequirePermission($ctx, \BBS\Services\PermissionService::MANAGE_PLANS, $id);
 
         $agent = $this->db->fetchOne("SELECT id, name, status FROM agents WHERE id = ?", [$id]);
         if (!$agent) {
@@ -5864,6 +5867,9 @@ class AdminApiController extends Controller
         if (!$this->apiCanAccessAgent($ctx, $id)) {
             $this->json(['error' => 'Client not found'], 404);
         }
+        // Lists directories on the client; it is the folder picker for backup
+        // plans, so it needs the plan permission, not just access.
+        $this->apiRequirePermission($ctx, \BBS\Services\PermissionService::MANAGE_PLANS, $id);
 
         $job = $this->db->fetchOne(
             "SELECT id, status, status_message, error_log, task_result FROM backup_jobs WHERE id = ? AND agent_id = ? AND task_type = 'list_dir'",

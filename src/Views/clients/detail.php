@@ -63,9 +63,10 @@ $sizeDisplay = $totalSize > 0 ? \BBS\Services\ServerStats::formatBytes((int) $to
                     <?php if ($agent['os_info']): ?>
                         <span class="d-none d-md-inline"><i class="bi bi-cpu me-1"></i><?= htmlspecialchars($agent['os_info']) ?></span>
                     <?php endif; ?>
+                    <?php $canUpdateClient = ($this->isAdmin() || (int) ($agent['user_id'] ?? 0) === (int) ($_SESSION['user_id'] ?? 0)); ?>
                     <span id="agent-version-wrapper" class="d-inline">
                     <?php if ($agent['agent_version']): ?>
-                        <?php if ($agentNeedsUpdate): ?>
+                        <?php if ($agentNeedsUpdate && $canUpdateClient): ?>
                             <form method="POST" action="/clients/<?= $agent['id'] ?>/update-agent" class="d-inline">
                                 <input type="hidden" name="csrf_token" value="<?= $this->csrfToken() ?>">
                                 <button type="submit" class="btn btn-link text-warning p-0 text-decoration-none" style="font-size: inherit;" title="Update agent to v<?= htmlspecialchars($serverAgentVersion) ?>" data-confirm="Queue an agent update to v<?= htmlspecialchars($serverAgentVersion) ?>?">
@@ -80,12 +81,16 @@ $sizeDisplay = $totalSize > 0 ? \BBS\Services\ServerStats::formatBytes((int) $to
                         <span title="Backups can run from filesystem snapshots on this client"><i class="bi bi-camera me-1"></i>Snapshots: <?= htmlspecialchars(implode(', ', array_map('strtoupper', $hdrSnap['methods'] ?? []))) ?></span>
                     <?php endif; ?><?php if ($agent['borg_version']): ?>
                         <span>
+                            <?php if ($canUpdateClient): ?>
                             <form method="POST" action="/clients/<?= $agent['id'] ?>/update-borg" class="d-inline">
                                 <input type="hidden" name="csrf_token" value="<?= $this->csrfToken() ?>">
                                 <button type="submit" class="btn btn-link text-muted p-0 text-decoration-none" style="font-size: inherit;" title="Update Borg on this client" data-confirm="Queue a borg update on this client?">
                                     <i class="bi bi-archive me-1"></i>Borg <?= htmlspecialchars($agent['borg_version']) ?>
                                 </button>
                             </form>
+                            <?php else: ?>
+                            <i class="bi bi-archive me-1"></i>Borg <?= htmlspecialchars($agent['borg_version']) ?>
+                            <?php endif; ?>
                         </span>
                     <?php endif; ?>
                 </div>
@@ -4330,7 +4335,7 @@ const csrfToken = '<?= $this->csrfToken() ?>';
                 if (vw && data.agent_version) {
                     // Server decides this — see #387; a JS string compare here
                     // would call a newer agent "outdated" all over again.
-                    const needsUpdate = !!data.agent_needs_update;
+                    const needsUpdate = !!data.agent_needs_update && <?= $canUpdateClient ? 'true' : 'false' ?>;
                     if (needsUpdate) {
                         vw.innerHTML = '<form method="POST" action="/clients/' + agentId + '/update-agent" class="d-inline">' +
                             '<input type="hidden" name="csrf_token" value="' + csrfToken + '">' +

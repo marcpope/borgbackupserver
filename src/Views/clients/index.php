@@ -145,7 +145,8 @@
                         </td>
                         <td>
                             <?= !empty($agent['agent_version']) ? 'v' . htmlspecialchars($agent['agent_version']) : '--' ?>
-                            <?php if ($latestVersion && !empty($agent['agent_version']) && $agent['agent_version'] !== $latestVersion): ?>
+                            <?php if ($latestVersion && !empty($agent['agent_version']) && $agent['agent_version'] !== $latestVersion
+                                      && (($_SESSION['user_role'] ?? '') === 'admin' || (int) ($agent['user_id'] ?? 0) === (int) ($_SESSION['user_id'] ?? 0))): ?>
                                 <form method="POST" action="/clients/<?= $agent['id'] ?>/update-agent" class="d-inline" onclick="event.stopPropagation()">
                                     <input type="hidden" name="csrf_token" value="<?= $this->csrfToken() ?>">
                                     <button type="submit" class="badge border-0 ms-1 bg-body-secondary text-muted" style="font-size:.65rem;cursor:pointer;" title="Queue agent upgrade to v<?= htmlspecialchars($latestVersion) ?>" data-confirm="Queue agent upgrade for <?= htmlspecialchars($agent['name']) ?>?"><i class="bi bi-arrow-up-circle me-1"></i>upgrade</button>

@@ -1660,6 +1660,16 @@ class ClientController extends Controller
         $this->redirect('/clients');
     }
 
+    /**
+     * Admins, or the client's owner: who may change how a client runs
+     * (delete it, rotate its key, update its agent or borg). Users who can
+     * merely see a client can't (GHSA-f9mm-7r3c-wmw2).
+     */
+    private function isOwnerOrAdmin(array $agent): bool
+    {
+        return $this->isAdmin() || (int) ($agent['user_id'] ?? 0) === (int) ($_SESSION['user_id'] ?? 0);
+    }
+
     private function getAgent(int $id): ?array
     {
         $agent = $this->db->fetchOne("
@@ -1710,7 +1720,7 @@ class ClientController extends Controller
         // Rotating revokes the running agent and returns the new key, which
         // authenticates as that agent. Same rule as delete and the Install
         // tab: admins, or the client's owner (GHSA-f9mm-7r3c-wmw2).
-        if (!$this->isAdmin() && (int) ($agent['user_id'] ?? 0) !== (int) ($_SESSION['user_id'] ?? 0)) {
+        if (!$this->isOwnerOrAdmin($agent)) {
             $this->json(['error' => "Only an admin or the client's owner can rotate its key."], 403);
         }
 
@@ -1736,6 +1746,11 @@ class ClientController extends Controller
             http_response_code(404);
             echo 'Not found';
             return;
+        }
+
+        if (!$this->isOwnerOrAdmin($agent)) {
+            $this->flash('danger', "Only an admin or the client's owner can update borg on it.");
+            $this->redirect("/clients/{$id}");
         }
 
         // Create an update_borg job
@@ -1767,6 +1782,11 @@ class ClientController extends Controller
             return;
         }
 
+        if (!$this->isOwnerOrAdmin($agent)) {
+            $this->flash('danger', "Only an admin or the client's owner can update its agent.");
+            $this->redirect("/clients/{$id}");
+        }
+
         $this->db->insert('backup_jobs', [
             'agent_id' => $id,
             'task_type' => 'update_agent',
@@ -1793,7 +1813,9 @@ class ClientController extends Controller
     public function browse(int $id): void
     {
         $this->requireAuth();
-        if (!$this->canAccessAgent($id)) {
+        // Lists directories on the client machine; it is the folder picker
+        // for backup plans, so it needs the plan permission, not just access.
+        if (!$this->hasPermission(PermissionService::MANAGE_PLANS, $id)) {
             $this->json(['error' => 'Access denied'], 403);
         }
         $this->verifyCsrf();
@@ -1856,7 +1878,9 @@ class ClientController extends Controller
     public function browsePoll(int $id, int $taskId): void
     {
         $this->requireAuth();
-        if (!$this->canAccessAgent($id)) {
+        // Lists directories on the client machine; it is the folder picker
+        // for backup plans, so it needs the plan permission, not just access.
+        if (!$this->hasPermission(PermissionService::MANAGE_PLANS, $id)) {
             $this->json(['error' => 'Access denied'], 403);
         }
 
