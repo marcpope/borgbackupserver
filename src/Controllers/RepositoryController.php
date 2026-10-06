@@ -48,6 +48,10 @@ class RepositoryController extends Controller
         $passphrase = $_POST['passphrase'] ?? '';
         $storageType = $_POST['storage_type'] ?? 'local';
         $remoteSshConfigId = !empty($_POST['remote_ssh_config_id']) ? (int) $_POST['remote_ssh_config_id'] : null;
+        if ($remoteSshConfigId && !$this->isAdmin()) {
+            $this->flash('danger', 'Only an admin can place repositories on a Remote SSH host: its key is shared by every repository on that host.');
+            $this->redirect('/clients');
+        }
 
         if (empty($name) || empty($agentId)) {
             $this->flash('danger', 'Repository name and agent are required.');
@@ -1238,7 +1242,10 @@ class RepositoryController extends Controller
         // Get agent's borg_version for display (repo columns may not be populated yet)
         $agentInfo = $this->db->fetchOne("SELECT borg_version FROM agents WHERE id = ?", [$agentId]);
 
-        $repoPassphrase = $repo['passphrase_encrypted'] ? Encryption::decrypt($repo['passphrase_encrypted']) : null;
+        // The passphrase unlocks every archive: only for users who manage this
+        // client's repositories, not everyone who can see the client.
+        $repoPassphrase = ($repo['passphrase_encrypted'] && $this->hasPermission(PermissionService::MANAGE_REPOS, (int) $repo['agent_id']))
+            ? Encryption::decrypt($repo['passphrase_encrypted']) : null;
 
         // Get storage location label for display
         $storageLocationLabel = null;
@@ -1557,14 +1564,21 @@ class RepositoryController extends Controller
     public function verifyImport(): void
     {
         $this->requireAuth();
-        // Skip CSRF for AJAX — session auth is sufficient for same-origin POST
+        $this->verifyCsrf();
 
         $agentId = (int) ($_POST['agent_id'] ?? 0);
+        // Same as the import itself: it runs borg against a repository path
+        if ($agentId > 0) {
+            $this->requirePermission(PermissionService::MANAGE_REPOS, $agentId);
+        }
         $storageType = $_POST['storage_type'] ?? 'local';
         $name = RepositoryImportService::sanitizeName(trim($_POST['name'] ?? ''));
         $passphrase = $_POST['passphrase'] ?? '';
         $storageLocationId = !empty($_POST['storage_location_id']) ? (int) $_POST['storage_location_id'] : null;
         $remoteSshConfigId = !empty($_POST['remote_ssh_config_id']) ? (int) $_POST['remote_ssh_config_id'] : null;
+        if ($remoteSshConfigId && !$this->isAdmin()) {
+            $this->json(['status' => 'error', 'error' => 'Only an admin can place repositories on a Remote SSH host.'], 403);
+        }
 
         if (empty($name) || empty($agentId)) {
             $this->json(['status' => 'error', 'error' => 'Repository name and client are required. Names can only contain letters, numbers, hyphens, and underscores.']);
@@ -1605,6 +1619,10 @@ class RepositoryController extends Controller
         $storageType = $_POST['storage_type'] ?? 'local';
         $storageLocationId = !empty($_POST['storage_location_id']) ? (int) $_POST['storage_location_id'] : null;
         $remoteSshConfigId = !empty($_POST['remote_ssh_config_id']) ? (int) $_POST['remote_ssh_config_id'] : null;
+        if ($remoteSshConfigId && !$this->isAdmin()) {
+            $this->flash('danger', 'Only an admin can place repositories on a Remote SSH host: its key is shared by every repository on that host.');
+            $this->redirect('/clients');
+        }
 
         if (empty($name) || empty($agentId)) {
             $this->flash('danger', 'Repository name and client are required.');

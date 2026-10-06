@@ -72,7 +72,7 @@
                                 default => 'primary',
                             };
                             ?>
-                            <span class="badge text-bg-<?= $lc ?>"><?= $log['level'] ?></span>
+                            <span class="badge text-bg-<?= $lc ?>"><?= htmlspecialchars($log['level']) ?></span>
                         </td>
                         <td>
                             <?= htmlspecialchars($log['message']) ?>
@@ -113,7 +113,7 @@
             ?>
             <div class="p-3 <?= $i > 0 ? 'border-top' : '' ?>">
                 <div class="d-flex justify-content-between align-items-start mb-1">
-                    <span class="badge text-bg-<?= $lc ?>"><?= $log['level'] ?></span>
+                    <span class="badge text-bg-<?= $lc ?>"><?= htmlspecialchars($log['level']) ?></span>
                     <small class="text-muted"><?= \BBS\Core\TimeHelper::format($log['created_at'], 'M j, g:i A') ?></small>
                 </div>
                 <?php if ($log['agent_id']): ?>

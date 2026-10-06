@@ -105,6 +105,16 @@ class MobileAuthController extends Controller
             $this->json(['status' => '2fa_required', 'challenge' => $challenge, 'expires_in' => 300]);
         }
 
+        // "Require 2FA" applies to the API too: the web sends these users to
+        // set up 2FA, so a password alone must not get them a token here.
+        $force2fa = $this->db->fetchOne("SELECT `value` FROM settings WHERE `key` = 'force_2fa'");
+        if (($force2fa['value'] ?? '0') === '1' && ($user['auth_provider'] ?? 'local') !== 'oidc') {
+            $this->json([
+                'error' => 'Two-factor authentication is required on this server. Set it up in the web interface first.',
+                'code' => '2fa_setup_required',
+            ], 403);
+        }
+
         $this->issueToken($user, $input);
     }
 

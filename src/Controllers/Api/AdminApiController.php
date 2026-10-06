@@ -81,6 +81,7 @@ class AdminApiController extends Controller
             $this->json(['error' => 'Client not found'], 404);
         }
         [$storageType, $name, $storageLocationId, $remoteSshConfigId] = $this->importArgs($input);
+        $this->apiRequireAdminForRemoteSsh($ctx, $remoteSshConfigId);
 
         $result = (new \BBS\Services\RepositoryImportService())->verify(
             $agent, $storageType, $name, (string) ($input['passphrase'] ?? ''), $storageLocationId, $remoteSshConfigId
@@ -117,6 +118,7 @@ class AdminApiController extends Controller
             $this->json(['error' => 'Client not found'], 404);
         }
         [$storageType, $name, $storageLocationId, $remoteSshConfigId] = $this->importArgs($input);
+        $this->apiRequireAdminForRemoteSsh($ctx, $remoteSshConfigId);
         if (Config::isHosted() && $storageType !== 'local') {
             $this->json(['error' => 'Storage type is locked to local in hosted mode.'], 422);
         }
@@ -688,6 +690,7 @@ class AdminApiController extends Controller
         $passphrase = $input['passphrase'] ?? '';
         $storageType = $input['storage_type'] ?? 'local';
         $remoteSshConfigId = !empty($input['remote_ssh_config_id']) ? (int) $input['remote_ssh_config_id'] : null;
+        $this->apiRequireAdminForRemoteSsh($ctx, $remoteSshConfigId);
 
         if (empty($name)) {
             $this->json(['error' => 'Repository name is required'], 400);
@@ -1090,10 +1093,15 @@ class AdminApiController extends Controller
                         'enabled' => 1,
                     ]);
                 } else {
-                    // Map format: {plugin_id: config_id}
-                    $pluginId = (int) $key;
+                    // Map format: {plugin_id: config_id}. The config must belong
+                    // to this client, and its own plugin_id wins over the key:
+                    // another client's config would hand its secrets to this
+                    // client's agent at backup time.
                     $configId = (int) $val;
-                    if ($pluginId <= 0 || $configId <= 0) continue;
+                    if ($configId <= 0) continue;
+                    $pc = $this->db->fetchOne("SELECT plugin_id FROM plugin_configs WHERE id = ? AND agent_id = ?", [$configId, $id]);
+                    if (!$pc) continue;
+                    $pluginId = (int) $pc['plugin_id'];
                     $this->db->insert('backup_plan_plugins', [
                         'backup_plan_id' => $planId,
                         'plugin_id' => $pluginId,
@@ -1330,6 +1338,18 @@ class AdminApiController extends Controller
 
     // ── Remote SSH Repos ────────────────────────────────
 
+    /**
+     * Remote SSH hosts are shared: their private key goes to the agent of
+     * every client with a repository there, and it opens the whole storage
+     * account. Only admins choose to put a client on one.
+     */
+    private function apiRequireAdminForRemoteSsh(array $ctx, ?int $remoteSshConfigId): void
+    {
+        if ($remoteSshConfigId && ($ctx['role'] ?? '') !== 'admin') {
+            $this->json(['error' => 'Only an admin can place repositories on a Remote SSH host: its key is shared by every repository on that host.'], 403);
+        }
+    }
+
     private function createRemoteSshRepository(int $id, string $name, string $encryption, string $passphrase, ?int $remoteSshConfigId): void
     {
         if (!$remoteSshConfigId) {
@@ -1523,18 +1543,8 @@ class AdminApiController extends Controller
 
         $agent = $this->db->fetchOne("SELECT * FROM agents WHERE id = ?", [$id]);
         if ($agent && !empty($agent['ssh_unix_user'])) {
-            // Refresh storage paths
-            $repos = $this->db->fetchAll("SELECT r.*, sl.path as location_path FROM repositories r LEFT JOIN storage_locations sl ON sl.id = r.storage_location_id WHERE r.agent_id = ?", [$id]);
-            $storagePaths = [];
-            foreach ($repos as $r) {
-                if (!empty($r['location_path'])) {
-                    $storagePaths[] = rtrim($r['location_path'], '/') . '/' . $id;
-                }
-            }
-            if (!empty($storagePaths)) {
-                $pathList = implode("\n", array_unique($storagePaths));
-                exec('sudo /usr/local/bin/bbs-ssh-helper update-storage-paths ' . escapeshellarg($agent['ssh_unix_user']) . ' ' . escapeshellarg($pathList) . ' 2>&1');
-            }
+            // Same refresh the web uses (it passed the user name as the home dir)
+            \BBS\Services\SshKeyManager::updateAgentStoragePaths($this->db, (int) $id, $agent);
         }
 
         $this->db->insert('server_log', [
@@ -1876,9 +1886,12 @@ class AdminApiController extends Controller
                         'execution_order' => $order++, 'enabled' => 1,
                     ]);
                 } else {
-                    $pluginId = (int) $key;
+                    // Map format: the config must belong to this client (see createPlan)
                     $configId = (int) $val;
-                    if ($pluginId <= 0 || $configId <= 0) continue;
+                    if ($configId <= 0) continue;
+                    $pc = $this->db->fetchOne("SELECT plugin_id FROM plugin_configs WHERE id = ? AND agent_id = ?", [$configId, $id]);
+                    if (!$pc) continue;
+                    $pluginId = (int) $pc['plugin_id'];
                     $this->db->insert('backup_plan_plugins', [
                         'backup_plan_id' => $planId, 'plugin_id' => $pluginId,
                         'plugin_config_id' => $configId, 'config' => '{}',
@@ -1939,6 +1952,8 @@ class AdminApiController extends Controller
         if (!$this->apiCanAccessAgent($ctx, $id)) {
             $this->json(['error' => 'Plan not found'], 404);
         }
+        // Same as the web schedule toggle: pausing stops this client's backups
+        $this->apiRequirePermission($ctx, \BBS\Services\PermissionService::MANAGE_PLANS, $id);
 
         $plan = $this->db->fetchOne("SELECT * FROM backup_plans WHERE id = ? AND agent_id = ?", [$planId, $id]);
         if (!$plan) {
@@ -1961,6 +1976,8 @@ class AdminApiController extends Controller
         if (!$this->apiCanAccessAgent($ctx, $id)) {
             $this->json(['error' => 'Plan not found'], 404);
         }
+        // Same as the web schedule toggle: pausing stops this client's backups
+        $this->apiRequirePermission($ctx, \BBS\Services\PermissionService::MANAGE_PLANS, $id);
 
         $plan = $this->db->fetchOne("SELECT * FROM backup_plans WHERE id = ? AND agent_id = ?", [$planId, $id]);
         if (!$plan) {
@@ -2809,6 +2826,11 @@ class AdminApiController extends Controller
      */
     public function createStorageLocation(): void
     {
+        // Registering a storage path widens what the root helper will touch;
+        // on a hosted server only the platform may do it (as on the web)
+        if (\BBS\Core\Config::isHosted()) {
+            $this->requirePlatformApiToken();
+        }
         $this->requireApiToken();
         $input = $this->getJsonInput();
 
@@ -4478,7 +4500,7 @@ class AdminApiController extends Controller
         if ($job['status'] !== 'failed') {
             $this->json(['error' => 'Only failed jobs can be retried'], 409);
         }
-        if (!$this->apiHasPermission($ctx, \BBS\Services\PermissionService::TRIGGER_BACKUP, (int) $job['agent_id'])) {
+        if (!$this->apiHasPermission($ctx, \BBS\Services\PermissionService::forTaskType((string) $job['task_type']), (int) $job['agent_id'])) {
             $this->json(['error' => 'You do not have permission to retry jobs on this client'], 403);
         }
 

@@ -35,6 +35,15 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <meta http-equiv="Expires" content="0">
+    <script>
+    // Escape text for HTML built in JS (innerHTML, attributes). Use it for
+    // anything a client agent reported: agents are untrusted, and their
+    // output, file names and host details can carry markup.
+    window.bbsEsc = function (s) {
+        return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    };
+    </script>
 </head>
 <body>
     <!-- Top bar -->
@@ -462,7 +471,8 @@
         var msgEl = document.getElementById('confirmMessage');
         var okBtn = document.getElementById('confirmOk');
         var icon = document.querySelector('#confirmModal .modal-body > i');
-        msgEl.innerHTML = message.replace(/\n/g, '<br>');
+        // Escaped: messages carry names users and agents set (GHSA-jwq4-qmhw-54mm)
+        msgEl.innerHTML = bbsEsc(message).replace(/\n/g, '<br>');
         // Style the OK button based on type
         okBtn.className = 'btn px-4 btn-' + (options.btnClass || 'success');
         okBtn.textContent = options.okText || 'OK';

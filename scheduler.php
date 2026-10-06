@@ -1917,7 +1917,7 @@ foreach ($serverJobs as $sj) {
         $lockNewName = $lockToLocked
             ? 'locked.' . $lockArchive['archive_name']
             : preg_replace('/^locked\./', '', $lockArchive['archive_name']);
-        $borgArgs = ['rename', $repoPath . '::' . $lockArchive['archive_name'], $lockNewName];
+        $borgArgs = ['rename', '--', $repoPath . '::' . $lockArchive['archive_name'], $lockNewName];
     } else {
         // Unknown task type
         $db->update('backup_jobs', [

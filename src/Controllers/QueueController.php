@@ -415,7 +415,8 @@ class QueueController extends Controller
         }
 
         // Require trigger_backup permission to retry jobs
-        $this->requirePermission(PermissionService::TRIGGER_BACKUP, $job['agent_id']);
+        // Re-running a job needs the permission the job itself needs
+        $this->requirePermission(PermissionService::forTaskType((string) $job['task_type']), $job['agent_id']);
 
         // Create a new queued job based on the failed one
         $newJobId = $this->db->insert('backup_jobs', [

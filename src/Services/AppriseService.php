@@ -41,6 +41,16 @@ class AppriseService
         return self::$binary;
     }
 
+    /**
+     * An Apprise URL is "scheme://...". Anything else is refused: the URL is
+     * passed to the apprise command, where a value starting with "-" would
+     * be read as an option.
+     */
+    public static function isSafeUrl(string $url): bool
+    {
+        return (bool) preg_match('#^[A-Za-z][A-Za-z0-9+.\-]*://\S+$#', trim($url));
+    }
+
     public function isAppriseInstalled(): bool
     {
         return $this->appriseBinary() !== '';
@@ -72,7 +82,7 @@ class AppriseService
             return false;
         }
 
-        if (!$this->isAppriseInstalled()) {
+        if (!$this->isAppriseInstalled() || !self::isSafeUrl((string) $service['apprise_url'])) {
             return false;
         }
 
@@ -82,7 +92,7 @@ class AppriseService
             $urlEscaped = escapeshellarg($service['apprise_url']);
 
             // Run synchronously so we can capture success/failure
-            $cmd = escapeshellarg($this->appriseBinary()) . " -t {$titleEscaped} -b {$bodyEscaped} {$urlEscaped} 2>&1";
+            $cmd = escapeshellarg($this->appriseBinary()) . " -t {$titleEscaped} -b {$bodyEscaped} -- {$urlEscaped} 2>&1";
             exec($cmd, $output, $exitCode);
 
             // Update last_used_at
@@ -170,7 +180,7 @@ class AppriseService
             $urlText = $setting['value'] ?? '';
             $this->legacyUrls = array_filter(
                 array_map('trim', explode("\n", $urlText)),
-                fn($url) => !empty($url) && !str_starts_with($url, '#')
+                fn($url) => !empty($url) && !str_starts_with($url, '#') && self::isSafeUrl($url)
             );
         }
         return $this->legacyUrls;
@@ -216,7 +226,7 @@ class AppriseService
             $bodyEscaped = escapeshellarg($body);
             $urlArgs = implode(' ', array_map('escapeshellarg', $urls));
 
-            $cmd = escapeshellarg($this->appriseBinary()) . " -t {$titleEscaped} -b {$bodyEscaped} {$urlArgs} > /dev/null 2>&1 &";
+            $cmd = escapeshellarg($this->appriseBinary()) . " -t {$titleEscaped} -b {$bodyEscaped} -- {$urlArgs} > /dev/null 2>&1 &";
             exec($cmd);
 
             return true;
@@ -246,7 +256,7 @@ class AppriseService
             $body = escapeshellarg('This is a test notification from Borg Backup Server. If you receive this, Apprise is configured correctly.');
             $urlArgs = implode(' ', array_map('escapeshellarg', $urls));
 
-            $cmd = escapeshellarg($this->appriseBinary()) . " -t {$title} -b {$body} {$urlArgs} 2>&1";
+            $cmd = escapeshellarg($this->appriseBinary()) . " -t {$title} -b {$body} -- {$urlArgs} 2>&1";
             exec($cmd, $output, $code);
 
             if ($code === 0) {

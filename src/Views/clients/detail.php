@@ -321,6 +321,9 @@ $sizeDisplay = $totalSize > 0 ? \BBS\Services\ServerStats::formatBytes((int) $to
     // Install and Delete: admins, or the client's owner — owners manage
     // the full lifecycle of their own clients (#337)
     $isOwnerOrAdmin = $this->isAdmin() || (int) ($agent['user_id'] ?? 0) === (int) ($_SESSION['user_id'] ?? 0);
+    // Creation controls only for users who may complete them (discussion #525)
+    $canManageRepos = $this->hasPermission(\BBS\Services\PermissionService::MANAGE_REPOS, (int) $agent['id']);
+    $canManagePlans = $this->hasPermission(\BBS\Services\PermissionService::MANAGE_PLANS, (int) $agent['id']);
     ?>
     <?php if ($isOwnerOrAdmin): ?>
     <li class="nav-item">
@@ -1083,6 +1086,7 @@ $sizeDisplay = $totalSize > 0 ? \BBS\Services\ServerStats::formatBytes((int) $to
         btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> Verifying...';
 
         var formData = new URLSearchParams();
+        formData.append('csrf_token', '<?= $this->csrfToken() ?>');
         formData.append('agent_id', '<?= $agent['id'] ?>');
         formData.append('name', document.getElementById('importName').value);
         formData.append('passphrase', document.getElementById('importPassphrase').value);
@@ -1223,6 +1227,7 @@ $sizeDisplay = $totalSize > 0 ? \BBS\Services\ServerStats::formatBytes((int) $to
             </div>
         </div>
         <?php endforeach; ?>
+        <?php if ($canManageRepos): ?>
         <div class="col-md-6 col-lg-4">
             <div class="card border-0 shadow-sm h-100 card-dashed" onclick="showCreateRepo()">
                 <div class="card-body d-flex flex-column align-items-center justify-content-center text-muted p-4">
@@ -1239,6 +1244,7 @@ $sizeDisplay = $totalSize > 0 ? \BBS\Services\ServerStats::formatBytes((int) $to
                 </div>
             </div>
         </div>
+        <?php endif; ?>
     </div>
 
     <!-- Delete Repo Modals (for repos with S3 sync) -->
@@ -1299,10 +1305,14 @@ $sizeDisplay = $totalSize > 0 ? \BBS\Services\ServerStats::formatBytes((int) $to
                 <i class="bi bi-archive" style="font-size:2rem;"></i>
                 <div class="mt-2 fw-semibold">Create a Repository to get started</div>
                 <small class="mt-1 text-center" style="max-width:400px;">A repository is a virtual disk where your backup data is stored on the backup server.</small>
+                <?php if ($canManageRepos): ?>
                 <div class="mt-3 d-flex gap-2">
                     <span class="btn btn-sm btn-outline-primary" style="cursor:pointer;" onclick="showCreateRepo()"><i class="bi bi-plus-circle me-1"></i>Add Repository</span>
                     <span class="btn btn-sm btn-outline-secondary" style="cursor:pointer;" onclick="showImportRepo()"><i class="bi bi-box-arrow-in-down me-1"></i>Import Existing</span>
                 </div>
+                <?php else: ?>
+                <small class="mt-3 text-center">You don't have permission to add repositories to this client.</small>
+                <?php endif; ?>
             </div>
         </div>
     </div>
@@ -2000,7 +2010,7 @@ $sizeDisplay = $totalSize > 0 ? \BBS\Services\ServerStats::formatBytes((int) $to
             </div>
         </div>
         <?php endforeach; ?>
-        <?php if (!empty($repositories)): ?>
+        <?php if (!empty($repositories) && $canManagePlans): ?>
         <div class="col-md-6 col-lg-4">
             <div class="card border-0 shadow-sm h-100 schedule-card card-dashed" id="add-plan-card" onclick="showCreatePlan()">
                 <div class="card-body d-flex flex-column align-items-center justify-content-center text-muted p-4">
@@ -2012,7 +2022,7 @@ $sizeDisplay = $totalSize > 0 ? \BBS\Services\ServerStats::formatBytes((int) $to
         <?php endif; ?>
     </div>
     <?php endif; ?>
-    <?php if (empty($plans) && !empty($repositories)): ?>
+    <?php if (empty($plans) && !empty($repositories) && $canManagePlans): ?>
     <div id="add-plan-card-solo" style="cursor:pointer;" onclick="showCreatePlan()">
         <div class="card border-0 shadow-sm mb-4 card-dashed">
             <div class="card-body d-flex flex-column align-items-center justify-content-center text-muted p-4">
@@ -3580,8 +3590,8 @@ GRANT ALL PRIVILEGES ON DATABASE mydb TO <span id="pgUser2g">bbs_backup</span>;<
         })
         .then(r => r.json())
         .then(data => {
-            if (data.status === 'completed') { resultDiv.innerHTML = '<div class="alert alert-success small mb-0 mt-1"><i class="bi bi-check-circle me-1"></i> ' + (data.message || 'Test passed.') + '</div>'; }
-            else if (data.status === 'failed') { resultDiv.innerHTML = '<div class="alert alert-danger small mb-0 mt-1"><i class="bi bi-x-circle me-1"></i> ' + (data.error || 'Test failed.') + '</div>'; }
+            if (data.status === 'completed') { resultDiv.innerHTML = '<div class="alert alert-success small mb-0 mt-1"><i class="bi bi-check-circle me-1"></i> ' + bbsEsc(data.message || 'Test passed.') + '</div>'; }
+            else if (data.status === 'failed') { resultDiv.innerHTML = '<div class="alert alert-danger small mb-0 mt-1"><i class="bi bi-x-circle me-1"></i> ' + bbsEsc(data.error || 'Test failed.') + '</div>'; }
             else if (data.job_id) { resultDiv.innerHTML = '<div class="d-flex align-items-center text-muted small"><span class="spinner-border spinner-border-sm me-2"></span> Waiting for client...</div>'; pollTestStatus(agentId, configId); }
             else { resultDiv.innerHTML = '<div class="alert alert-danger small mb-0 mt-1">Failed to create test job.</div>'; }
         })
@@ -3593,8 +3603,8 @@ GRANT ALL PRIVILEGES ON DATABASE mydb TO <span id="pgUser2g">bbs_backup</span>;<
             fetch('/clients/' + agentId + '/plugin-configs/' + configId + '/test-status', { credentials: 'same-origin' })
             .then(r => r.json())
             .then(data => {
-                if (data.status === 'completed') { clearInterval(poll); resultDiv.innerHTML = '<div class="alert alert-success small mb-0 mt-1"><i class="bi bi-check-circle me-1"></i> ' + (data.message || 'Test passed.') + '</div>'; }
-                else if (data.status === 'failed') { clearInterval(poll); resultDiv.innerHTML = '<div class="alert alert-danger small mb-0 mt-1"><i class="bi bi-x-circle me-1"></i> ' + (data.error || 'Test failed.') + '</div>'; }
+                if (data.status === 'completed') { clearInterval(poll); resultDiv.innerHTML = '<div class="alert alert-success small mb-0 mt-1"><i class="bi bi-check-circle me-1"></i> ' + bbsEsc(data.message || 'Test passed.') + '</div>'; }
+                else if (data.status === 'failed') { clearInterval(poll); resultDiv.innerHTML = '<div class="alert alert-danger small mb-0 mt-1"><i class="bi bi-x-circle me-1"></i> ' + bbsEsc(data.error || 'Test failed.') + '</div>'; }
             });
         }, 2000);
         setTimeout(() => { clearInterval(poll); if (resultDiv.querySelector('.spinner-border')) resultDiv.innerHTML = '<div class="alert alert-warning small mb-0 mt-1"><i class="bi bi-clock me-1"></i> Test timed out. Client may be offline.</div>'; }, 60000);
@@ -4340,9 +4350,9 @@ const csrfToken = '<?= $this->csrfToken() ?>';
                         vw.innerHTML = '<form method="POST" action="/clients/' + agentId + '/update-agent" class="d-inline">' +
                             '<input type="hidden" name="csrf_token" value="' + csrfToken + '">' +
                             '<button type="submit" class="btn btn-link text-warning p-0 text-decoration-none" style="font-size: inherit;" title="Update agent to v' + serverAgentVersion + '" data-confirm="Queue an agent update to v' + serverAgentVersion + '?">' +
-                            '<i class="bi bi-box me-1"></i>Agent v' + data.agent_version + ' <i class="bi bi-arrow-up-circle-fill"></i></button></form>';
+                            '<i class="bi bi-box me-1"></i>Agent v' + bbsEsc(data.agent_version) + ' <i class="bi bi-arrow-up-circle-fill"></i></button></form>';
                     } else {
-                        vw.innerHTML = '<i class="bi bi-box me-1"></i>Agent v' + data.agent_version;
+                        vw.innerHTML = '<i class="bi bi-box me-1"></i>Agent v' + bbsEsc(data.agent_version);
                     }
                 }
 

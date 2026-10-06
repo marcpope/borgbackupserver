@@ -367,7 +367,7 @@ class SettingsApiController extends Controller
         $sent = $mailer->send(
             $to,
             'BBS test message',
-            '<p>This is a test message from Borg Backup Server. If you received it, your SMTP settings work.</p>'
+            'This is a test message from Borg Backup Server. If you received it, your SMTP settings work.'
         );
 
         if (!$sent) {
@@ -469,6 +469,9 @@ class SettingsApiController extends Controller
         if ($name === '' || $url === '') {
             $this->json(['error' => 'name and apprise_url are required'], 422);
         }
+        if (!\BBS\Services\AppriseService::isSafeUrl($url)) {
+            $this->json(['error' => 'Apprise URL must look like scheme://... (for example pover://user@token).'], 422);
+        }
 
         $id = $this->db->insert('notification_services', [
             'name' => $name,
@@ -503,6 +506,9 @@ class SettingsApiController extends Controller
         // An empty apprise_url means "keep the stored one", never "clear it"
         if (!empty($input['apprise_url'])) {
             $url = trim((string) $input['apprise_url']);
+            if (!\BBS\Services\AppriseService::isSafeUrl($url)) {
+                $this->json(['error' => 'Apprise URL must look like scheme://... (for example pover://user@token).'], 422);
+            }
             $data['apprise_url'] = $url;
             $data['service_type'] = $this->detectServiceType($url);
         }

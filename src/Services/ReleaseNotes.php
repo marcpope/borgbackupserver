@@ -14,7 +14,7 @@ class ReleaseNotes
 {
     public function render(string $markdown, string $issueBaseUrl = 'https://github.com/marcpope/borgbackupserver/issues/'): string
     {
-        $converter = new \League\CommonMark\GithubFlavoredMarkdownConverter(['html_input' => 'allow']);
+        $converter = new \League\CommonMark\GithubFlavoredMarkdownConverter(['html_input' => 'strip', 'allow_unsafe_links' => false]);
         $html = (string) $converter->convert($markdown);
 
         $html = $this->linkifyIssues($html, $issueBaseUrl);

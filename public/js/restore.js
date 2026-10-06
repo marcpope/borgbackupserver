@@ -778,7 +778,7 @@
                         grantCode.textContent = 'MongoDB authentication is not configured — no grant required.';
                     }
                 } else {
-                    grantCode.innerHTML = "GRANT SELECT, LOCK TABLES, SHOW VIEW, EVENT, TRIGGER, CREATE, INSERT, DROP, ALTER, INDEX, REFERENCES ON *.* TO '" + '<span id="db-restore-grant-user">' + user + '</span>' + "'@'localhost'; FLUSH PRIVILEGES;";
+                    grantCode.innerHTML = "GRANT SELECT, LOCK TABLES, SHOW VIEW, EVENT, TRIGGER, CREATE, INSERT, DROP, ALTER, INDEX, REFERENCES ON *.* TO '" + '<span id="db-restore-grant-user">' + esc(String(user || '')) + '</span>' + "'@'localhost'; FLUSH PRIVILEGES;";
                 }
             }
 

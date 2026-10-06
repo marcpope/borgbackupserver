@@ -37,6 +37,22 @@ class PermissionService
     }
 
     /**
+     * The permission needed to run (or re-run) a job of this type. Retrying a
+     * failed job must need what running it needs: a restore needs restore,
+     * a repair needs maintenance, not just the right to trigger backups.
+     */
+    public static function forTaskType(string $taskType): string
+    {
+        return match (true) {
+            str_starts_with($taskType, 'restore') => self::RESTORE,
+            in_array($taskType, ['repo_check', 'repo_repair', 'compact', 'break_lock',
+                'catalog_sync', 'catalog_rebuild', 'catalog_rebuild_full', 'update_borg', 'update_agent'], true) => self::REPO_MAINTENANCE,
+            in_array($taskType, ['archive_delete', 'archive_lock', 's3_sync', 's3_restore'], true) => self::MANAGE_REPOS,
+            default => self::TRIGGER_BACKUP,
+        };
+    }
+
+    /**
      * Check if user can access a specific agent (client).
      */
     public function canAccessAgent(int $userId, int $agentId): bool

@@ -259,6 +259,11 @@ class AgentApiController extends Controller
         if (in_array($job['status'], ['completed', 'failed', 'cancelled'])) {
             $this->json(['status' => 'ok', 'cancel' => ($job['status'] === 'cancelled')]);
         }
+        // Only a job the queue handed out can run: a queued job reported as
+        // running would skip the queue and its concurrency limit
+        if (!in_array($job['status'], ['sent', 'running'], true)) {
+            $this->json(['status' => 'ok', 'cancel' => false]);
+        }
 
         $data = ['status' => 'running', 'last_progress_at' => $this->db->now()];
         if (isset($input['files_total']))      $data['files_total'] = (int) $input['files_total'];
@@ -307,6 +312,21 @@ class AgentApiController extends Controller
     {
         $agent = $this->authenticateAgent();
         $input = $this->getJsonInput();
+
+        // The agent reports the archive name back; the server later passes it
+        // to borg. A name starting with "-" would be read as an option, and
+        // control characters have no place in one.
+        if (isset($input['archive_name'])
+            && !preg_match('/^[^\x00-\x1f\x7f\-][^\x00-\x1f\x7f]{0,199}$/u', (string) $input['archive_name'])) {
+            $input['archive_name'] = '';
+        }
+        // Bound free text from the agent before it reaches the database,
+        // emails and notification commands
+        foreach (['error_log', 'output_log'] as $k) {
+            if (isset($input[$k]) && is_string($input[$k]) && strlen($input[$k]) > 65536) {
+                $input[$k] = substr($input[$k], 0, 65536) . "\n[truncated]";
+            }
+        }
 
         $jobId = (int) ($input['job_id'] ?? 0);
         $result = $input['result'] ?? '';  // 'completed', 'failed', or 'cataloging'
@@ -967,8 +987,8 @@ class AgentApiController extends Controller
                 $path = $file['path'] ?? '';
                 if (empty($path)) continue;
 
-                $status = substr($file['status'] ?? 'U', 0, 1);
-                $mtime = $file['mtime'] ?? '\\N';
+                $status = \BBS\Services\CatalogImporter::safeStatus($file['status'] ?? 'U');
+                $mtime = \BBS\Services\CatalogImporter::safeMtime($file['mtime'] ?? null);
                 fwrite($fh, "{$agentId}\t{$archiveId}\t{$escape($path)}\t{$escape(basename($path))}\t{$escape(dirname($path))}\t" . (int) ($file['size'] ?? 0) . "\t{$status}\t{$mtime}\n");
                 $batchSize++;
             }

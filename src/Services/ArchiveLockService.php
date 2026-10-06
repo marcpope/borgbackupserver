@@ -179,14 +179,14 @@ class ArchiveLockService
             $result = $remoteSshService->runBorgCommand(
                 $config,
                 $repo['path'],
-                ['rename', '--lock-wait=10', "{$repo['path']}::{$oldName}", $newName],
+                ['rename', '--lock-wait=10', '--', "{$repo['path']}::{$oldName}", $newName],
                 $passphrase
             );
             return [$result['success'], trim($result['stderr'] ?? $result['output'] ?? '')];
         }
 
         $localPath = BorgCommandBuilder::getLocalRepoPath($repo);
-        $borgArgs = ['rename', '--lock-wait=10', "{$localPath}::{$oldName}", $newName];
+        $borgArgs = ['rename', '--lock-wait=10', '--', "{$localPath}::{$oldName}", $newName];
         if (!empty($repo['ssh_unix_user'])) {
             $cmd = array_merge(['sudo', '/usr/local/bin/bbs-ssh-helper', 'borg-cmd', $repo['ssh_unix_user'], '-'], $borgArgs);
             $env = null;

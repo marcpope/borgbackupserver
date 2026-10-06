@@ -173,6 +173,11 @@ class PluginManager
 
             // Resolve config from named plugin_config if available, else inline
             if (!empty($pp['plugin_config_id'])) {
+                // Only this client's own configs: their secrets go to its agent
+                $owner = $this->getPluginConfig((int) $pp['plugin_config_id']);
+                if (!$owner || (int) ($owner['agent_id'] ?? 0) !== (int) $agentId) {
+                    continue;
+                }
                 $resolved = $this->buildTestPayload($pp['plugin_config_id']);
                 if (!empty($resolved)) {
                     // Tag with config identity so the agent can keep results

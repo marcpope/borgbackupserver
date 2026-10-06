@@ -815,7 +815,7 @@ HTML;
         $periodLabel = ($data['period'] ?? 'daily') === 'weekly' ? 'Weekly' : 'Daily';
         $subject = "[BBS] {$periodLabel} Report — {$dateFormatted}";
 
-        return $mailer->send($toEmail, $subject, $html);
+        return $mailer->send($toEmail, $subject, $html, true);
     }
 
     /**

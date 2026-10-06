@@ -842,14 +842,14 @@ if (renameToggle && renameForm) {
                     code.dataset.passphrase = value;
                     if (code.textContent !== '*****') code.textContent = value;
                 }
-                result.innerHTML = '<div class="alert alert-success py-2 px-3 mb-0 small">' + d.message + '</div>';
+                result.innerHTML = '<div class="alert alert-success py-2 px-3 mb-0 small">' + bbsEsc(d.message) + '</div>';
                 input.value = '';
                 setTimeout(() => box.classList.add('d-none'), 2500);
             } else if (d.orphaned) {
                 // borg took it, we could not store it. Do not auto-dismiss.
-                result.innerHTML = '<div class="alert alert-danger py-2 px-3 mb-0 small"><strong>Write this down now.</strong><br>' + d.message + '</div>';
+                result.innerHTML = '<div class="alert alert-danger py-2 px-3 mb-0 small"><strong>Write this down now.</strong><br>' + bbsEsc(d.message) + '</div>';
             } else {
-                result.innerHTML = '<div class="alert alert-warning py-2 px-3 mb-0 small">' + (d.message || d.error || 'Failed') +
+                result.innerHTML = '<div class="alert alert-warning py-2 px-3 mb-0 small">' + bbsEsc(d.message || d.error || 'Failed') +
                     (d.output ? '<pre class="mt-2 mb-0 small" style="white-space:pre-wrap;">' + d.output.replace(/</g, '&lt;') + '</pre>' : '') + '</div>';
             }
         } catch (e) {

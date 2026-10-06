@@ -66,6 +66,10 @@ class NotificationServiceController extends Controller
             $this->flash('danger', 'Name and Apprise URL are required.');
             $this->redirect('/settings?tab=push');
         }
+        if (!AppriseService::isSafeUrl($appriseUrl)) {
+            $this->flash('danger', 'Apprise URL must look like scheme://... (for example pover://user@token).');
+            $this->redirect('/settings?tab=push');
+        }
 
         // Build events JSON from checkboxes
         $events = [];
@@ -103,6 +107,10 @@ class NotificationServiceController extends Controller
 
         if (empty($name) || empty($appriseUrl)) {
             $this->flash('danger', 'Name and Apprise URL are required.');
+            $this->redirect('/settings?tab=push');
+        }
+        if (!AppriseService::isSafeUrl($appriseUrl)) {
+            $this->flash('danger', 'Apprise URL must look like scheme://... (for example pover://user@token).');
             $this->redirect('/settings?tab=push');
         }
 

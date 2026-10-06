@@ -49,6 +49,9 @@ is_allowed_path() {
     if [ -f /etc/bbs/allowed-storage-paths ]; then
         while IFS= read -r allowed_path; do
             [ -z "$allowed_path" ] && continue
+            # An entry such as "/" or a system directory (written before
+            # update-allowed-paths validated its input) is ignored.
+            is_safe_storage_root "$allowed_path" || continue
             local ALLOWED_NORM
             ALLOWED_NORM=$(readlink -m "$allowed_path" 2>/dev/null || echo "$allowed_path")
             [[ "$NORMALIZED" == "$ALLOWED_NORM" ]] && return 0
@@ -56,6 +59,35 @@ is_allowed_path() {
         done < /etc/bbs/allowed-storage-paths
     fi
     return 1
+}
+
+# Is this a directory that may be registered as a storage root? Absolute,
+# canonical, and not the filesystem root or a system directory:
+# every subcommand trusts the allow-list built from these, so one bad entry
+# would open the whole filesystem to root operations.
+is_safe_storage_root() {
+    local P
+    [[ "${1:-}" == /* ]] || return 1
+    P=$(readlink -m "$1" 2>/dev/null) || return 1
+    case "$P" in
+        /|/bin|/bin/*|/boot|/boot/*|/dev|/dev/*|/etc|/etc/*|/lib|/lib/*|/lib32|/lib32/*|/lib64|/lib64/*|/libx32|/libx32/*|\
+        /proc|/proc/*|/root|/root/*|/run|/run/*|/sbin|/sbin/*|/sys|/sys/*|/usr|/usr/*|/var|/var/lib|/var/lib/*|\
+        /var/log|/var/log/*|/var/www|/var/www/*|/var/spool|/var/spool/*|/var/cache|/var/cache/*|/home|/tmp|/opt|/srv|/mnt|/media)
+            return 1 ;;
+    esac
+    return 0
+}
+
+# A client's home directory: <base>/<numeric agent id>, not a symlink, with
+# a base that is not a system directory. Homes live under the storage_path
+# setting, which need not be a registered storage location.
+is_client_home() {
+    local P
+    [[ "${1:-}" == /* ]] || return 1
+    [ -L "$1" ] && return 1
+    P=$(readlink -m "$1" 2>/dev/null) || return 1
+    [[ "$(basename "$P")" =~ ^[0-9]+$ ]] || return 1
+    is_safe_storage_root "$(dirname "$P")" || [[ "$(dirname "$P")" =~ ^/var/bbs(/|$) ]]
 }
 
 case "$ACTION" in
@@ -72,6 +104,11 @@ case "$ACTION" in
         # Validate username format (must start with bbs-)
         if [[ ! "$USERNAME" =~ ^bbs-[a-z0-9_-]+$ ]]; then
             echo "Error: username must match bbs-[a-z0-9_-]+"
+            exit 1
+        fi
+
+        if ! is_client_home "$HOME_DIR"; then
+            echo "Error: home dir must be <storage path>/<client id>, not a symlink or system directory"
             exit 1
         fi
 
@@ -195,12 +232,14 @@ case "$ACTION" in
             exit 1
         fi
 
-        # Safety: staging must be under the data volume's tmp (preferred —
-        # sized for backup data, #344) or legacy /tmp
-        if [[ ! "$TMPDIR" =~ ^(/var/bbs/tmp|/tmp)/ ]]; then
-            echo "Error: tmpdir must be under /var/bbs/tmp/ or /tmp/"
+        # Safety: staging must be a bbs-download-/bbs-restore- directory under
+        # the data volume's tmp (preferred, #344) or legacy /tmp. Checked on
+        # the canonical path so "/tmp/../etc" cannot pass, and not a symlink.
+        if [ -L "$TMPDIR" ] || [[ ! "$(readlink -m "$TMPDIR")" =~ ^(/var/bbs/tmp|/tmp)/bbs-(download|restore)-[A-Za-z0-9]+$ ]]; then
+            echo "Error: tmpdir must be /var/bbs/tmp/bbs-download-* (or /tmp/bbs-download-*)"
             exit 1
         fi
+        TMPDIR=$(readlink -m "$TMPDIR")
 
         # Ensure tmpdir exists and is writable by the user
         mkdir -p "$TMPDIR"
@@ -766,7 +805,8 @@ case "$ACTION" in
         fi
 
         # Safety: only allow downloads from GitHub
-        if [[ ! "$DOWNLOAD_URL" =~ ^https://github\.com/borgbackup/borg/releases/ ]]; then
+        if [[ ! "$DOWNLOAD_URL" =~ ^https://github\.com/borgbackup/borg/releases/download/[0-9A-Za-z._-]+/[0-9A-Za-z._-]+$ ]] \
+           || [[ "$DOWNLOAD_URL" == *..* ]] || [[ "$DOWNLOAD_URL" == *%* ]]; then
             echo "Error: download URL must be from github.com/borgbackup/borg/releases"
             exit 1
         fi
@@ -1108,13 +1148,26 @@ case "$ACTION" in
             exit 1
         fi
 
-        # Safety: refuse to delete system directories
-        case "$STORAGE_DIR" in
-            /|/bin|/boot|/dev|/etc|/home|/lib*|/opt|/proc|/root|/run|/sbin|/srv|/sys|/tmp|/usr|/var|/var/www|/var/www/bbs)
-                echo "Error: refusing to delete system directory: $STORAGE_DIR"
-                exit 1
-                ;;
-        esac
+        # Safety: only a directory inside /var/bbs or a registered storage
+        # location, strictly below its root, and not itself a symlink.
+        if [ -L "$STORAGE_DIR" ] || { ! is_allowed_path "$STORAGE_DIR" && ! is_client_home "$STORAGE_DIR"; }; then
+            echo "Error: refusing to delete $STORAGE_DIR (not inside a storage location)"
+            exit 1
+        fi
+        STORAGE_DIR=$(readlink -m "$STORAGE_DIR")
+        REFUSE_ROOT=false
+        for ROOT in /var/bbs /var/bbs/home /var/bbs/tmp /var/bbs/cache /var/bbs/config /var/bbs/mysql /var/bbs/clickhouse /var/bbs/backups; do
+            [ "$STORAGE_DIR" = "$ROOT" ] && REFUSE_ROOT=true
+        done
+        if [ -f /etc/bbs/allowed-storage-paths ]; then
+            while IFS= read -r ROOT; do
+                [ -n "$ROOT" ] && [ "$STORAGE_DIR" = "$(readlink -m "$ROOT")" ] && REFUSE_ROOT=true
+            done < /etc/bbs/allowed-storage-paths
+        fi
+        if [ "$REFUSE_ROOT" = true ]; then
+            echo "Error: refusing to delete a storage root: $STORAGE_DIR"
+            exit 1
+        fi
 
         if [ -d "$STORAGE_DIR" ]; then
             rm -rf "$STORAGE_DIR"
@@ -1555,7 +1608,21 @@ SSHEOF
             exit 1
         fi
 
+        if ! is_client_home "$HOME_DIR"; then
+            echo "Error: home dir must be <storage path>/<client id>, not a symlink or system directory"
+            exit 1
+        fi
         PATHS_FILE="$HOME_DIR/.storage-paths"
+        if [ -L "$PATHS_FILE" ]; then
+            echo "Error: $PATHS_FILE is a symlink"
+            exit 1
+        fi
+        for P in "${@:3}"; do
+            if ! is_allowed_path "$P"; then
+                echo "Error: storage path '$P' is not inside a storage location"
+                exit 1
+            fi
+        done
 
         # Ensure home directory exists (may not if user creation used a different path)
         if [ ! -d "$HOME_DIR" ]; then
@@ -1595,11 +1662,16 @@ SSHEOF
         if [ $# -le 1 ]; then
             rm -f "$CONFIG_FILE"
         else
-            > "$CONFIG_FILE"
+            TMP_CONFIG=$(mktemp "$CONFIG_DIR/.allowed.XXXXXX")
             shift 1
             for P in "$@"; do
-                echo "$P" >> "$CONFIG_FILE"
+                if is_safe_storage_root "$P"; then
+                    readlink -m "$P" >> "$TMP_CONFIG"
+                else
+                    echo "Warning: refusing storage path '$P' (the filesystem root or a system directory)" >&2
+                fi
             done
+            mv -f "$TMP_CONFIG" "$CONFIG_FILE"
         fi
 
         [ -f "$CONFIG_FILE" ] && chmod 644 "$CONFIG_FILE"
@@ -1617,10 +1689,11 @@ SSHEOF
         fi
 
         # Safety: must be a download staging dir on the data volume (or legacy /tmp)
-        if [[ ! "$TMPDIR" =~ ^(/var/bbs/tmp|/tmp)/bbs-download- ]]; then
+        if [ -L "$TMPDIR" ] || [[ ! "$(readlink -m "$TMPDIR")" =~ ^(/var/bbs/tmp|/tmp)/bbs-download-[A-Za-z0-9]+$ ]]; then
             echo "Error: tmpdir must be under /var/bbs/tmp/bbs-download-* or /tmp/bbs-download-*"
             exit 1
         fi
+        TMPDIR=$(readlink -m "$TMPDIR")
 
         if [ -d "$TMPDIR" ]; then
             chgrp -R www-data "$TMPDIR"
@@ -1695,12 +1768,15 @@ SSHEOF
             exit 1
         fi
 
-        ARGS="renew"
-        [ -n "$DOMAIN" ] && ARGS="$ARGS --cert-name $DOMAIN"
-        [ "$FORCE" = "--force" ] && ARGS="$ARGS --force-renewal"
+        if [ -n "$DOMAIN" ] && [[ ! "$DOMAIN" =~ ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$ ]]; then
+            echo "Error: invalid domain"
+            exit 1
+        fi
+        ARGS=(renew)
+        [ -n "$DOMAIN" ] && ARGS+=(--cert-name "$DOMAIN")
+        [ "$FORCE" = "--force" ] && ARGS+=(--force-renewal)
 
-        # shellcheck disable=SC2086
-        certbot $ARGS --non-interactive 2>&1
+        certbot "${ARGS[@]}" --non-interactive 2>&1
         RC=$?
         if [ $RC -eq 0 ]; then
             apache2ctl configtest >/dev/null 2>&1 && systemctl reload apache2 >/dev/null 2>&1 || true

@@ -410,10 +410,19 @@ class AuthController extends Controller
                 'expires_at' => date('Y-m-d H:i:s', strtotime('+1 hour')),
             ]);
 
-            // Build reset URL
-            $scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
-            $host = $_SERVER['HTTP_HOST'] ?? 'localhost';
-            $resetUrl = "{$scheme}://{$host}/reset-password/{$token}";
+            // Build the reset URL from the configured address, never from the
+            // request's Host header: a forged Host would send the victim a
+            // working token on the attacker's domain (reset poisoning).
+            $base = rtrim((string) ($_ENV['APP_URL'] ?? ''), '/');
+            if ($base === '') {
+                $row = $this->db->fetchOne("SELECT `value` FROM settings WHERE `key` = 'app_url'");
+                $base = rtrim((string) ($row['value'] ?? ''), '/');
+            }
+            if ($base === '') {
+                $row = $this->db->fetchOne("SELECT `value` FROM settings WHERE `key` = 'server_host'");
+                $base = 'https://' . ($row['value'] ?? 'localhost');
+            }
+            $resetUrl = "{$base}/reset-password/{$token}";
 
             // Send email
             $subject = 'Password Reset — Borg Backup Server';
@@ -422,7 +431,7 @@ class AuthController extends Controller
                 . "<p>Or copy this link: {$resetUrl}</p>"
                 . "<p>This link expires in 1 hour. If you did not request this, you can safely ignore this email.</p>";
 
-            (new Mailer())->send($user['email'], $subject, $body);
+            (new Mailer())->send($user['email'], $subject, $body, true);
         }
 
         $this->flash('success', $successMsg);

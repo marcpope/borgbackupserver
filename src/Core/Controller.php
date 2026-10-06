@@ -78,6 +78,16 @@ class Controller
         }
         $_SESSION['last_activity'] = time();
 
+        // The role is read again on every request: a demoted admin must lose
+        // admin now, and a deleted user must be signed out, not at timeout.
+        $current = $this->db->fetchOne("SELECT role FROM users WHERE id = ?", [(int) $_SESSION['user_id']]);
+        if (!$current) {
+            session_destroy();
+            session_start();
+            $this->redirect('/login');
+        }
+        $_SESSION['user_role'] = $current['role'];
+
         // Force 2FA: redirect users without 2FA to profile setup
         // Skip for OIDC users — they rely on their identity provider for auth strength
         $currentUri = $_SERVER['REQUEST_URI'] ?? '';
