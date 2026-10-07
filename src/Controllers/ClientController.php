@@ -886,14 +886,15 @@ class ClientController extends Controller
 
         // Get all versions for these paths from ClickHouse
         $paths = array_column($pathRows, 'path');
-        $pathList = implode(', ', array_map(fn($p) => "'" . str_replace(["\\", "'"], ["\\\\", "\\'"], $p) . "'", $paths));
+        $placeholders = implode(', ', array_fill(0, count($paths), '?'));
 
         $versions = $ch->fetchAll(
             "SELECT path, archive_id, file_size, status,
                     toString(mtime) as mtime
              FROM file_catalog
-             WHERE agent_id = {$id} AND path IN ({$pathList})
-             ORDER BY path, archive_id DESC"
+             WHERE agent_id = ? AND path IN ({$placeholders})
+             ORDER BY path, archive_id DESC",
+            array_merge([(int) $id], $paths)
         );
 
         // Get archive metadata from MySQL
@@ -1534,6 +1535,10 @@ class ClientController extends Controller
         }
         if ($this->isAdmin() && array_key_exists('server_host_override', $_POST)) {
             $host = trim($_POST['server_host_override']);
+            if ($host !== '' && !\BBS\Core\Config::isValidHost($host, false)) {
+                $this->flash('danger', 'Server host override must be a hostname or IP address, without a port or path.');
+                $this->redirect("/clients/{$id}");
+            }
             $data['server_host_override'] = $host !== '' ? $host : null;
         }
         if ($this->isAdmin() && array_key_exists('ssh_port_override', $_POST)) {

@@ -273,6 +273,10 @@ class SettingsApiController extends Controller
 
         $oldServerHost = null;
         if ($section === 'general' && array_key_exists('server_host', $input)) {
+            $input['server_host'] = trim((string) $input['server_host']);
+            if (!\BBS\Core\Config::isValidHost($input['server_host'])) {
+                $this->json(['error' => 'server_host must be a hostname or IP address, optionally with :port'], 422);
+            }
             $row = $this->db->fetchOne("SELECT `value` FROM settings WHERE `key` = 'server_host'");
             $oldServerHost = $row['value'] ?? '';
         }

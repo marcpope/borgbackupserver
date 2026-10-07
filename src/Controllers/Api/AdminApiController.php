@@ -2174,7 +2174,7 @@ class AdminApiController extends Controller
         }
         if (array_key_exists('server_host_override', $input)) {
             $host = trim((string) ($input['server_host_override'] ?? ''));
-            if ($host !== '' && (preg_match('#://|/|\s#', $host) || preg_match('/^[^\[]*:\d+$/', $host))) {
+            if ($host !== '' && !\BBS\Core\Config::isValidHost($host, false)) {
                 $this->json(['error' => 'server_host_override must be a hostname or IP with no scheme, port or path'], 422);
             }
             $data['server_host_override'] = $host !== '' ? $host : null;

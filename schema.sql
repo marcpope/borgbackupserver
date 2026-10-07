@@ -59,9 +59,10 @@ CREATE TABLE password_resets (
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 
--- Default admin user (password: admin)
+-- Default admin user. The hash matches no password: the installer sets the
+-- real one (the setup wizard replaces this row, Docker sets a random password).
 INSERT INTO users (username, email, password_hash, role) VALUES
-('admin', 'admin@borgbackupserver.com', '$2y$12$OMFE1ma3aKDFjEYAP24eTuIznogvlOD2k3Emh0Hmvdckirgu73U2m', 'admin');
+('admin', 'admin@borgbackupserver.com', '!', 'admin');
 
 -- --------------------------------------------------------
 -- User Permissions & Client Access

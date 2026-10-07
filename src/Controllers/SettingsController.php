@@ -204,6 +204,11 @@ class SettingsController extends Controller
             $this->redirect('/');
             return;
         }
+        if (!\BBS\Core\Config::isValidHost($hostname, false)) {
+            $this->flash('danger', 'Enter a hostname or IP address, without http:// or a path.');
+            $this->redirect('/');
+            return;
+        }
 
         // Build server_host (include port if non-standard)
         $serverHost = $hostname;
@@ -248,6 +253,11 @@ class SettingsController extends Controller
 
         $oldServerHost = null;
         if (isset($_POST['server_host'])) {
+            $_POST['server_host'] = trim((string) $_POST['server_host']);
+            if (!\BBS\Core\Config::isValidHost($_POST['server_host'])) {
+                $this->flash('danger', 'Server host must be a hostname or IP address, optionally with :port, and no http:// or path.');
+                $this->redirect('/settings?tab=' . urlencode($_POST['_tab'] ?? 'general'));
+            }
             $row = $this->db->fetchOne("SELECT `value` FROM settings WHERE `key` = 'server_host'");
             $oldServerHost = $row['value'] ?? null;
         }

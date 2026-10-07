@@ -715,14 +715,13 @@ if [ "$FRESH_INSTALL" -eq 1 ]; then
     mysql -u bbs -p"$DB_PASS" bbs -e "UPDATE users SET password_hash = '$ADMIN_HASH' WHERE username = 'admin';"
 fi
 
-# Run pending migrations
+# Run pending migrations. The runner records what it has applied, so each
+# migration runs once, and PHP migrations run too. Feeding every .sql file to
+# mysql on each start re-applied data changes on every boot.
 if [ -d "/var/www/bbs/migrations" ]; then
     echo "Running migrations..."
-    for migration in /var/www/bbs/migrations/*.sql; do
-        if [ -f "$migration" ]; then
-            mysql -u bbs -p"$DB_PASS" bbs < "$migration" 2>/dev/null || true
-        fi
-    done
+    su -s /bin/sh -c "cd /var/www/bbs && /usr/local/bin/php migrate.php" www-data 2>&1 \
+        || echo "Warning: migration runner returned an error (migrations will retry on next start)"
 fi
 
 # --- Hosted-mode platform token bootstrap ---
