@@ -1,0 +1,9 @@
+# gitleaks config for the security-scan workflow.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Form placeholders and third-party test fixtures"
+regexTarget = "line"
+paths = ['''^vendor/''']
+regexes = ['''placeholder="-----BEGIN OPENSSH PRIVATE KEY-----&#10;\.\.\."''']
