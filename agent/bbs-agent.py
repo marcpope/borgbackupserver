@@ -53,7 +53,7 @@ if not hasattr(subprocess, "run"):
     subprocess.run = _subprocess_run
     subprocess.CompletedProcess = _CompletedProcess
 
-AGENT_VERSION = "2.98.0"
+AGENT_VERSION = "2.98.4"
 
 # Ed25519 public keys, hex, that may sign an update to this script and to
 # the start wrapper. Kept in step with agent/signing-key.pub. An update the
@@ -5620,4 +5620,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-# bbs-signature: v1 PS0inf5UBH3s1YRn8cymrKx3+qQh5iyLNAx4U46ISUK/OM4iusPnyuvrk+gIuFv3Z7ihwux3kBadXQnNg5IOAA==
+# bbs-signature: v1 oe/fLOHqzzPi9CDXRofkl/ezQ7ffwk1uL5SK0+xfmTs6tDyk8PDbI7tcVEOSll2h8KU48fIjFFUwdV5uT1FqDg==
