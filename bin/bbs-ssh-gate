@@ -53,8 +53,12 @@ case "${SSH_ORIGINAL_COMMAND:-}" in
 
         TARGET="$LOG_DIR/catalog-${JOB_ID}.jsonl"
 
-        # Diagnostic log for troubleshooting FUSE/shfs permission issues (#84)
+        # Diagnostic log for troubleshooting FUSE/shfs permission issues (#84).
+        # Appended on every backup, so keep only its tail once it passes 256 KB.
         DIAG_LOG="$LOG_DIR/.catalog-diag.log"
+        if [[ -f "$DIAG_LOG" ]] && (( $(stat -c %s "$DIAG_LOG" 2>/dev/null || echo 0) > 262144 )); then
+            tail -n 200 "$DIAG_LOG" > "$DIAG_LOG.tmp" 2>/dev/null && mv -f "$DIAG_LOG.tmp" "$DIAG_LOG" 2>/dev/null || rm -f "$DIAG_LOG.tmp"
+        fi
         {
             echo "=== catalog-write job=$JOB_ID $(date -Iseconds) ==="
             echo "user=$(id)"
@@ -63,7 +67,11 @@ case "${SSH_ORIGINAL_COMMAND:-}" in
             echo "mount=$(stat -f -c '%T' "$LOG_DIR" 2>/dev/null || mount | grep "$(df "$LOG_DIR" --output=source 2>/dev/null | tail -1)" 2>/dev/null | head -1 || echo 'unknown')"
         } >> "$DIAG_LOG" 2>&1 || true
 
-        cat > "$TARGET"
+        # A catalog is one JSON line per file; 16 GiB covers tens of millions
+        # of files. The cap stops a client from filling the server's disk
+        # through this channel.
+        MAX_CATALOG_BYTES=$((16 * 1024 * 1024 * 1024))
+        head -c "$MAX_CATALOG_BYTES" > "$TARGET"
 
         # Log file state immediately after creation (before any chmod/chgrp)
         {

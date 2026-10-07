@@ -12,6 +12,12 @@ use BBS\Services\SshKeyManager;
 
 class AgentApiController extends Controller
 {
+    /** Agent-sent log lines accepted per job (progress log_message). */
+    private const MAX_LOG_ROWS_PER_JOB = 2000;
+
+    /** Catalog entries accepted in one /api/agent/catalog request. */
+    private const MAX_CATALOG_BATCH = 10000;
+
     /**
      * Authenticate the agent via Bearer token.
      * Returns the agent record or sends 401 and exits.
@@ -137,7 +143,8 @@ class AgentApiController extends Controller
         // offers "Back up from a snapshot" only where it can work.
         if (isset($input['snapshot_support']) && is_array($input['snapshot_support'])) {
             $data['snapshot_capable'] = !empty($input['snapshot_support']['capable']) ? 1 : 0;
-            $data['snapshot_support'] = json_encode($input['snapshot_support']);
+            $snapshotJson = json_encode($input['snapshot_support']);
+            $data['snapshot_support'] = ($snapshotJson !== false && strlen($snapshotJson) <= 16384) ? $snapshotJson : null;
         }
         $data['status'] = 'online';
 
@@ -293,14 +300,25 @@ class AgentApiController extends Controller
 
         $this->db->update('backup_jobs', $data, 'id = ?', [$jobId]);
 
-        // Allow agent to send log messages (e.g. plugin activity)
-        if (!empty($input['log_message'])) {
-            $this->db->insert('server_log', [
-                'agent_id' => $agent['id'],
-                'backup_job_id' => $jobId,
-                'level' => $input['log_level'] ?? 'info',
-                'message' => substr($input['log_message'], 0, 2000),
-            ]);
+        // Allow agent to send log messages (e.g. plugin activity). Capped per
+        // job so a misbehaving agent can't flood the log table.
+        if (!empty($input['log_message']) && is_string($input['log_message'])) {
+            $level = $input['log_level'] ?? 'info';
+            if (!in_array($level, ['info', 'warning', 'error'], true)) {
+                $level = 'info';
+            }
+            $logged = $this->db->fetchOne(
+                "SELECT COUNT(*) AS n FROM server_log WHERE backup_job_id = ?",
+                [$jobId]
+            );
+            if ((int) ($logged['n'] ?? 0) < self::MAX_LOG_ROWS_PER_JOB) {
+                $this->db->insert('server_log', [
+                    'agent_id' => $agent['id'],
+                    'backup_job_id' => $jobId,
+                    'level' => $level,
+                    'message' => substr($input['log_message'], 0, 2000),
+                ]);
+            }
         }
 
         $this->json(['status' => 'ok', 'cancel' => false]);
@@ -886,7 +904,13 @@ class AgentApiController extends Controller
                 $diagLog = dirname($catPath) . '/.catalog-diag.log';
                 $gateDiag = '';
                 if (file_exists($diagLog)) {
-                    $tail = file_get_contents($diagLog);
+                    // Only the end of the file matters; it can be large.
+                    $tail = '';
+                    if ($dfh = @fopen($diagLog, 'r')) {
+                        fseek($dfh, -min(8192, (int) @filesize($diagLog)), SEEK_END);
+                        $tail = (string) stream_get_contents($dfh);
+                        fclose($dfh);
+                    }
                     $lines = explode("\n", trim($tail));
                     $gateDiag = ' | gate-diag: ' . implode(' / ', array_slice($lines, -6));
                 }
@@ -969,21 +993,30 @@ class AgentApiController extends Controller
         $archiveId = (int) ($input['archive_id'] ?? 0);
         $files = $input['files'] ?? [];
 
-        if (!$archiveId || empty($files)) {
+        if (!$archiveId || empty($files) || !is_array($files)) {
             $this->json(['error' => 'archive_id and files[] required'], 400);
+        }
+        if (count($files) > self::MAX_CATALOG_BATCH) {
+            $this->json(['error' => 'Too many files in one batch (max ' . self::MAX_CATALOG_BATCH . ')'], 413);
         }
 
         // Verify archive exists AND belongs to the calling agent. Without the
         // ownership check, a compromised agent token could upload catalog rows
         // against another tenant's archive (cross-tenant pollution).
         $archive = $this->db->fetchOne(
-            "SELECT ar.id FROM archives ar
+            "SELECT ar.id, ar.created_at FROM archives ar
              JOIN repositories r ON r.id = ar.repository_id
              WHERE ar.id = ? AND r.agent_id = ?",
             [$archiveId, (int) $agent['id']]
         );
         if (!$archive) {
             $this->json(['error' => 'Archive not found'], 404);
+        }
+        // A catalog is sent right after the backup that made the archive.
+        // Refusing late uploads stops an agent from padding an old archive's
+        // catalog forever.
+        if (strtotime($archive['created_at']) < time() - 86400) {
+            $this->json(['error' => 'Catalog uploads are only accepted for archives created in the last 24 hours'], 409);
         }
 
         $agentId = (int) $agent['id'];
@@ -998,7 +1031,7 @@ class AgentApiController extends Controller
         if ($fh) {
             foreach ($files as $file) {
                 $path = $file['path'] ?? '';
-                if (empty($path)) continue;
+                if (!is_string($path) || $path === '' || strlen($path) > 4096) continue;
 
                 $status = \BBS\Services\CatalogImporter::safeStatus($file['status'] ?? 'U');
                 $mtime = \BBS\Services\CatalogImporter::safeMtime($file['mtime'] ?? null);
@@ -1144,7 +1177,8 @@ class AgentApiController extends Controller
         // offers "Back up from a snapshot" only where it can work.
         if (isset($input['snapshot_support']) && is_array($input['snapshot_support'])) {
             $data['snapshot_capable'] = !empty($input['snapshot_support']['capable']) ? 1 : 0;
-            $data['snapshot_support'] = json_encode($input['snapshot_support']);
+            $snapshotJson = json_encode($input['snapshot_support']);
+            $data['snapshot_support'] = ($snapshotJson !== false && strlen($snapshotJson) <= 16384) ? $snapshotJson : null;
         }
 
         if (!empty($data)) {

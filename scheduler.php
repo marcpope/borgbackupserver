@@ -3417,17 +3417,27 @@ if (!empty($deferredHooks)) {
 // Step 16b: Clean up imported catalog log files from .catalog-logs directories
 // These are written by the agent via SSH and should be deleted after import,
 // but the unlink may fail if directory permissions haven't been updated yet.
-$agentHomeDirs = $db->fetchAll("SELECT DISTINCT ssh_home_dir FROM agents WHERE ssh_home_dir IS NOT NULL AND ssh_home_dir != ''");
+$agentHomeDirs = $db->fetchAll("SELECT id, ssh_home_dir FROM agents WHERE ssh_home_dir IS NOT NULL AND ssh_home_dir != ''");
 $catalogCleaned = 0;
 foreach ($agentHomeDirs as $ahd) {
-    foreach (glob($ahd['ssh_home_dir'] . '/.catalog-logs/catalog-*.jsonl') as $catFile) {
+    foreach (glob($ahd['ssh_home_dir'] . '/.catalog-logs/catalog-*.jsonl') ?: [] as $catFile) {
         // Extract job ID from filename (catalog-{jobId}.jsonl)
         if (preg_match('/catalog-(\d+)\.jsonl$/', $catFile, $m)) {
             $catJobId = (int) $m[1];
             $catJob = $db->fetchOne(
-                "SELECT status FROM backup_jobs WHERE id = ? AND status IN ('completed', 'failed')",
-                [$catJobId]
+                "SELECT status FROM backup_jobs WHERE id = ? AND agent_id = ?",
+                [$catJobId, (int) $ahd['id']]
             );
+            // A file named after a job this client doesn't have will never be
+            // imported. Drop it once it has sat for an hour.
+            if (!$catJob) {
+                if ((time() - (@filemtime($catFile) ?: 0)) > 3600) {
+                    @unlink($catFile);
+                    $catalogCleaned++;
+                }
+                continue;
+            }
+            $catJob = in_array($catJob['status'], ['completed', 'failed', 'cancelled'], true) ? $catJob : null;
             // A failed job does not mean the client has stopped writing. When a
             // job is failed out from under a running backup — the offline sweep,
             // stall detection, a cancel — borg and the catalog stream carry on,
