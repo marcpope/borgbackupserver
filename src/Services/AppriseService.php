@@ -44,11 +44,13 @@ class AppriseService
     /**
      * An Apprise URL is "scheme://...". Anything else is refused: the URL is
      * passed to the apprise command, where a value starting with "-" would
-     * be read as an option.
+     * be read as an option. In hosted mode the URL must not reach the host's
+     * internal network either.
      */
     public static function isSafeUrl(string $url): bool
     {
-        return (bool) preg_match('#^[A-Za-z][A-Za-z0-9+.\-]*://\S+$#', trim($url));
+        return (bool) preg_match('#^[A-Za-z][A-Za-z0-9+.\-]*://\S+$#', trim($url))
+            && !\BBS\Core\UrlGuard::blockedWhenHosted($url);
     }
 
     public function isAppriseInstalled(): bool

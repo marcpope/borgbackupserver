@@ -262,17 +262,27 @@ class PluginManager
         $existing = $this->getPluginConfig($configId);
         if (!$existing) return;
 
-        // Preserve encrypted sensitive fields if new value is empty
+        // The form leaves secrets blank: a value means a new secret to
+        // encrypt, an empty one means keep the stored (encrypted) value.
         $existingConfig = json_decode($existing['config'], true) ?: [];
         $schema = $this->getPluginSchema($existing['slug']);
         foreach ($schema as $field => $def) {
-            if (!empty($def['sensitive']) && empty($config[$field]) && !empty($existingConfig[$field])) {
+            if (empty($def['sensitive'])) {
+                continue;
+            }
+            if (!empty($config[$field])) {
+                $config[$field] = Encryption::encrypt($config[$field]);
+            } elseif (!empty($existingConfig[$field])) {
                 $config[$field] = $existingConfig[$field];
             }
         }
         // Legacy password field
-        if (empty($config['password']) && !empty($existingConfig['password'])) {
-            $config['password'] = $existingConfig['password'];
+        if (empty($schema['password']['sensitive'])) {
+            if (!empty($config['password'])) {
+                $config['password'] = Encryption::encrypt($config['password']);
+            } elseif (!empty($existingConfig['password'])) {
+                $config['password'] = $existingConfig['password'];
+            }
         }
 
         $config = $this->processConfigFields($existing['slug'], $config, true);
@@ -412,6 +422,90 @@ class PluginManager
         foreach (['/bin', '/sbin', '/usr/bin', '/usr/sbin', '/usr/lib', '/usr/lib32', '/usr/lib64', '/usr/libexec', '/lib', '/lib32', '/lib64', '/snap', '/usr/share', '/etc/alternatives', '/System', '/opt/homebrew/bin', '/opt/homebrew/sbin', '/opt/local/bin'] as $dir) {
             if ($exe === $dir || str_starts_with($exe, $dir . '/')) {
                 return "Programs under {$dir} cannot be used as hooks. Put your script somewhere else, for example /usr/local/bin or /etc/bbs-agent/hooks.";
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Options the dump tools must not get through extra_options: each names
+     * a file or directory the tool would write to or load from, and the
+     * tools run as root on the client. The agent refuses them too; this
+     * check reports the problem when the config is saved instead of at
+     * backup time. [long options, short option letters]
+     */
+    private const DUMP_BLOCKED_OPTIONS = [
+        'mysql_dump' => [['--result-file', '--tab', '--log-error', '--debug', '--plugin-dir', '--default-auth',
+                          '--defaults-file', '--defaults-extra-file', '--defaults-group-suffix',
+                          '--character-sets-dir', '--load-data-local-dir'], 'rT#'],
+        'pg_dump' => [['--file'], 'f'],
+        'mongo_dump' => [['--out', '--archive', '--config'], 'o'],
+    ];
+
+    /**
+     * In hosted mode an Offsite Sync config copies to the platform's bucket
+     * only: no custom S3 credentials, no SSH or local destinations. Path
+     * prefix and bandwidth limit stay. Other plugins pass unchanged.
+     */
+    public static function hostedConfig(string $slug, array $config): array
+    {
+        if (!\BBS\Core\Config::isHosted() || $slug !== 's3_sync') {
+            return $config;
+        }
+        $config['target_type'] = S3SyncService::TYPE_S3;
+        $config['credential_source'] = 'global';
+        foreach (['endpoint', 'region', 'bucket', 'access_key', 'secret_key', 'remote_ssh_config_id', 'storage_location_id'] as $field) {
+            unset($config[$field]);
+        }
+        return $config;
+    }
+
+    /**
+     * What is wrong with a plugin config about to be saved, as a message;
+     * null when nothing is.
+     */
+    public static function configProblem(string $slug, array $config, bool $isAdmin): ?string
+    {
+        if ($slug === 'shell_hook') {
+            return self::hookConfigProblem($config);
+        }
+        if ($slug === 's3_sync') {
+            $type = (string) ($config['target_type'] ?? S3SyncService::TYPE_S3);
+            if (!$isAdmin && in_array($type, [S3SyncService::TYPE_SFTP, S3SyncService::TYPE_LOCAL], true)) {
+                return 'Only administrators can copy to an SSH host or a storage location.';
+            }
+            $endpoint = trim((string) ($config['endpoint'] ?? ''));
+            if ($endpoint !== '' && ($config['credential_source'] ?? 'global') === 'custom') {
+                $host = \BBS\Core\UrlGuard::hostOf(str_contains($endpoint, '://') ? $endpoint : 'https://' . $endpoint);
+                if ($host !== null && (\BBS\Core\Config::isHosted()
+                        ? \BBS\Core\UrlGuard::reachesInternal($host)
+                        : !$isAdmin && \BBS\Core\UrlGuard::reachesLocal($host))) {
+                    return 'The S3 endpoint cannot point at this server or a link-local address.';
+                }
+            }
+            return S3SyncService::pathPrefixProblem((string) ($config['path_prefix'] ?? ''), $type, true);
+        }
+        if (isset(self::DUMP_BLOCKED_OPTIONS[$slug])) {
+            [$long, $short] = self::DUMP_BLOCKED_OPTIONS[$slug];
+            foreach (preg_split('/\s+/', trim((string) ($config['extra_options'] ?? ''))) ?: [] as $arg) {
+                if (str_starts_with($arg, '--')) {
+                    $name = strtolower(explode('=', $arg, 2)[0]);
+                    foreach ($long as $blocked) {
+                        // mysqldump accepts any unambiguous prefix of a long option
+                        if ($blocked === $name || (strlen($name) > 4 && str_starts_with($blocked, $name))) {
+                            return "Extra options: {$name} is not allowed, it makes the dump tool write or load files.";
+                        }
+                    }
+                } elseif (str_starts_with($arg, '-') && strpbrk(substr($arg, 1), $short) !== false) {
+                    return "Extra options: {$arg} is not allowed. Short options that can write files are refused; use the long form of other options.";
+                }
+            }
+            $dir = trim((string) ($config['dump_dir'] ?? ''));
+            if ($dir !== '' && !str_starts_with($dir, '/') && !preg_match('#^[A-Za-z]:[\\\\/]#', $dir)) {
+                return 'Dump directory must be an absolute path.';
+            }
+            if ($dir !== '' && preg_match('#^/(etc|bin|sbin|lib|lib32|lib64|boot|dev|proc|sys|usr|snap|root/\.ssh)(/|$)|^/(root|var|home|tmp|opt|srv)?/?$#', $dir)) {
+                return 'Dump directory cannot be a system directory. Its .sql files are deleted after each backup.';
             }
         }
         return null;

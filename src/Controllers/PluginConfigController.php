@@ -33,16 +33,7 @@ class PluginConfigController extends Controller
     {
         if (!\BBS\Core\Config::isHosted()) return $config;
         $row = $this->db->fetchOne("SELECT slug FROM plugins WHERE id = ?", [$pluginId]);
-        if (!$row || ($row['slug'] ?? '') !== 's3_sync') return $config;
-
-        // Hosted tenants copy to the platform's bucket only: no custom S3
-        // credentials, and no SSH or local destinations either.
-        $config['target_type'] = 's3';
-        $config['credential_source'] = 'global';
-        foreach (['endpoint', 'region', 'bucket', 'access_key', 'secret_key', 'remote_ssh_config_id', 'storage_location_id'] as $field) {
-            unset($config[$field]);
-        }
-        return $config;
+        return PluginManager::hostedConfig((string) ($row['slug'] ?? ''), $config);
     }
 
     private function sanitizeHostedConfigByConfigId(int $configId, array $config): array
@@ -82,7 +73,7 @@ class PluginConfigController extends Controller
         $config = $this->sanitizeHostedConfig($pluginId, $config);
 
         $slugRow = $this->db->fetchOne("SELECT slug FROM plugins WHERE id = ?", [$pluginId]);
-        if (($slugRow['slug'] ?? '') === 'shell_hook' && ($hookProblem = PluginManager::hookConfigProblem($config)) !== null) {
+        if (($hookProblem = PluginManager::configProblem((string) ($slugRow['slug'] ?? ''), $config, $this->isAdmin())) !== null) {
             $this->flash('danger', $hookProblem);
             $this->redirect("/clients/{$id}?tab=plugins");
         }
@@ -161,7 +152,7 @@ class PluginConfigController extends Controller
         $config = $this->sanitizeHostedConfigByConfigId($configId, $config);
 
         $slugRow = $this->db->fetchOne("SELECT p.slug FROM plugin_configs pc JOIN plugins p ON p.id = pc.plugin_id WHERE pc.id = ?", [$configId]);
-        if (($slugRow['slug'] ?? '') === 'shell_hook' && ($hookProblem = PluginManager::hookConfigProblem($config)) !== null) {
+        if (($hookProblem = PluginManager::configProblem((string) ($slugRow['slug'] ?? ''), $config, $this->isAdmin())) !== null) {
             $this->flash('danger', $hookProblem);
             $this->redirect("/clients/{$id}?tab=plugins");
         }

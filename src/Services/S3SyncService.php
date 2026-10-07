@@ -71,7 +71,11 @@ class S3SyncService
                 'bucket' => $settings['bucket'] ?? '',
                 'access_key' => $settings['access_key'] ?? '',
                 'secret_key' => $settings['secret_key'] ?? '',
-                'path_prefix' => $config['path_prefix'] ?? $settings['path_prefix'] ?? '',
+                // Hosted tenants share the platform's bucket, so their own
+                // prefix goes under the platform's rather than replacing it.
+                'path_prefix' => \BBS\Core\Config::isHosted()
+                    ? trim(trim((string) ($settings['path_prefix'] ?? ''), '/') . '/' . trim((string) ($config['path_prefix'] ?? ''), '/'), '/')
+                    : ($config['path_prefix'] ?? $settings['path_prefix'] ?? ''),
                 'bandwidth_limit' => $config['bandwidth_limit'] ?? $settings['bandwidth_limit'] ?? '',
                 'storage_class' => $settings['storage_class'] ?? '',
                 'sse_mode' => $settings['sse_mode'] ?? '',
@@ -248,6 +252,17 @@ class S3SyncService
         $prefix = trim((string) ($config['path_prefix'] ?? ''), '/');
         $bandwidth = trim((string) ($config['bandwidth_limit'] ?? ''));
 
+        // Hosted tenants copy to the platform's bucket only, whatever the
+        // config says; configs saved through the API before this check
+        // could say otherwise.
+        if (\BBS\Core\Config::isHosted()) {
+            $type = self::TYPE_S3;
+            $config = ['credential_source' => 'global'] + array_intersect_key($config, array_flip(['path_prefix', 'bandwidth_limit']));
+        }
+        if (($problem = self::pathPrefixProblem($prefix, $type)) !== null) {
+            return $this->destinationError($type, $problem);
+        }
+
         if ($type === self::TYPE_S3) {
             return $this->destinationFromCredentials($this->resolveCredentials($config));
         }
@@ -300,6 +315,38 @@ class S3SyncService
             'bandwidth_limit' => $bandwidth,
             'error' => null,
         ];
+    }
+
+    /**
+     * What is wrong with a sync path prefix, as a message; null when nothing
+     * is. The prefix is joined into a local path, an SFTP path or an S3 key,
+     * so "." and ".." folders would reach outside the sync area, including
+     * other clients' repositories on a storage location, where client
+     * folders are named by number. $strict adds the character rules applied
+     * when a config is saved; without it, only what is unsafe at use time.
+     */
+    public static function pathPrefixProblem(string $prefix, string $type, bool $strict = false): ?string
+    {
+        $prefix = trim($prefix, '/');
+        if ($prefix === '') {
+            return null;
+        }
+        $segments = explode('/', $prefix);
+        foreach ($segments as $seg) {
+            if ($seg === '' || $seg === '.' || $seg === '..' || str_contains($seg, "\0") || str_contains($seg, '\\')) {
+                return 'Path prefix cannot contain empty, "." or ".." folders.';
+            }
+            if ($strict && !preg_match('/^[A-Za-z0-9._-]+$/', $seg)) {
+                return 'Path prefix may only use letters, digits, ".", "_" and "-", with "/" between folders.';
+            }
+        }
+        if ($strict && strlen($prefix) > 200) {
+            return 'Path prefix is too long (200 characters at most).';
+        }
+        if ($type === self::TYPE_LOCAL && ctype_digit($segments[0])) {
+            return 'On a storage location the path prefix cannot start with a number; client folders use those names.';
+        }
+        return null;
     }
 
     /**

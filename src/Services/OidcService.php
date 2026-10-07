@@ -47,6 +47,9 @@ class OidcService
     private function buildClient(string $redirectUri): OpenIDConnectClient
     {
         $providerUrl = rtrim($this->settings['oidc_provider_url'] ?? '', '/');
+        if (\BBS\Core\UrlGuard::blockedWhenHosted($providerUrl)) {
+            throw new \RuntimeException('The SSO provider URL must be a public address.');
+        }
         $clientId = $this->settings['oidc_client_id'] ?? '';
         $clientSecret = $this->settings['oidc_client_secret'] ?? '';
 
@@ -297,7 +300,7 @@ class OidcService
         }
 
         $providerUrl = rtrim($this->settings['oidc_provider_url'] ?? '', '/');
-        if (empty($providerUrl)) return null;
+        if (empty($providerUrl) || \BBS\Core\UrlGuard::blockedWhenHosted($providerUrl)) return null;
 
         // Fetch discovery document
         $discoveryUrl = $providerUrl . '/.well-known/openid-configuration';

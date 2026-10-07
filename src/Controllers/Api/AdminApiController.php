@@ -1196,7 +1196,8 @@ class AdminApiController extends Controller
         if (!$plugin) {
             $this->json(['error' => "Unknown plugin: {$pluginSlug}"], 404);
         }
-        if ($pluginSlug === 'shell_hook' && ($hookProblem = \BBS\Services\PluginManager::hookConfigProblem($config)) !== null) {
+        $config = \BBS\Services\PluginManager::hostedConfig($pluginSlug, is_array($config) ? $config : []);
+        if (($hookProblem = \BBS\Services\PluginManager::configProblem($pluginSlug, $config, true)) !== null) {
             $this->json(['error' => $hookProblem], 422);
         }
 
@@ -5280,7 +5281,8 @@ class AdminApiController extends Controller
                 }
                 $stored[$field] = $value;
             }
-            if ($existing['slug'] === 'shell_hook' && ($hookProblem = \BBS\Services\PluginManager::hookConfigProblem($stored)) !== null) {
+            $stored = \BBS\Services\PluginManager::hostedConfig($existing['slug'], $stored);
+            if (($hookProblem = \BBS\Services\PluginManager::configProblem($existing['slug'], $stored, true)) !== null) {
                 $this->json(['error' => $hookProblem], 422);
             }
             $data['config'] = json_encode($stored);

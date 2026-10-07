@@ -73,6 +73,11 @@ class Mailer
             return false;
         }
 
+        if (\BBS\Core\Config::isHosted() && \BBS\Core\UrlGuard::reachesInternal((string) $this->host)) {
+            error_log("SMTP host {$this->host} refused: internal address");
+            return false;
+        }
+
         try {
             $connHost = $this->secure === 'ssl' ? "ssl://{$this->host}" : $this->host;
             $socket = @fsockopen($connHost, $this->port, $errno, $errstr, 10);

@@ -704,7 +704,13 @@ class SettingsController extends Controller
         // silently reverting.
         $this->saveSetting('push_enabled', '1');
         if (!empty($_POST['push_relay_url'])) {
-            $this->saveSetting('push_relay_url', rtrim(trim($_POST['push_relay_url']), '/'));
+            $relayUrl = rtrim(trim($_POST['push_relay_url']), '/');
+            if (!filter_var($relayUrl, FILTER_VALIDATE_URL) || !str_starts_with($relayUrl, 'https://')
+                || \BBS\Core\UrlGuard::blockedWhenHosted($relayUrl)) {
+                $this->flash('danger', 'The push relay URL must be a public https URL.');
+                $this->redirect('/settings?tab=push');
+            }
+            $this->saveSetting('push_relay_url', $relayUrl);
         }
 
         [$ok, $message] = $push->registerInstall();
@@ -742,6 +748,10 @@ class SettingsController extends Controller
 
         if (empty($host)) {
             $this->json(['success' => false, 'error' => 'SMTP host is not configured.']);
+            return;
+        }
+        if (\BBS\Core\Config::isHosted() && \BBS\Core\UrlGuard::reachesInternal($host)) {
+            $this->json(['success' => false, 'error' => 'SMTP host must be a public address.']);
             return;
         }
 
