@@ -395,6 +395,14 @@ class AuthController extends Controller
 
         $user = $this->db->fetchOne("SELECT id, email FROM users WHERE email = ?", [$email]);
 
+        // Placeholder addresses (the .invalid default, a bare host) can't
+        // receive mail; don't send a reset link toward one.
+        $domain = strtolower((string) substr(strrchr((string) ($user['email'] ?? ''), '@') ?: '', 1));
+        if ($domain === '' || !str_contains($domain, '.') || str_ends_with($domain, '.invalid')
+            || str_ends_with($domain, '.localhost') || str_ends_with($domain, '.local')) {
+            $user = null;
+        }
+
         if ($user) {
             // Clean up expired tokens
             $this->db->query("DELETE FROM password_resets WHERE expires_at < NOW()");

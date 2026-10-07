@@ -61,8 +61,10 @@ CREATE TABLE password_resets (
 
 -- Default admin user. The hash matches no password: the installer sets the
 -- real one (the setup wizard replaces this row, Docker sets a random password).
+-- The address is on the reserved .invalid domain, so no mail is ever sent
+-- anywhere until the admin enters a real one.
 INSERT INTO users (username, email, password_hash, role) VALUES
-('admin', 'admin@borgbackupserver.com', '!', 'admin');
+('admin', 'admin@localhost.invalid', '!', 'admin');
 
 -- --------------------------------------------------------
 -- User Permissions & Client Access
