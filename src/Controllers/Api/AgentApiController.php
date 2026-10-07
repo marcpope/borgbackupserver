@@ -260,8 +260,10 @@ class AgentApiController extends Controller
             $this->json(['status' => 'ok', 'cancel' => ($job['status'] === 'cancelled')]);
         }
         // Only a job the queue handed out can run: a queued job reported as
-        // running would skip the queue and its concurrency limit
-        if (!in_array($job['status'], ['sent', 'running'], true)) {
+        // running would skip the queue and its concurrency limit. Server-side
+        // work is the scheduler's, never the agent's.
+        if (!in_array($job['status'], ['sent', 'running'], true)
+            || in_array($job['task_type'], \BBS\Services\QueueManager::SERVER_SIDE_TYPES, true)) {
             $this->json(['status' => 'ok', 'cancel' => false]);
         }
 
@@ -358,6 +360,17 @@ class AgentApiController extends Controller
             $this->json(['status' => 'ok', 'already_terminal' => true, 'archive_id' => $archiveId]);
         }
 
+        // An agent reports only on work the queue handed to it: not on a job
+        // still queued (that would skip the queue, or fake a backup that never
+        // ran), and never on server-side work such as repair, prune or
+        // offsite sync, which only the scheduler runs (GHSA-6423-m3jr-236x).
+        if (in_array($job['task_type'], \BBS\Services\QueueManager::SERVER_SIDE_TYPES, true)) {
+            $this->json(['error' => 'This job runs on the server, not on the agent'], 403);
+        }
+        if (!in_array($job['status'], ['sent', 'running'], true)) {
+            $this->json(['error' => 'Job has not been dispatched to this agent'], 409);
+        }
+
         // Handle "abandoned" — agent confirms it's no longer running this job
         // (typically means the original completion report was lost due to server error)
         if ($result === 'abandoned') {
@@ -365,7 +378,7 @@ class AgentApiController extends Controller
                 'status' => 'failed',
                 'completed_at' => date('Y-m-d H:i:s'),
                 'error_log' => 'Job abandoned — agent confirmed it is no longer running this task (status report likely lost)',
-            ], 'id = ?', [$jobId]);
+            ], "id = ? AND status IN ('sent', 'running')", [$jobId]);
 
             $taskLabel = ucfirst(str_replace('_', ' ', $job['task_type']));
             $this->db->insert('server_log', [
@@ -470,7 +483,7 @@ class AgentApiController extends Controller
             $data['task_result'] = substr((string) $input['task_result'], 0, 262144);
         }
 
-        $this->db->update('backup_jobs', $data, 'id = ?', [$jobId]);
+        $this->db->update('backup_jobs', $data, "id = ? AND status IN ('sent', 'running')", [$jobId]);
 
         $taskLabel = ucfirst(str_replace('_', ' ', $job['task_type']));
 

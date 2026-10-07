@@ -10,6 +10,9 @@ class QueueManager
     /** Task types that write to a repository; refused on read-only copies (#523). */
     public const WRITE_TASKS = ['backup', 'prune', 'compact', 'repo_repair', 'archive_delete', 'archive_lock', 's3_sync'];
 
+    /** Task types the scheduler runs on the server; agents never run or report them. */
+    public const SERVER_SIDE_TYPES = ['prune', 'compact', 's3_sync', 's3_restore', 'repo_check', 'repo_repair', 'break_lock', 'catalog_sync', 'catalog_rebuild', 'catalog_rebuild_full', 'archive_delete', 'archive_lock'];
+
     private Database $db;
     private int $maxQueue;
     private ?int $sshPort = null;
@@ -158,7 +161,7 @@ class QueueManager
         $promoted = [];
         $promotedCount = 0;
 
-        $serverSideTypes = ['prune', 'compact', 's3_sync', 's3_restore', 'repo_check', 'repo_repair', 'break_lock', 'catalog_sync', 'catalog_rebuild', 'catalog_rebuild_full', 'archive_delete', 'archive_lock'];
+        $serverSideTypes = self::SERVER_SIDE_TYPES;
         $managementTypes = ['update_borg', 'update_agent'];
 
         // Offsite syncs are capped on their own, independently of max_queue.
