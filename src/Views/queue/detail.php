@@ -29,8 +29,10 @@ function formatBytes($bytes) {
 $isActive = in_array($job['status'], ['queued', 'sent', 'running']);
 // Repo check/repair report borg's phase counts (segments, archives) rather
 // than files, with the phase named in status_message (#464).
-$isCheckJob = in_array($job['task_type'], ['repo_check', 'repo_repair'], true);
-$isServerSide = $isCheckJob || in_array($job['task_type'], ['prune', 'compact', 's3_sync', 's3_restore', 'catalog_sync', 'catalog_rebuild', 'catalog_rebuild_full']);
+// Check and archive delete jobs report borg's own progress (phase text and
+// counts, not files and bytes).
+$isCheckJob = in_array($job['task_type'], ['repo_check', 'repo_repair', 'archive_delete'], true);
+$isServerSide = $isCheckJob || in_array($job['task_type'], ['prune', 'compact', 's3_sync', 's3_restore', 'catalog_sync', 'catalog_rebuild', 'catalog_rebuild_full', 'archive_lock']);
 $taskLabel = \BBS\Core\JobType::label($job['task_type']);
 ?>
 
@@ -471,7 +473,7 @@ $taskLabel = \BBS\Core\JobType::label($job['task_type']);
                             <td><?= !empty($job['status_message']) ? htmlspecialchars($job['status_message']) : '--' ?></td>
                         </tr>
                         <tr>
-                            <td class="text-muted fw-semibold ps-3">Checked</td>
+                            <td class="text-muted fw-semibold ps-3"><?= $job['task_type'] === 'archive_delete' ? 'Processed' : 'Checked' ?></td>
                             <td><?= $job['files_total'] ? number_format((int) $job['files_processed']) . ' / ' . number_format($job['files_total']) : '--' ?></td>
                         </tr>
                         <?php else: ?>
@@ -669,7 +671,7 @@ if ($job['task_type'] === 'backup_dry_run' && !empty($job['task_result'])) {
         const container = document.getElementById('progress-section');
         if (!container) return;
 
-        const isServerSide = ['prune','compact','s3_sync','s3_restore','repo_check','repo_repair','break_lock','catalog_sync','catalog_rebuild','catalog_rebuild_full'].includes(job.task_type);
+        const isServerSide = ['prune','compact','s3_sync','s3_restore','repo_check','repo_repair','break_lock','catalog_sync','catalog_rebuild','catalog_rebuild_full','archive_delete','archive_lock'].includes(job.task_type);
         const pct = (job.files_total > 0 && job.files_processed > 0) ? Math.round((job.files_processed / job.files_total) * 100) : 0;
         const isJobActive = ['queued','sent','running'].includes(job.status);
 
@@ -693,7 +695,7 @@ if ($job['task_type'] === 'backup_dry_run' && !empty($job['task_result'])) {
                 '</div></div>';
         } else if (isJobActive && job.status === 'running' && pct > 0) {
             var taskLabel = window.bbsTaskLabel(job.task_type || 'backup');
-            var isCheckJob = ['repo_check','repo_repair'].includes(job.task_type);
+            var isCheckJob = ['repo_check','repo_repair','archive_delete'].includes(job.task_type);
             var headText = (isCheckJob && job.status_message) ? job.status_message : taskLabel + '... ' + pct + '%';
             var barText = Number(job.files_processed).toLocaleString() + ' / ' + Number(job.files_total).toLocaleString() + (isCheckJob ? '' : ' files');
             var bytesText = isCheckJob ? '' : fmtBytes(job.bytes_processed) + (job.bytes_total > 0 ? ' of ' + fmtBytes(job.bytes_total) : '') + ' processed';

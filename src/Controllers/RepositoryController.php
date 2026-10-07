@@ -997,8 +997,9 @@ class RepositoryController extends Controller
 
         // Check for existing delete job for this archive
         $existing = $this->db->fetchOne(
-            "SELECT id FROM backup_jobs WHERE repository_id = ? AND task_type = 'archive_delete' AND status IN ('queued', 'sent', 'running') AND status_message = ?",
-            [$id, $archive['archive_name']]
+            "SELECT id FROM backup_jobs WHERE repository_id = ? AND task_type = 'archive_delete' AND status IN ('queued', 'sent', 'running')
+               AND (restore_archive_id = ? OR status_message = ?)",
+            [$id, $archive['id'], $archive['archive_name']]
         );
         if ($existing) {
             $this->flash('warning', 'A delete job is already queued for this archive.');
@@ -1010,6 +1011,9 @@ class RepositoryController extends Controller
             'repository_id' => $id,
             'task_type' => 'archive_delete',
             'status' => 'queued',
+            // The worker resolves the archive by id; the name is only shown
+            // until it starts and replaces it with progress (#527).
+            'restore_archive_id' => $archive['id'],
             'status_message' => $archive['archive_name'],
         ]);
 

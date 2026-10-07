@@ -1887,8 +1887,28 @@ foreach ($serverJobs as $sj) {
     } elseif ($sj['task_type'] === 'break_lock') {
         $borgArgs = ['break-lock', $repoPath];
     } elseif ($sj['task_type'] === 'archive_delete') {
-        $archiveName = $sj['status_message'] ?? '';
-        if (empty($archiveName)) {
+        // The archive is named by id (restore_archive_id), which survives a
+        // retry and a lock rename. Jobs queued before that carried the name
+        // in status_message, which this job now uses for progress text.
+        $deleteArchiveName = '';
+        if (!empty($sj['restore_archive_id'])) {
+            $delArchive = $db->fetchOne(
+                "SELECT archive_name FROM archives WHERE id = ? AND repository_id = ?",
+                [$sj['restore_archive_id'], $sj['repository_id']]
+            );
+            if (!$delArchive) {
+                $db->update('backup_jobs', [
+                    'status' => 'failed',
+                    'completed_at' => date('Y-m-d H:i:s'),
+                    'error_log' => 'Archive no longer exists',
+                ], 'id = ?', [$sj['id']]);
+                continue;
+            }
+            $deleteArchiveName = $delArchive['archive_name'];
+        } else {
+            $deleteArchiveName = (string) ($sj['status_message'] ?? '');
+        }
+        if ($deleteArchiveName === '') {
             $db->update('backup_jobs', [
                 'status' => 'failed',
                 'completed_at' => date('Y-m-d H:i:s'),
@@ -1896,7 +1916,13 @@ foreach ($serverJobs as $sj) {
             ], 'id = ?', [$sj['id']]);
             continue;
         }
-        $borgArgs = ['delete', $repoPath . '::' . $archiveName];
+        $db->update('backup_jobs', [
+            'status_message' => mb_substr("Deleting archive {$deleteArchiveName}", 0, 255),
+        ], 'id = ?', [$sj['id']]);
+        // --progress --log-json: borg reports how far it is through
+        // decrementing the archive's chunk references, which on slow storage
+        // can take days; --stats reports what the delete removed (#527).
+        $borgArgs = ['delete', '--verbose', '--progress', '--log-json', '--stats', '--', $repoPath . '::' . $deleteArchiveName];
     } elseif ($sj['task_type'] === 'archive_lock') {
         // Lock/unlock rename queued because the repo was busy when the user
         // clicked (#314). Direction derives from the current flag: this job
@@ -1937,13 +1963,18 @@ foreach ($serverJobs as $sj) {
     // into the job row while borg runs (#464). Everything else keeps the
     // buffer-to-exit behaviour.
     $isCheckJob = in_array($sj['task_type'], ['repo_check', 'repo_repair'], true);
+    // Archive delete streams the same way, so a delete that runs for days
+    // shows how far it has got (#527).
+    $isStreamingJob = $isCheckJob || $sj['task_type'] === 'archive_delete';
     $checkProgress = null;
-    if ($isCheckJob) {
-        $checkProgress = new class($db, (int) $sj['id'], (int) $sj['agent_id']) {
+    if ($isStreamingJob) {
+        $checkProgress = new class($db, (int) $sj['id'], (int) $sj['agent_id'], $isCheckJob ? 'check' : 'delete') {
             /** Plain-text reconstruction of borg's log, for the post-run logger. */
             public string $plainOutput = '';
             /** WARNING/ERROR lines borg emitted, for the failure summary. */
             public array $problems = [];
+            /** borg's --stats table (delete), logged once at the end. */
+            public array $stats = [];
             private string $buffer = '';
             private float $lastWrite = 0.0;
             private ?string $lastMsgid = null;
@@ -1952,7 +1983,7 @@ foreach ($serverJobs as $sj) {
             private int $liveLogged = 0;
             private const LIVE_LOG_CAP = 200;
 
-            public function __construct(private $db, private int $jobId, private int $agentId) {}
+            public function __construct(private $db, private int $jobId, private int $agentId, private string $mode = 'check') {}
 
             public function feed(string $chunk): void
             {
@@ -1991,6 +2022,13 @@ foreach ($serverJobs as $sj) {
                     $this->onProgress($rec);
                 } elseif ($rec['type'] === 'log_message') {
                     $this->onLog($rec);
+                } elseif ($rec['type'] === 'progress_message' && $this->mode === 'delete') {
+                    // "Saving chunks cache" and the like, after the
+                    // references are done: shown as the current step.
+                    $msg = trim((string) ($rec['message'] ?? ''));
+                    if ($msg !== '') {
+                        $this->write(['status_message' => mb_substr($msg, 0, 255)], false);
+                    }
                 }
             }
 
@@ -2044,6 +2082,21 @@ foreach ($serverJobs as $sj) {
                     return;
                 }
                 $level = strtoupper((string) ($rec['levelname'] ?? 'INFO'));
+                if ($this->mode === 'delete' && $level === 'INFO') {
+                    $name = (string) ($rec['name'] ?? '');
+                    if ($name === 'borg.output.stats') {
+                        if (!preg_match('/^-+$/', $msg)) {
+                            $this->stats[] = $msg;
+                        }
+                        return;
+                    }
+                    if ($name === 'borg.output.progress') {
+                        // Step chatter ("Initializing cache transaction: ...")
+                        // is the current step, not a log entry.
+                        $this->write(['status_message' => mb_substr($msg, 0, 255)], false);
+                        return;
+                    }
+                }
                 $this->plainOutput .= ($level === 'INFO' ? $msg : "{$level}: {$msg}") . "\n";
 
                 if ($level === 'INFO' && preg_match('/^Analyzing archive (.+) \((\d+)\/(\d+)\)$/', $msg, $m)) {
@@ -2082,7 +2135,7 @@ foreach ($serverJobs as $sj) {
                             'agent_id' => $this->agentId,
                             'backup_job_id' => $this->jobId,
                             'level' => 'warning',
-                            'message' => 'Further borg check messages omitted from the live log (limit reached)',
+                            'message' => 'Further borg ' . ($this->mode === 'delete' ? 'delete' : 'check') . ' messages omitted from the live log (limit reached)',
                         ]);
                     }
                     return;
@@ -2183,7 +2236,7 @@ foreach ($serverJobs as $sj) {
             'message' => ucfirst($sj['task_type']) . " command (remote SSH): borg {$cmdStr}",
         ]);
 
-        if ($isCheckJob) {
+        if ($isStreamingJob) {
             // Stream so progress reaches the UI while borg runs (#464);
             // runBorgCommand() buffers everything until exit.
             // openBorgProcess() doesn't inject --lock-wait, so add it here.
@@ -2259,7 +2312,7 @@ foreach ($serverJobs as $sj) {
             }
             fclose($pipes[0]);
             [$exitCode, $stdout, $stderr] = $drainBorgProcess($proc, $pipes, $checkProgress);
-            if ($isCheckJob) {
+            if ($isStreamingJob) {
                 // Swap borg's JSON for the readable log the consumer built.
                 $stdout = $checkProgress->plainOutput;
                 $stderr = '';
@@ -2267,7 +2320,7 @@ foreach ($serverJobs as $sj) {
 
             if ($exitCode <= 1) {
                 $result = 'completed';
-            } elseif ($isCheckJob) {
+            } elseif ($isStreamingJob) {
                 $errorOutput = trim(implode('; ', array_slice($checkProgress->problems, 0, 5)))
                     ?: trim($stdout) ?: "Exit code $exitCode";
             } else {
@@ -2320,9 +2373,26 @@ foreach ($serverJobs as $sj) {
         $db->update('backup_jobs', ['had_warnings' => 1], 'id = ?', [$sj['id']]);
     }
 
-    // Log borg prune/compact output for visibility. Check jobs already
-    // logged their phase messages live, so skip the end-of-run dump.
-    if ($result === 'completed' && !empty($stdout) && !$isCheckJob) {
+    // What the delete removed, from borg's --stats table, as one entry.
+    if ($result === 'completed' && $sj['task_type'] === 'archive_delete' && $checkProgress && $checkProgress->stats) {
+        $statsMsg = '';
+        foreach ($checkProgress->stats as $statLine) {
+            if (preg_match('/^Deleted data:\s+(\S+\s\S+)\s+(\S+\s\S+)\s+(\S+\s\S+)$/', $statLine, $sm)) {
+                $statsMsg = "Deleted data: {$sm[1]} original, {$sm[2]} compressed, {$sm[3]} deduplicated (freed on disk by the next compact)";
+                break;
+            }
+        }
+        $db->insert('server_log', [
+            'agent_id' => $sj['agent_id'],
+            'backup_job_id' => $sj['id'],
+            'level' => 'info',
+            'message' => mb_substr($statsMsg !== '' ? $statsMsg : implode("\n", $checkProgress->stats), 0, 2000),
+        ]);
+    }
+
+    // Log borg prune/compact output for visibility. Check and delete jobs
+    // logged their messages live, so skip the end-of-run dump.
+    if ($result === 'completed' && !empty($stdout) && !$isStreamingJob) {
         // Truncate to a reasonable size for the log
         $trimmedOutput = mb_substr(trim($stdout), 0, 2000);
         if ($trimmedOutput) {
@@ -2473,8 +2543,8 @@ foreach ($serverJobs as $sj) {
     }
 
     // After successful archive_delete, remove the archive from the database
-    if ($result === 'completed' && $sj['task_type'] === 'archive_delete' && !empty($sj['status_message'])) {
-        $archiveName = $sj['status_message'];
+    if ($result === 'completed' && $sj['task_type'] === 'archive_delete' && !empty($deleteArchiveName)) {
+        $archiveName = $deleteArchiveName;
         $deletedArchive = $db->fetchOne(
             "SELECT id FROM archives WHERE repository_id = ? AND archive_name = ?",
             [$sj['repository_id'], $archiveName]

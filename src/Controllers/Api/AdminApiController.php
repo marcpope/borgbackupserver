@@ -5580,14 +5580,15 @@ class AdminApiController extends Controller
             ], 409);
         }
 
-        // The worker resolves the target from status_message — it runs
-        // `borg delete repo::name` and then clears the row by name. Passing an
-        // id instead would queue a job that deletes nothing.
+        // The worker resolves the archive by id (restore_archive_id). The
+        // name in status_message is only shown until the job starts and
+        // replaces it with progress (#527).
         $jobId = $this->db->insert('backup_jobs', [
             'agent_id' => $id,
             'repository_id' => $repoId,
             'task_type' => 'archive_delete',
             'status' => 'queued',
+            'restore_archive_id' => $archive['id'],
             'status_message' => $archive['archive_name'],
         ]);
         $this->db->insert('server_log', [
