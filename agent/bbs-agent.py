@@ -5,6 +5,7 @@ Polls the BBS server for tasks, executes borg commands, reports progress/status.
 """
 
 import base64
+import contextlib
 import binascii
 import datetime
 import hashlib
@@ -1991,9 +1992,102 @@ def cleanup_plugins(plugin_runs, config=None, job_id=None, backup_result="comple
                     log_to_server(config, job_id, "Plugin cleanup for {} failed: {}".format(slug, e), "warning")
 
 
+# --- Database dump plugins: input checks -------------------------------------
+# Plugin settings come from the server and the dump tools run as root. The
+# settings must not be able to make a dump tool write or load files of their
+# choosing.
+
+# Options that name a file or directory the tool would write to or load from.
+_DUMP_BLOCKED_LONG = {
+    "mysqldump": ("--result-file", "--tab", "--log-error", "--debug", "--plugin-dir",
+                  "--default-auth", "--defaults-file", "--defaults-extra-file",
+                  "--defaults-group-suffix", "--character-sets-dir", "--load-data-local-dir"),
+    "pg_dump": ("--file",),
+    "mongodump": ("--out", "--archive", "--config"),
+}
+_DUMP_BLOCKED_SHORT = {
+    "mysqldump": "rT#",
+    "pg_dump": "f",
+    "mongodump": "o",
+}
+
+
+def _checked_extra_options(tool, extra_options):
+    """Split extra_options and refuse any option that writes or loads a file."""
+    args = extra_options.split()
+    blocked_long = _DUMP_BLOCKED_LONG.get(tool, ())
+    blocked_short = _DUMP_BLOCKED_SHORT.get(tool, "")
+    for arg in args:
+        if arg.startswith("--"):
+            name = arg.split("=", 1)[0].lower()
+            # mysqldump accepts any unambiguous prefix of a long option
+            if any(b == name or (len(name) > 4 and b.startswith(name)) for b in blocked_long):
+                raise Exception("{} option {} is not allowed in extra options".format(tool, name))
+        elif arg.startswith("-"):
+            if any(c in blocked_short for c in arg[1:]):
+                raise Exception("{} option {} is not allowed in extra options (short options that "
+                                "can write files are refused; use the long form)".format(tool, arg))
+    return args
+
+
+def _checked_db_name(db):
+    """Refuse database names that would read as an option or escape the dump directory."""
+    name = str(db)
+    if not name or name.startswith("-") or "/" in name or "\\" in name or "\0" in name or name in (".", ".."):
+        raise Exception("Refusing to dump database with unsafe name {!r}".format(name))
+    return name
+
+
+_DUMP_DIR_DENIED = ("/", "/root", "/etc", "/var", "/usr", "/home", "/boot", "/dev",
+                    "/proc", "/sys", "/tmp", "/opt", "/srv", "/var/lib", "/var/www")
+
+
+def _checked_dump_dir(path):
+    """The dump directory must be absolute and outside system directories.
+    Cleanup deletes every .sql/.sql.gz file in it."""
+    if IS_WINDOWS:
+        return path
+    if not path or not os.path.isabs(path):
+        raise Exception("Dump directory must be an absolute path: {!r}".format(path))
+    real = os.path.realpath(path)
+    # macOS maps /etc, /tmp and /var to /private/... and /home to the data volume
+    for prefix in ("/System/Volumes/Data", "/private"):
+        if real.startswith(prefix + "/"):
+            real = real[len(prefix):]
+    for candidate in {os.path.normpath(path).rstrip("/") or "/", real.rstrip("/") or "/"}:
+        if candidate in _DUMP_DIR_DENIED or any(
+                candidate == d or candidate.startswith(d + "/")
+                for d in _HOOK_SYSTEM_DIRS + ("/etc", "/boot", "/dev", "/proc", "/sys", "/root/.ssh")):
+            raise Exception("Dump directory {} is a system directory".format(path))
+    return path
+
+
+@contextlib.contextmanager
+def _mysql_login(password):
+    """Pass the MySQL password in a private option file instead of on the
+    command line, where any local user could read it from the process list.
+    Yields the --defaults-extra-file argument, which must come first."""
+    fd, path = tempfile.mkstemp(prefix="bbs-mysql-", suffix=".cnf")
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write('[client]\npassword="{}"\n'.format(
+                str(password or "").replace("\\", "\\\\").replace('"', '\\"')))
+        yield "--defaults-extra-file={}".format(path)
+    finally:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+
+
 def execute_plugin_mysql_dump(config):
     """Dump MySQL/MariaDB databases before backup."""
-    dump_dir = config.get("dump_dir", "/home/bbs/mysql")
+    with _mysql_login(config.get("password")) as login:
+        return _execute_plugin_mysql_dump(config, login)
+
+
+def _execute_plugin_mysql_dump(config, login):
+    dump_dir = _checked_dump_dir(config.get("dump_dir", "/home/bbs/mysql"))
     os.makedirs(dump_dir, exist_ok=True)
 
     host = config.get("host", "localhost")
@@ -2012,11 +2106,10 @@ def execute_plugin_mysql_dump(config):
     if isinstance(databases, str) and databases.strip() == "*":
         # List all databases
         list_cmd = [
-            "mysql",
+            "mysql", login,
             "--host={}".format(host),
             "--port={}".format(port),
             "--user={}".format(user),
-            "--password={}".format(password),
             "-e", "SHOW DATABASES;",
             "-s", "--skip-column-names",
         ]
@@ -2031,10 +2124,11 @@ def execute_plugin_mysql_dump(config):
         ]
     elif isinstance(databases, str):
         databases = [d.strip() for d in databases.split(",") if d.strip()]
+    databases = [_checked_db_name(db) for db in databases]
 
-    base_cmd = ["mysqldump", "--host={}".format(host), "--port={}".format(port), "--user={}".format(user), "--password={}".format(password)]
+    base_cmd = ["mysqldump", login, "--host={}".format(host), "--port={}".format(port), "--user={}".format(user)]
     if extra_options:
-        base_cmd.extend(extra_options.split())
+        base_cmd.extend(_checked_extra_options("mysqldump", extra_options))
 
     dump_files = []
 
@@ -2044,7 +2138,7 @@ def execute_plugin_mysql_dump(config):
             dump_path = os.path.join(dump_dir, filename)
             logger.info("Dumping database {} to {}".format(db, dump_path))
 
-            cmd = base_cmd + [db]
+            cmd = base_cmd + ["--", db]
             if compress:
                 dump_proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                 if IS_WINDOWS:
@@ -2134,6 +2228,11 @@ def cleanup_plugin_mysql_dump(config, plugin_result):
 
 def test_plugin_mysql_dump(config):
     """Test MySQL connectivity without dumping."""
+    with _mysql_login(config.get("password")) as login:
+        return _test_plugin_mysql_dump(config, login)
+
+
+def _test_plugin_mysql_dump(config, login):
     host = config.get("host", "localhost")
     port = str(config.get("port", 3306))
     user = config.get("user")
@@ -2141,15 +2240,15 @@ def test_plugin_mysql_dump(config):
     if not user or not password:
         raise Exception("MySQL plugin requires user and password")
 
-    cmd = ["mysql", "--host={}".format(host), "--port={}".format(port), "--user={}".format(user),
-           "--password={}".format(password), "-e", "SELECT 1;", "-s", "--skip-column-names"]
+    cmd = ["mysql", login, "--host={}".format(host), "--port={}".format(port), "--user={}".format(user),
+           "-e", "SELECT 1;", "-s", "--skip-column-names"]
     result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=15)
     if result.returncode != 0:
         raise Exception("Connection failed: {}".format(result.stderr.decode('utf-8', errors='replace').strip()))
 
     # Test SHOW DATABASES for permissions
-    cmd2 = ["mysql", "--host={}".format(host), "--port={}".format(port), "--user={}".format(user),
-            "--password={}".format(password), "-e", "SHOW DATABASES;", "-s", "--skip-column-names"]
+    cmd2 = ["mysql", login, "--host={}".format(host), "--port={}".format(port), "--user={}".format(user),
+            "-e", "SHOW DATABASES;", "-s", "--skip-column-names"]
     result2 = subprocess.run(cmd2, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=15)
     dbs = result2.stdout.decode("utf-8", errors="replace").strip().split("\n")
     dbs = [d for d in dbs if d]
@@ -2189,7 +2288,7 @@ def _pg_dump_for_server(host, port, user, pg_env):
 
 def execute_plugin_pg_dump(config):
     """Dump PostgreSQL databases before backup."""
-    dump_dir = config.get("dump_dir", "/home/bbs/pgdump")
+    dump_dir = _checked_dump_dir(config.get("dump_dir", "/home/bbs/pgdump"))
     os.makedirs(dump_dir, exist_ok=True)
 
     host = config.get("host", "localhost")
@@ -2230,6 +2329,7 @@ def execute_plugin_pg_dump(config):
     elif isinstance(databases, str):
         databases = [d.strip() for d in databases.split(",") if d.strip()]
 
+    databases = [_checked_db_name(db) for db in databases]
     dump_files = []
     pg_dump_bin, pg_note = _pg_dump_for_server(host, port, user, pg_env)
     logger.info("PostgreSQL plugin: {}".format(pg_note))
@@ -2241,8 +2341,8 @@ def execute_plugin_pg_dump(config):
 
         cmd = [pg_dump_bin, "-h", host, "-p", port, "-U", user]
         if extra_options:
-            cmd.extend(extra_options.split())
-        cmd.append(db)
+            cmd.extend(_checked_extra_options("pg_dump", extra_options))
+        cmd.extend(["--", db])
 
         if compress:
             dump_proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=pg_env)
@@ -2385,7 +2485,7 @@ def _parse_mongo_db_list(raw_output, exclude=None):
 
 def execute_plugin_mongo_dump(config):
     """Dump MongoDB databases before backup using mongodump."""
-    dump_dir = config.get("dump_dir", "/home/bbs/mongodump")
+    dump_dir = _checked_dump_dir(config.get("dump_dir", "/home/bbs/mongodump"))
     os.makedirs(dump_dir, exist_ok=True)
 
     host = config.get("host", "127.0.0.1")
@@ -2423,6 +2523,7 @@ def execute_plugin_mongo_dump(config):
 
     if not databases:
         raise Exception("No databases found to dump")
+    databases = [_checked_db_name(db) for db in databases]
 
     dump_files = []
     auth_args = _mongo_auth_args(host, port, user, password, auth_db)
@@ -2434,7 +2535,7 @@ def execute_plugin_mongo_dump(config):
         if compress:
             cmd.append("--gzip")
         if extra_options:
-            cmd.extend(extra_options.split())
+            cmd.extend(_checked_extra_options("mongodump", extra_options))
 
         r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=3600)
         if r.returncode != 0:
@@ -3378,6 +3479,11 @@ def execute_restore_pg(config, task):
 
 
 def execute_restore_mysql(config, task):
+    with _mysql_login(task.get("mysql_config", {}).get("password")) as login:
+        return _execute_restore_mysql(config, task, login)
+
+
+def _execute_restore_mysql(config, task, login):
     """Restore MySQL databases from a borg archive."""
     job_id = task.get("job_id")
     command = task.get("command", [])
@@ -3501,8 +3607,8 @@ def execute_restore_mysql(config, task):
         })
 
         try:
-            mysql_base = ["mysql", "--host={}".format(host), "--port={}".format(port), "--user={}".format(user), "--password={}".format(password)]
-            mysqldump_base = ["mysqldump", "--host={}".format(host), "--port={}".format(port), "--user={}".format(user), "--password={}".format(password), "--single-transaction", "--quick"]
+            mysql_base = ["mysql", login, "--host={}".format(host), "--port={}".format(port), "--user={}".format(user)]
+            mysqldump_base = ["mysqldump", login, "--host={}".format(host), "--port={}".format(port), "--user={}".format(user), "--single-transaction", "--quick"]
 
             # Safety backup: dump the current database before replacing it
             if mode == "replace":
@@ -5514,4 +5620,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-# bbs-signature: v1 RvLKLtTeqk+QJcttGhcG2a3ndZjN+vWnfWyxa+oU8P8rQwiKLkG1248p/pBl+Dj5Gj+b0DpM10rJirV3NrUTBA==
+# bbs-signature: v1 PS0inf5UBH3s1YRn8cymrKx3+qQh5iyLNAx4U46ISUK/OM4iusPnyuvrk+gIuFv3Z7ihwux3kBadXQnNg5IOAA==
