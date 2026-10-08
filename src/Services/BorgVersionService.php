@@ -115,11 +115,22 @@ class BorgVersionService
                 if (preg_match('/^sha256:([0-9a-f]{64})$/', (string) ($asset['digest'] ?? ''), $dm)) {
                     $sha256 = $dm[1];
                 }
+                // Match by name: the unique key can't catch a repeat when
+                // glibc_version is NULL (macOS, FreeBSD).
+                $known = $this->db->fetchOne(
+                    "SELECT id FROM borg_version_assets WHERE borg_version_id = ? AND asset_name = ?",
+                    [$versionId, $name]
+                );
+                if ($known) {
+                    if ($sha256 !== null) {
+                        $this->db->update('borg_version_assets', ['sha256' => $sha256], 'id = ?', [$known['id']]);
+                    }
+                    continue;
+                }
                 $this->db->query(
-                    "INSERT INTO borg_version_assets
+                    "INSERT IGNORE INTO borg_version_assets
                      (borg_version_id, platform, architecture, glibc_version, asset_name, download_url, file_size, sha256)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                     ON DUPLICATE KEY UPDATE sha256 = COALESCE(VALUES(sha256), sha256)",
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                     [
                         $versionId,
                         $meta['platform'],
