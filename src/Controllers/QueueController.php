@@ -124,6 +124,59 @@ class QueueController extends Controller
         ] + $stats);
     }
 
+    /** A dry run job and its client (for the full list), or [null, null]. */
+    private function dryRunJob(int $id): array
+    {
+        $job = $this->db->fetchOne(
+            "SELECT id, agent_id, task_type FROM backup_jobs WHERE id = ? AND task_type = 'backup_dry_run'",
+            [$id]
+        );
+        $agent = $job ? $this->db->fetchOne("SELECT id, ssh_home_dir FROM agents WHERE id = ?", [$job['agent_id']]) : null;
+        return [$job ?: null, $agent ?: null];
+    }
+
+    /** GET /queue/{id}/dry-run-log: the dry run's full file list (#414). */
+    public function dryRunLog(int $id): void
+    {
+        $this->requireAuth();
+        [$job, $agent] = $this->dryRunJob($id);
+        if (!$job || !$this->canAccessAgent((int) $job['agent_id'])) {
+            $this->flash('danger', 'Job not found.');
+            $this->redirect('/queue');
+        }
+        $fh = \BBS\Services\DryRunLogService::open($job, $agent);
+        if (!$fh) {
+            $this->flash('warning', 'The full list for this dry run is no longer available. Lists are kept for one day.');
+            $this->redirect("/queue/{$id}");
+        }
+        \BBS\Services\DryRunLogService::send($fh, $id);
+    }
+
+    /** POST /queue/{id}/dry-run-log/delete: delete that list, and only that. */
+    public function deleteDryRunLog(int $id): void
+    {
+        $this->requireAuth();
+        $this->verifyCsrf();
+        [$job, $agent] = $this->dryRunJob($id);
+        if (!$job || !$this->canAccessAgent((int) $job['agent_id'])) {
+            $this->flash('danger', 'Job not found.');
+            $this->redirect('/queue');
+        }
+        $this->requirePermission(PermissionService::TRIGGER_BACKUP, (int) $job['agent_id']);
+        if (\BBS\Services\DryRunLogService::delete($job, $agent)) {
+            $this->db->insert('server_log', [
+                'agent_id' => $job['agent_id'],
+                'backup_job_id' => $id,
+                'level' => 'info',
+                'message' => "Dry run file list deleted by " . ($_SESSION['username'] ?? 'a user'),
+            ]);
+            $this->flash('success', 'Dry run file list deleted.');
+        } else {
+            $this->flash('warning', 'There was no file list to delete.');
+        }
+        $this->redirect("/queue/{$id}");
+    }
+
     public function detail(int $id): void
     {
         $this->requireAuth();
@@ -193,8 +246,17 @@ class QueueController extends Controller
             $pruneStats = self::parsePruneStats($logs);
         }
 
+        // A dry run's full file list, while it is kept (#414)
+        $dryRunLog = null;
+        if ($job['task_type'] === 'backup_dry_run') {
+            [$dryJob, $dryAgent] = $this->dryRunJob($id);
+            $dryRunLog = $dryJob ? \BBS\Services\DryRunLogService::info($dryJob, $dryAgent) : null;
+        }
+
         $this->view('queue/detail', [
             'pageTitle' => 'Job #' . $id,
+            'dryRunLog' => $dryRunLog,
+            'canDeleteDryRunLog' => $dryRunLog !== null && $this->hasPermission(PermissionService::TRIGGER_BACKUP, (int) $job['agent_id']),
             'job' => $job,
             'jobArchive' => $jobArchive,
             'logs' => $logs,

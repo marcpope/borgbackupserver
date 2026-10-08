@@ -101,6 +101,31 @@ case "${SSH_ORIGINAL_COMMAND:-}" in
         fi
         ;;
 
+    "dryrun-write "*)
+        # A dry run's full file list (#414), kept for a day for download from
+        # the job page. Same sandbox as catalog-write: numeric job id, fixed
+        # file name, the client's own log directory.
+        JOB_ID="${SSH_ORIGINAL_COMMAND#dryrun-write }"
+        if [[ ! "$JOB_ID" =~ ^[0-9]+$ ]]; then
+            echo "ERROR: invalid job_id" >&2
+            exit 1
+        fi
+        LOG_DIR="$HOME_DIR/.catalog-logs"
+        mkdir -p "$LOG_DIR" 2>/dev/null || true
+        TARGET="$LOG_DIR/dryrun-${JOB_ID}.txt"
+        # Replace, never write through, whatever is at the name already.
+        rm -f -- "$TARGET"
+        # 2 GiB is tens of millions of paths; the cap stops a client from
+        # filling the server's disk through this channel.
+        head -c $((2 * 1024 * 1024 * 1024)) > "$TARGET"
+        if chgrp www-data "$TARGET" 2>/dev/null; then
+            chmod 640 "$TARGET" 2>/dev/null || true
+        else
+            chmod 644 "$TARGET" 2>/dev/null || true
+            chmod o+rx "$LOG_DIR" 2>/dev/null || true
+        fi
+        ;;
+
     "ping")
         # Simple connectivity test for agent self-diagnosis
         echo "pong"

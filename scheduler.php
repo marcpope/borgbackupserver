@@ -3526,6 +3526,12 @@ if ($catalogCleaned > 0) {
     echo date('Y-m-d H:i:s') . " Cleaned up {$catalogCleaned} imported catalog log file(s)\n";
 }
 
+// Step 16c: Dry run file lists are kept for a day (#414)
+$dryRunCleaned = \BBS\Services\DryRunLogService::cleanupExpired($db);
+if ($dryRunCleaned > 0) {
+    echo date('Y-m-d H:i:s') . " Removed {$dryRunCleaned} dry run file list(s) older than a day\n";
+}
+
 // Step 10: Prune old server_log and backup_jobs entries
 // Run once per hour (minute 30) to avoid running on every scheduler tick
 if ((int) date('i') === 30) {

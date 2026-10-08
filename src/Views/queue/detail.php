@@ -536,10 +536,28 @@ if ($job['task_type'] === 'backup_dry_run' && !empty($job['task_result'])) {
     </div>
     <div class="card-body">
         <p class="mb-2">
-            <span class="badge text-bg-success me-1"><?= number_format($dryRunResult['would_backup'] ?? 0) ?></span> items would be backed up,
+            <span class="badge text-bg-success me-1"><?= number_format($dryRunResult['would_backup'] ?? 0) ?></span> items would be backed up<?php if (isset($dryRunResult['would_backup_bytes'])): ?>
+            (<?= formatBytes((int) $dryRunResult['would_backup_bytes']) ?> on disk, before compression and deduplication)<?php endif; ?>,
             <span class="badge text-bg-secondary me-1"><?= number_format($dryRunResult['excluded'] ?? 0) ?></span> excluded by patterns.
             Nothing was written to the repository.
         </p>
+        <?php if (!empty($dryRunLog)): ?>
+        <div class="d-flex flex-wrap align-items-center gap-2 mb-3">
+            <a class="btn btn-sm btn-outline-primary" href="/queue/<?= (int) $job['id'] ?>/dry-run-log">
+                <i class="bi bi-download me-1"></i> Download full list (<?= formatBytes($dryRunLog['size']) ?>)
+            </a>
+            <?php if (!empty($canDeleteDryRunLog)): ?>
+            <form method="POST" action="/queue/<?= (int) $job['id'] ?>/dry-run-log/delete" class="d-inline"
+                  data-confirm="Delete this dry run's file list now? It is removed automatically after a day.">
+                <input type="hidden" name="csrf_token" value="<?= $this->csrfToken() ?>">
+                <button type="submit" class="btn btn-sm btn-outline-danger"><i class="bi bi-trash me-1"></i> Delete list</button>
+            </form>
+            <?php endif; ?>
+            <span class="small text-muted">Kept until <?= \BBS\Core\TimeHelper::format(date('Y-m-d H:i:s', $dryRunLog['mtime'] + \BBS\Services\DryRunLogService::KEEP_SECONDS), 'M j, g:i A') ?></span>
+        </div>
+        <?php elseif (array_key_exists('full_list', $dryRunResult)): ?>
+        <p class="small text-muted mb-3">The full file list is no longer available. Lists are kept for one day.</p>
+        <?php endif; ?>
         <?php foreach ([['excluded_sample', 'Excluded items', 'excluded'], ['included_sample', 'Items that would be backed up', 'would_backup']] as [$key, $label, $totalKey]): ?>
             <?php $sample = $dryRunResult[$key] ?? []; $totalCount = (int) ($dryRunResult[$totalKey] ?? 0); ?>
             <?php if (!empty($sample)): ?>

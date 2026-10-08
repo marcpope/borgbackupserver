@@ -4594,6 +4594,42 @@ def _build_list_dir_tree(task):
     return _walk(path.rstrip("/") or "/", depth)
 
 
+def _upload_dry_run_list(list_file, job_id):
+    """Send a dry run's full file list to the server over the same SSH
+    channel the catalog uses (#414); the server keeps it for a day. Returns
+    True when it arrived. Never fails the job: the summary still stands."""
+    path = list_file.name
+    try:
+        list_file.close()
+    except (OSError, ValueError):
+        pass
+    try:
+        ssh_info = load_ssh_info()
+        if not (ssh_info and ssh_info.get("ssh_unix_user") and ssh_info.get("server_host")):
+            logger.info("SSH info not available, dry run list not uploaded")
+            return False
+        with open(path, "rb") as fh:
+            r = subprocess.run(
+                [SSH_CMD, "-i", SSH_KEY_PATH, "-p", str(ssh_info.get("ssh_port", 22))]
+                + _ssh_common_opts()
+                + ["{}@{}".format(ssh_info["ssh_unix_user"], ssh_info["server_host"]),
+                   "dryrun-write {}".format(int(job_id))],
+                stdin=fh, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=1800)
+        if r.returncode != 0:
+            logger.warning("Dry run list upload failed: {}".format(
+                r.stderr.decode("utf-8", errors="replace").strip()[:300]))
+            return False
+        return True
+    except Exception as e:
+        logger.warning("Dry run list upload failed: {}".format(e))
+        return False
+    finally:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+
+
 def _read_catalog_ssh_errors(errfile):
     """Read what ssh wrote to its stderr file, if anything."""
     if not errfile:
@@ -4849,6 +4885,18 @@ def _execute_task_inner(config, task, job_id, task_type, command, env_vars,
     dry_excluded = 0
     dry_included_sample = []
     dry_excluded_sample = []
+    # The full list goes to a local file and is uploaded to the server when
+    # borg is done (#414); the samples above stay for the job page.
+    dry_bytes = 0
+    dry_list_file = None
+    if task_type == "backup_dry_run":
+        try:
+            dry_list_file = tempfile.NamedTemporaryFile(
+                prefix="bbs-dryrun-", suffix=".txt", delete=False,
+                mode="w", encoding="utf-8", errors="replace")
+        except OSError as e:
+            logger.warning("Could not create dry run list file: {}".format(e))
+            dry_list_file = None
 
     if task_type == "backup":
         ssh_info = load_ssh_info()
@@ -5062,6 +5110,21 @@ def _execute_task_inner(config, task, job_id, task_type, command, env_vars,
                         dry_included += 1
                         if len(dry_included_sample) < 200:
                             dry_included_sample.append(dr_path)
+                        # Size on disk of what would be backed up, before
+                        # compression and deduplication. borg reads no file
+                        # contents in a dry run, so it can't report one.
+                        try:
+                            full = dr_path if os.path.isabs(dr_path) else os.path.join(cwd or os.sep, dr_path)
+                            dry_bytes += os.lstat(full).st_size
+                        except (OSError, ValueError):
+                            pass
+                    if dry_list_file is not None and dr_status != "d":
+                        try:
+                            dry_list_file.write("{} {}\n".format(
+                                "excluded" if dr_status == "x" else "included",
+                                dr_path.replace("\\", "\\\\").replace("\n", "\\n")))
+                        except (OSError, ValueError):
+                            dry_list_file = None
                     files_processed = dry_included + dry_excluded
                     now = time.time()
                     if now - last_progress_time >= 5:
@@ -5400,12 +5463,24 @@ def _execute_task_inner(config, task, job_id, task_type, command, env_vars,
         }
 
     if task_type == "backup_dry_run":
+        full_list = False
+        if dry_list_file is not None:
+            if result == "completed":
+                full_list = _upload_dry_run_list(dry_list_file, job_id)
+            else:
+                try:
+                    dry_list_file.close()
+                    os.unlink(dry_list_file.name)
+                except OSError:
+                    pass
         status_data["task_result"] = json.dumps({
             "dry_run": True,
             "would_backup": dry_included,
+            "would_backup_bytes": dry_bytes,
             "excluded": dry_excluded,
             "included_sample": dry_included_sample,
             "excluded_sample": dry_excluded_sample,
+            "full_list": full_list,
         })
 
     if archive_name:
@@ -5691,4 +5766,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-# bbs-signature: v1 fHBRRxs5NYUdNz7sTh5E3ST/51QLmipuWfpsyYKhurQ28rmQEo5kT05jytr0/un47+Fo3yOLqg0tXz3disnVCQ==
+# bbs-signature: v1 BZq4++cQO7I3v2TaisP/wexWXo2aSzNUoOUgpZy3t4JR8qKS0n/0DgWT1BT7JaKHxuQL5aWoiXTGOZtdfy+iBQ==

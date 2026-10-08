@@ -164,6 +164,8 @@ class App
         $this->router->map('GET', '/queue/[i:id]/json', 'QueueController@detailJson');
         $this->router->map('POST', '/queue/[i:id]/cancel', 'QueueController@cancel');
         $this->router->map('POST', '/queue/[i:id]/retry', 'QueueController@retry');
+        $this->router->map('GET', '/queue/[i:id]/dry-run-log', 'QueueController@dryRunLog');
+        $this->router->map('POST', '/queue/[i:id]/dry-run-log/delete', 'QueueController@deleteDryRunLog');
 
         // Notifications
         $this->router->map('GET', '/notifications', 'NotificationController@index');
@@ -325,6 +327,8 @@ class App
         $this->router->map('GET', '/api/v1/jobs/[i:jobId]', 'Api\\AdminApiController@getJobById');
         $this->router->map('POST', '/api/v1/queue/[i:id]/cancel', 'Api\\AdminApiController@cancelQueueJob');
         $this->router->map('POST', '/api/v1/queue/[i:id]/retry', 'Api\\AdminApiController@retryQueueJob');
+        $this->router->map('GET', '/api/v1/queue/[i:id]/dry-run-log', 'Api\\AdminApiController@getDryRunLog');
+        $this->router->map('DELETE', '/api/v1/queue/[i:id]/dry-run-log', 'Api\\AdminApiController@deleteDryRunLog');
         $this->router->map('GET', '/api/v1/clients/[i:id]/repositories/[i:repoId]/archives/[i:archiveId]/files', 'Api\\AdminApiController@listArchiveFiles');
         $this->router->map('POST', '/api/v1/clients/[i:id]/restore', 'Api\\AdminApiController@restoreFiles');
         $this->router->map('POST', '/api/v1/push/register', 'Api\\AdminApiController@registerPush');

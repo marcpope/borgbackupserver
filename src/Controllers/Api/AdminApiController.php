@@ -2350,7 +2350,21 @@ class AdminApiController extends Controller
             $this->json(['error' => 'Job not found'], 404);
         }
 
-        $this->json($job);
+        $this->json($job + ['dry_run_log' => $this->dryRunLogPayload($job)]);
+    }
+
+    /** For a dry run: {size, expires_at} while its full file list is kept, else null (#414). */
+    private function dryRunLogPayload(array $job): ?array
+    {
+        if (($job['task_type'] ?? '') !== 'backup_dry_run') {
+            return null;
+        }
+        $agent = $this->db->fetchOne("SELECT id, ssh_home_dir FROM agents WHERE id = ?", [$job['agent_id']]);
+        $info = \BBS\Services\DryRunLogService::info($job, $agent ?: null);
+        return $info ? [
+            'size' => $info['size'],
+            'expires_at' => gmdate('Y-m-d\TH:i:s\Z', $info['mtime'] + \BBS\Services\DryRunLogService::KEEP_SECONDS),
+        ] : null;
     }
 
     public function getQueue(): void
@@ -4368,6 +4382,57 @@ class AdminApiController extends Controller
      * ride as sibling keys: logs, queue {active,max,position},
      * current_file, prune_stats. Mirrors QueueController::detailJson().
      */
+    /** A dry run job and its client the caller can see, or a 404. */
+    private function apiDryRunJob(array $ctx, int $jobId): array
+    {
+        $job = $this->db->fetchOne(
+            "SELECT id, agent_id, task_type FROM backup_jobs WHERE id = ? AND task_type = 'backup_dry_run'",
+            [$jobId]
+        );
+        if (!$job || !$this->apiCanAccessAgent($ctx, (int) $job['agent_id'])) {
+            $this->json(['error' => 'Dry run job not found'], 404);
+        }
+        $agent = $this->db->fetchOne("SELECT id, ssh_home_dir FROM agents WHERE id = ?", [$job['agent_id']]);
+        return [$job, $agent ?: null];
+    }
+
+    /**
+     * GET /api/v1/queue/{id}/dry-run-log
+     * The dry run's full file list as text/plain, one "included <path>" or
+     * "excluded <path>" per line (#414). 404 once deleted or a day old.
+     */
+    public function getDryRunLog(int $jobId): void
+    {
+        $ctx = $this->requireApiAuth();
+        [$job, $agent] = $this->apiDryRunJob($ctx, $jobId);
+        $fh = \BBS\Services\DryRunLogService::open($job, $agent);
+        if (!$fh) {
+            $this->json(['error' => 'No file list for this dry run. Lists are kept for one day.'], 404);
+        }
+        \BBS\Services\DryRunLogService::send($fh, $jobId);
+    }
+
+    /**
+     * DELETE /api/v1/queue/{id}/dry-run-log
+     * Deletes that list and nothing else. Needs Trigger Backup.
+     */
+    public function deleteDryRunLog(int $jobId): void
+    {
+        $ctx = $this->requireApiAuth();
+        [$job, $agent] = $this->apiDryRunJob($ctx, $jobId);
+        $this->apiRequirePermission($ctx, \BBS\Services\PermissionService::TRIGGER_BACKUP, (int) $job['agent_id']);
+        $deleted = \BBS\Services\DryRunLogService::delete($job, $agent);
+        if ($deleted) {
+            $this->db->insert('server_log', [
+                'agent_id' => $job['agent_id'],
+                'backup_job_id' => $jobId,
+                'level' => 'info',
+                'message' => 'Dry run file list deleted via API',
+            ]);
+        }
+        $this->json(['deleted' => $deleted]);
+    }
+
     public function getJobById(int $jobId): void
     {
         $ctx = $this->requireApiAuth();
@@ -4439,6 +4504,7 @@ class AdminApiController extends Controller
             'queue' => ['active' => $activeCount, 'max' => $maxQueue, 'position' => $queuePosition],
             'current_file' => $currentFile,
             'prune_stats' => $pruneStats,
+            'dry_run_log' => $this->dryRunLogPayload($job),
         ]);
     }
 
