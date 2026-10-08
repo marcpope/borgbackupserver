@@ -38,6 +38,9 @@ class ArchiveLockService
         if (!$repo) {
             return ['ok' => false, 'result' => 'not_found', 'message' => 'Repository not found', 'code' => 404];
         }
+        if (($refusal = QueueManager::readOnlyRefusal($repo, 'archive_lock')) !== null) {
+            return ['ok' => false, 'result' => 'read_only', 'message' => $refusal, 'code' => 409];
+        }
 
         $archive = $this->db->fetchOne(
             "SELECT * FROM archives WHERE id = ? AND repository_id = ?",

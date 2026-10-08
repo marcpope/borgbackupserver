@@ -5556,11 +5556,14 @@ class AdminApiController extends Controller
         };
 
         $repo = $this->db->fetchOne(
-            "SELECT id, name FROM repositories WHERE id = ? AND agent_id = ?",
+            "SELECT id, name, read_only FROM repositories WHERE id = ? AND agent_id = ?",
             [$repoId, $id]
         );
         if (!$repo) {
             $this->json(['error' => 'Repository not found'], 404);
+        }
+        if (($refusal = \BBS\Services\QueueManager::readOnlyRefusal($repo, $taskType)) !== null) {
+            $this->json(['error' => $refusal, 'reason' => 'read_only'], 409);
         }
 
         // One of each kind at a time; different kinds may queue together.
@@ -5618,13 +5621,16 @@ class AdminApiController extends Controller
         }
 
         $archive = $this->db->fetchOne(
-            "SELECT ar.id, ar.archive_name, ar.locked FROM archives ar
+            "SELECT ar.id, ar.archive_name, ar.locked, r.read_only FROM archives ar
              JOIN repositories r ON r.id = ar.repository_id
              WHERE ar.id = ? AND ar.repository_id = ? AND r.agent_id = ?",
             [$archiveId, $repoId, $id]
         );
         if (!$archive) {
             $this->json(['error' => 'Archive not found'], 404);
+        }
+        if (($refusal = \BBS\Services\QueueManager::readOnlyRefusal($archive, 'archive_delete')) !== null) {
+            $this->json(['error' => $refusal, 'reason' => 'read_only'], 409);
         }
         if (!empty($archive['locked'])) {
             $this->json([

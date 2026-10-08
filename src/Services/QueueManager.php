@@ -11,6 +11,21 @@ class QueueManager
     public const WRITE_TASKS = ['backup', 'prune', 'compact', 'repo_repair', 'archive_delete', 'archive_lock', 's3_sync'];
 
     /** Task types the scheduler runs on the server; agents never run or report them. */
+    /**
+     * Why a job may not be queued on a repository, or null. A read-only
+     * copy restored from an offsite sync (#523) takes no writes. The queue
+     * refuses these again when it picks the job up; this answers the
+     * request straight away.
+     */
+    public static function readOnlyRefusal(array $repo, string $taskType): ?string
+    {
+        if (empty($repo['read_only']) || !in_array($taskType, self::WRITE_TASKS, true)) {
+            return null;
+        }
+        return 'This repository is a read-only copy restored from an offsite sync. '
+            . \BBS\Core\JobType::label($taskType) . ' is not available on it.';
+    }
+
     public const SERVER_SIDE_TYPES = ['prune', 'compact', 's3_sync', 's3_restore', 'repo_check', 'repo_repair', 'break_lock', 'catalog_sync', 'catalog_rebuild', 'catalog_rebuild_full', 'archive_delete', 'archive_lock'];
 
     private Database $db;

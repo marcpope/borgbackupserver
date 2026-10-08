@@ -984,6 +984,11 @@ class RepositoryController extends Controller
 
         $this->requirePermission(PermissionService::MANAGE_REPOS, $agentId);
 
+        if (($refusal = \BBS\Services\QueueManager::readOnlyRefusal($repo, 'archive_delete')) !== null) {
+            $this->flash('danger', $refusal);
+            $this->redirect("/clients/{$agentId}/repo/{$id}");
+        }
+
         $archive = $this->db->fetchOne("SELECT * FROM archives WHERE id = ? AND repository_id = ?", [$archiveId, $id]);
         if (!$archive) {
             $this->flash('danger', 'Archive not found.');
