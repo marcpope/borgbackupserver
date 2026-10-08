@@ -984,6 +984,14 @@ KEY
         }
 
         SIGNED=""
+        # Signature checks need gpgv. Ubuntu always has it (apt depends on
+        # it); minimal images may not, so say so instead of failing vaguely.
+        need_gpgv() {
+            if ! command -v gpgv >/dev/null 2>&1; then
+                echo "Error: gpgv is not installed, so the borg signature cannot be checked (install the gpgv package)"
+                exit 1
+            fi
+        }
         if [[ "$SOURCE" == https://* ]]; then
             # Official release: only from github.com/borgbackup/borg
             if [[ ! "$SOURCE" =~ ^https://github\.com/borgbackup/borg/releases/download/[0-9A-Za-z._-]+/[0-9A-Za-z._-]+$ ]] \
@@ -1006,6 +1014,7 @@ KEY
             fi
             # Some release binaries are also signed; check the signature when there is one.
             if curl -fsSL --proto '=https' --proto-redir '=https' --max-filesize 65536 -o "$SIG_TMP" "$SOURCE.asc" 2>/dev/null; then
+                need_gpgv
                 borg_release_key > "$KEYRING"
                 if ! gpgv --keyring "$KEYRING" "$SIG_TMP" "$BORG_TMP" >/dev/null 2>&1; then
                     echo "Error: borg release signature check failed"
@@ -1028,6 +1037,7 @@ KEY
             # Copy first, then check the copy: the file that is checked is the one installed.
             cp -- "$REAL" "$BORG_TMP"
             cp -- "$REAL.asc" "$SIG_TMP"
+            need_gpgv
             bbs_release_key > "$KEYRING"
             if ! gpgv --keyring "$KEYRING" "$SIG_TMP" "$BORG_TMP" >/dev/null 2>&1; then
                 echo "Error: signature check failed for $REAL"

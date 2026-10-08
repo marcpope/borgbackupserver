@@ -7,6 +7,7 @@ RUN apt-get update && apt-get upgrade -y && apt-get dist-upgrade -y && apt-get i
     git \
     curl \
     ca-certificates \
+    gpgv \
     libpng-dev \
     libonig-dev \
     libxml2-dev \
