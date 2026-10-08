@@ -44,6 +44,10 @@ class RepositoryController extends Controller
 
         $agentId = (int) ($_POST['agent_id'] ?? 0);
         $name = trim($_POST['name'] ?? '');
+        if (mb_strlen($name) > 100) {
+            $this->flash('danger', 'Repository names can be at most 100 characters.');
+            $this->redirect("/clients/{$agentId}?tab=repos");
+        }
         $encryption = $_POST['encryption'] ?? 'repokey-blake2';
         $passphrase = $_POST['passphrase'] ?? '';
         $storageType = $_POST['storage_type'] ?? 'local';
@@ -528,6 +532,10 @@ class RepositoryController extends Controller
 
         if (empty($newName)) {
             $this->flash('danger', 'Repository name cannot be empty.');
+            $this->redirect("/clients/{$agentId}/repo/{$id}");
+        }
+        if (mb_strlen($newName) > 100) {
+            $this->flash('danger', 'Repository names can be at most 100 characters.');
             $this->redirect("/clients/{$agentId}/repo/{$id}");
         }
 
@@ -1582,6 +1590,9 @@ class RepositoryController extends Controller
         }
         $storageType = $_POST['storage_type'] ?? 'local';
         $name = RepositoryImportService::sanitizeName(trim($_POST['name'] ?? ''));
+        if (mb_strlen($name) > 100) {
+            $this->json(['status' => 'error', 'error' => 'Repository names can be at most 100 characters.']);
+        }
         $passphrase = $_POST['passphrase'] ?? '';
         $storageLocationId = !empty($_POST['storage_location_id']) ? (int) $_POST['storage_location_id'] : null;
         $remoteSshConfigId = !empty($_POST['remote_ssh_config_id']) ? (int) $_POST['remote_ssh_config_id'] : null;
@@ -1623,6 +1634,10 @@ class RepositoryController extends Controller
 
         $agentId = (int) ($_POST['agent_id'] ?? 0);
         $name = trim($_POST['name'] ?? '');
+        if (mb_strlen($name) > 100) {
+            $this->flash('danger', 'Repository names can be at most 100 characters.');
+            $this->redirect("/clients/{$agentId}?tab=repos");
+        }
         $encryption = $_POST['encryption'] ?? 'unknown';
         $passphrase = $_POST['passphrase'] ?? '';
         $storageType = $_POST['storage_type'] ?? 'local';
@@ -1817,6 +1832,10 @@ class RepositoryController extends Controller
 
         $agentId = (int) ($_POST['agent_id'] ?? 0);
         $name = $this->sanitizePathName(trim($_POST['name'] ?? ''));
+        if (mb_strlen($name) > 100) {
+            $this->json(['status' => 'error', 'error' => 'Repository names can be at most 100 characters.']);
+            return;
+        }
         $passphrase = $_POST['passphrase'] ?? '';
         $storageLocationId = !empty($_POST['storage_location_id']) ? (int) $_POST['storage_location_id'] : null;
         $sourcePath = $this->validateSourcePath($_POST['source_path'] ?? '');
@@ -1922,6 +1941,10 @@ class RepositoryController extends Controller
 
         $agentId = (int) ($_POST['agent_id'] ?? 0);
         $name = $this->sanitizePathName(trim($_POST['name'] ?? ''));
+        if (mb_strlen($name) > 100) {
+            $this->flash('danger', 'Repository names can be at most 100 characters.');
+            $this->redirect("/clients/{$agentId}?tab=repos");
+        }
         $encryption = $_POST['encryption'] ?? 'unknown';
         $passphrase = $_POST['passphrase'] ?? '';
         $storageLocationId = !empty($_POST['storage_location_id']) ? (int) $_POST['storage_location_id'] : null;

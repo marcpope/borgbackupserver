@@ -695,6 +695,9 @@ class AdminApiController extends Controller
         if (empty($name)) {
             $this->json(['error' => 'Repository name is required'], 400);
         }
+        if (mb_strlen((string) $name) > 100) {
+            $this->json(['error' => 'Repository names can be at most 100 characters.'], 422);
+        }
 
         // Hosted mode: storage choices are locked to the platform-provided
         // default location. Reject any attempt to use remote SSH or to pin
@@ -1438,6 +1441,9 @@ class AdminApiController extends Controller
         $newName = trim($input['name'] ?? '');
         if (empty($newName)) {
             $this->json(['error' => 'name is required'], 400);
+        }
+        if (mb_strlen($newName) > 100) {
+            $this->json(['error' => 'Repository names can be at most 100 characters.'], 422);
         }
 
         if (($repo['storage_type'] ?? 'local') === 'remote_ssh') {

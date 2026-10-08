@@ -39,6 +39,9 @@ class RepositoryImportService
         if ($name === '') {
             return ['success' => false, 'error' => 'Repository name is required. Names can only contain letters, numbers, hyphens, and underscores.'];
         }
+        if (mb_strlen($name) > 100) {
+            return ['success' => false, 'error' => 'Repository names can be at most 100 characters.'];
+        }
         if ($this->nameTaken($agentId, $name)) {
             return ['success' => false, 'error' => "A repository named \"{$name}\" already exists for this client."];
         }

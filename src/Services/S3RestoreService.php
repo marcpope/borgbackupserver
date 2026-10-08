@@ -59,7 +59,10 @@ class S3RestoreService
         if ($mode === 'copy') {
             $copyName = trim((string) $copyName);
             if ($copyName === '') {
-                $copyName = $repo['name'] . '-copy';
+                $copyName = mb_substr($repo['name'], 0, 95) . '-copy';
+            }
+            if (mb_strlen($copyName) > 100) {
+                return $this->fail(422, 'Repository names can be at most 100 characters.');
             }
             if ($this->db->fetchOne("SELECT id FROM repositories WHERE agent_id = ? AND name = ?", [$agentId, $copyName])) {
                 return $this->fail(409, "Repository \"{$copyName}\" already exists. Choose a different name.");

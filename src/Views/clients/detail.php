@@ -1333,7 +1333,7 @@ $sizeDisplay = $totalSize > 0 ? \BBS\Services\ServerStats::formatBytes((int) $to
                 <div class="row mb-3">
                     <label class="col-md-3 col-form-label fw-semibold">Description</label>
                     <div class="col-md-6">
-                        <input type="text" class="form-control" name="name" required maxlength="20" placeholder="RepoName">
+                        <input type="text" class="form-control" name="name" required maxlength="100" placeholder="RepoName">
                     </div>
                     <div class="col-md-3 form-text pt-2">Descriptive name for the repo. (Max 20 characters)</div>
                 </div>
@@ -1494,7 +1494,7 @@ $sizeDisplay = $totalSize > 0 ? \BBS\Services\ServerStats::formatBytes((int) $to
                 <div class="row mb-3">
                     <label class="col-md-3 col-form-label fw-semibold">Name</label>
                     <div class="col-md-6">
-                        <input type="text" class="form-control" id="importName" maxlength="20" placeholder="RepoName">
+                        <input type="text" class="form-control" id="importName" maxlength="100" placeholder="RepoName">
                     </div>
                     <div class="col-md-3 form-text pt-2">Must match the directory name of the existing repo.</div>
                 </div>
@@ -1617,7 +1617,7 @@ $sizeDisplay = $totalSize > 0 ? \BBS\Services\ServerStats::formatBytes((int) $to
                 <div class="row mb-3">
                     <label class="col-md-3 col-form-label fw-semibold">Name</label>
                     <div class="col-md-6">
-                        <input type="text" class="form-control" id="adoptName" maxlength="20">
+                        <input type="text" class="form-control" id="adoptName" maxlength="100">
                     </div>
                     <div class="col-md-3 form-text pt-2">The repository's name in BBS — also its folder name after the move.</div>
                 </div>
