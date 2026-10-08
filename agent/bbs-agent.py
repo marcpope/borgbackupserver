@@ -53,7 +53,7 @@ if not hasattr(subprocess, "run"):
     subprocess.run = _subprocess_run
     subprocess.CompletedProcess = _CompletedProcess
 
-AGENT_VERSION = "2.98.6"
+AGENT_VERSION = "2.98.7"
 
 # Ed25519 public keys, hex, that may sign an update to this script and to
 # the start wrapper. Kept in step with agent/signing-key.pub. An update the
@@ -2066,13 +2066,33 @@ def _checked_dump_dir(path):
 def _mysql_login(password):
     """Pass the MySQL password in a private option file instead of on the
     command line, where any local user could read it from the process list.
-    Yields the --defaults-extra-file argument, which must come first."""
+    Yields the --defaults-file argument, which must come first.
+
+    The password on the command line used to win over every option file.
+    An option file given with --defaults-extra-file does not: the user's
+    own ~/.my.cnf is read after it, and a [client] password there (common
+    for root on admin-managed servers) replaced the plugin's (#528). So the
+    file is passed with --defaults-file, which reads only it; it includes
+    the usual option files first, so their other settings (socket, SSL)
+    still apply, and puts the password last, where it wins."""
     fd, path = tempfile.mkstemp(prefix="bbs-mysql-", suffix=".cnf")
     try:
+        lines = []
+        if not IS_WINDOWS:
+            for candidate in ("/etc/my.cnf", "/etc/mysql/my.cnf", os.path.expanduser("~/.my.cnf")):
+                if os.path.isfile(candidate):
+                    lines.append("!include {}".format(candidate))
+        lines.append("[client]")
+        lines.append('password="{}"'.format(
+            str(password or "").replace("\\", "\\\\").replace('"', '\\"')))
         with os.fdopen(fd, "w") as f:
-            f.write('[client]\npassword="{}"\n'.format(
-                str(password or "").replace("\\", "\\\\").replace('"', '\\"')))
-        yield "--defaults-extra-file={}".format(path)
+            f.write("\n".join(lines) + "\n")
+        if IS_WINDOWS:
+            # Windows clients read no ~/.my.cnf, so the extra file is enough
+            # and keeps my.ini settings.
+            yield "--defaults-extra-file={}".format(path)
+        else:
+            yield "--defaults-file={}".format(path)
     finally:
         try:
             os.remove(path)
@@ -5772,4 +5792,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-# bbs-signature: v1 B8TrF0SCWDz3IPcLkM3zSxaFNkl8qslujoxdyQf0x8kDyEFcUF95NSQG7q6bLf7lEnMjRHjid2bE2kTUFWViAg==
+# bbs-signature: v1 pw51q2UNJcDs0q8HCD6kewVB2typH7Ha2m1bslRio6XGk7rfKLduOE0yrLz2/PlkE5VuE4saTu7OxTccIRTTDA==
