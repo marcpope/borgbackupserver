@@ -720,7 +720,10 @@ fi
 # mysql on each start re-applied data changes on every boot.
 if [ -d "/var/www/bbs/migrations" ]; then
     echo "Running migrations..."
-    su -s /bin/sh -c "cd /var/www/bbs && /usr/local/bin/php migrate.php" www-data 2>&1 \
+    # --legacy-docker: an install from before the container recorded its
+    # migrations gets a one-time catch-up first, so old migrations are not
+    # replayed over its data (#532). It does nothing once that has happened.
+    su -s /bin/sh -c "cd /var/www/bbs && /usr/local/bin/php migrate.php --legacy-docker" www-data 2>&1 \
         || echo "Warning: migration runner returned an error (migrations will retry on next start)"
 fi
 
@@ -829,12 +832,33 @@ reconcile_catalog_access() {
 mysql -u bbs -p"$DB_PASS" bbs -N -e "SELECT ssh_unix_user, id, IFNULL(ssh_home_dir, '') FROM agents WHERE ssh_unix_user IS NOT NULL AND ssh_unix_user != ''" 2>/dev/null | while read SSH_USER AGENT_ID SSH_HOME_DIR; do
     # Use stored ssh_home_dir if available, fall back to STORAGE_PATH/AGENT_ID for pre-migration agents
     USER_HOME="${SSH_HOME_DIR:-$STORAGE_PATH/$AGENT_ID}"
+
+    # An update could leave ssh_home_dir pointing at a folder without this
+    # client's SSH keys (#532), and every connection then fails with
+    # "Permission denied (publickey)". Use the folder that has the keys and
+    # correct the database to match.
+    if [[ "$AGENT_ID" =~ ^[0-9]+$ ]] && [ ! -f "$USER_HOME/.ssh/authorized_keys" ]; then
+        for CANDIDATE in "/var/bbs/home/$AGENT_ID" "$STORAGE_PATH/$AGENT_ID"; do
+            if [ "$CANDIDATE" != "$USER_HOME" ] && [ -f "$CANDIDATE/.ssh/authorized_keys" ]; then
+                echo "Client $AGENT_ID: SSH keys are in $CANDIDATE, not $USER_HOME; using $CANDIDATE"
+                CANDIDATE_SQL=${CANDIDATE//\'/\'\'}
+                mysql -u bbs -p"$DB_PASS" bbs -e "UPDATE agents SET ssh_home_dir = '$CANDIDATE_SQL' WHERE id = $AGENT_ID" 2>/dev/null || true
+                USER_HOME="$CANDIDATE"
+                break
+            fi
+        done
+    fi
     [ -d "$USER_HOME" ] || continue
 
     # If user already exists, just fix ownership (may have been clobbered by old entrypoint)
     if id "$SSH_USER" &>/dev/null; then
         SSH_UID=$(id -u "$SSH_USER")
         SSH_GID=$(id -g "$SSH_USER")
+        # Keep the account's home in step with the database (a restart keeps
+        # accounts from before a fix to ssh_home_dir).
+        if [ "$(getent passwd "$SSH_USER" | cut -d: -f6)" != "$USER_HOME" ]; then
+            usermod -d "$USER_HOME" "$SSH_USER" 2>/dev/null || true
+        fi
         if [ -d "$USER_HOME/.ssh" ]; then
             chown -R "$SSH_UID:$SSH_GID" "$USER_HOME/.ssh"
         fi

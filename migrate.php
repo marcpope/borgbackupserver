@@ -6,6 +6,30 @@ require_once __DIR__ . '/vendor/autoload.php';
 use BBS\Core\Migrator;
 
 $migrator = new Migrator();
+
+// Docker: an install from before the container recorded its migrations gets
+// a one-time catch-up first, so old migrations are not replayed over live
+// data (#532). 127 is the last .sql migration from before 2.98.5, when the
+// container still ran migrations its own way. The setting holds when this
+// happened; migration 134 uses it to tell a replay apart from this pass.
+if (in_array('--legacy-docker', $argv ?? [], true)) {
+    $db = \BBS\Core\Database::getInstance();
+    $tracked = $db->fetchOne("SELECT `value` FROM settings WHERE `key` = 'migrations_docker_tracked'");
+    if (!$tracked) {
+        // The start of the catch-up: anything recorded from here on is this
+        // pass, not a replay
+        $start = date('Y-m-d H:i:s');
+        foreach ($migrator->runLegacyRawLoop(127) as $line) {
+            echo "Recorded (earlier Docker install): {$line}\n";
+        }
+        $db->query(
+            "INSERT INTO settings (`key`, `value`) VALUES ('migrations_docker_tracked', ?)
+             ON DUPLICATE KEY UPDATE `value` = VALUES(`value`)",
+            [$start]
+        );
+    }
+}
+
 $ran = $migrator->run();
 
 foreach ($ran as $file) {

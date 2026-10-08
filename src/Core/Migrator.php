@@ -180,6 +180,61 @@ class Migrator
     }
 
     /**
+     * One-time catch-up for a Docker install from before migrations were
+     * recorded there (#532).
+     *
+     * Until 2.98.5 the container fed every .sql migration to mysql on each
+     * start, and mysql stops a file at its first error. So on every start
+     * each file ran up to the first statement whose change was already in
+     * place, and never past it. Recording nothing, those installs reached
+     * 2.98.5 with old migrations unrecorded, and run() replayed them in full,
+     * stepping over "already exists" and on into data changes meant for the
+     * schema of years ago (#532: ssh_home_dir rewritten, schedule timezones
+     * reset, permissions widened).
+     *
+     * This applies the old rule once more and records the result: every
+     * unrecorded .sql file numbered up to $upTo runs until its first error
+     * and is then recorded as applied. A file the install never had runs to
+     * the end, as it would have under the old loop. PHP migrations are not
+     * touched; run() handles them.
+     *
+     * @return string[] what was recorded, one line per file
+     */
+    public function runLegacyRawLoop(int $upTo): array
+    {
+        $executed = array_column($this->db->fetchAll("SELECT filename FROM migrations"), 'filename');
+        $files = glob($this->migrationsPath . '/*.sql') ?: [];
+        sort($files);
+
+        $recorded = [];
+        $pdo = $this->db->getPdo();
+        foreach ($files as $file) {
+            $filename = basename($file);
+            if (in_array($filename, $executed, true) || (int) $filename > $upTo) {
+                continue;
+            }
+            $sql = file_get_contents($file);
+            if ($sql === false) {
+                continue;
+            }
+            $stoppedAt = null;
+            foreach (self::splitStatements($sql) as $index => $statement) {
+                try {
+                    $pdo->exec($statement);
+                } catch (\PDOException $e) {
+                    $stoppedAt = $index + 1;
+                    break;
+                }
+            }
+            $this->db->insert('migrations', ['filename' => $filename]);
+            $recorded[] = $stoppedAt === null
+                ? $filename
+                : "{$filename} (stopped at statement {$stoppedAt}: already in place)";
+        }
+        return $recorded;
+    }
+
+    /**
      * Run one .sql file statement by statement.
      *
      * Statements whose object already exists are recorded and stepped over.
