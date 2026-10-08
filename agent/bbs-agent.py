@@ -4594,14 +4594,13 @@ def _build_list_dir_tree(task):
     return _walk(path.rstrip("/") or "/", depth)
 
 
-def _upload_dry_run_list(list_file, job_id):
+def _upload_dry_run_list(list_file, path, job_id):
     """Send a dry run's full file list to the server over the same SSH
     channel the catalog uses (#414); the server keeps it for a day. Returns
     True when it arrived. Never fails the job: the summary still stands."""
-    path = list_file.name
     try:
         list_file.close()
-    except (OSError, ValueError):
+    except Exception:
         pass
     try:
         ssh_info = load_ssh_info()
@@ -4889,12 +4888,14 @@ def _execute_task_inner(config, task, job_id, task_type, command, env_vars,
     # borg is done (#414); the samples above stay for the job page.
     dry_bytes = 0
     dry_list_file = None
+    dry_list_path = None
     if task_type == "backup_dry_run":
+        # mkstemp + open(fd): NamedTemporaryFile only takes errors= from
+        # Python 3.8, and agents run on interpreters back to 3.4.
         try:
-            dry_list_file = tempfile.NamedTemporaryFile(
-                prefix="bbs-dryrun-", suffix=".txt", delete=False,
-                mode="w", encoding="utf-8", errors="replace")
-        except OSError as e:
+            fd, dry_list_path = tempfile.mkstemp(prefix="bbs-dryrun-", suffix=".txt")
+            dry_list_file = open(fd, "w", encoding="utf-8", errors="replace")
+        except Exception as e:
             logger.warning("Could not create dry run list file: {}".format(e))
             dry_list_file = None
 
@@ -5123,7 +5124,8 @@ def _execute_task_inner(config, task, job_id, task_type, command, env_vars,
                             dry_list_file.write("{} {}\n".format(
                                 "excluded" if dr_status == "x" else "included",
                                 dr_path.replace("\\", "\\\\").replace("\n", "\\n")))
-                        except (OSError, ValueError):
+                        except Exception:
+                            # Stop writing; the partial file is removed at the end
                             dry_list_file = None
                     files_processed = dry_included + dry_excluded
                     now = time.time()
@@ -5464,13 +5466,17 @@ def _execute_task_inner(config, task, job_id, task_type, command, env_vars,
 
     if task_type == "backup_dry_run":
         full_list = False
-        if dry_list_file is not None:
-            if result == "completed":
-                full_list = _upload_dry_run_list(dry_list_file, job_id)
+        if dry_list_path is not None:
+            if result == "completed" and dry_list_file is not None:
+                full_list = _upload_dry_run_list(dry_list_file, dry_list_path, job_id)
             else:
                 try:
-                    dry_list_file.close()
-                    os.unlink(dry_list_file.name)
+                    if dry_list_file is not None:
+                        dry_list_file.close()
+                except Exception:
+                    pass
+                try:
+                    os.unlink(dry_list_path)
                 except OSError:
                     pass
         status_data["task_result"] = json.dumps({
@@ -5766,4 +5772,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-# bbs-signature: v1 zfHvxSTKfKeK+PI8jp2cMRxoilMYWKm7wWMmsZ8becGcwcDfhvvjsZgd0oH2OQieT5XI2inqWuXdk/TCWy9rDA==
+# bbs-signature: v1 B8TrF0SCWDz3IPcLkM3zSxaFNkl8qslujoxdyQf0x8kDyEFcUF95NSQG7q6bLf7lEnMjRHjid2bE2kTUFWViAg==
