@@ -2124,7 +2124,7 @@ document.addEventListener('change', function (e) {
     <div class="settings-row">
         <div>
             <div class="settings-row-label">Redirect URL Override</div>
-            <p class="settings-row-help">Blank auto-detects from the request. Set it when BBS is behind a proxy and the provider needs a different URL than the request headers show — clients on an internal address, SSO on the public hostname.</p>
+            <p class="settings-row-help">Blank uses Server Host (General tab), then APP_URL. Set it when the provider must use a different address than Server Host, for example clients on an internal address and SSO on the public hostname.</p>
         </div>
         <div class="settings-row-control">
             <input type="url" class="form-control" name="oidc_redirect_url" style="max-width:380px;"
