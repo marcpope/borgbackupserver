@@ -2430,16 +2430,79 @@ def test_plugin_pg_dump(config):
     return "Connection successful. Found {} database(s): {}".format(len(dbs), ', '.join(dbs[:10]))
 
 
-def _mongo_auth_args(host, port, user, password, auth_db):
-    """Build mongodump/mongorestore auth arguments. Returns list of args."""
-    args = ["--host={}".format(host), "--port={}".format(port)]
-    if user and password:
-        args.extend([
-            "--username={}".format(user),
-            "--password={}".format(password),
-            "--authenticationDatabase={}".format(auth_db),
-        ])
-    return args
+_MONGO_CONFIG_SUPPORT = {}
+
+
+def _mongo_tool_takes_config(tool):
+    """mongodump and mongorestore read the password from a --config file
+    since MongoDB Database Tools 100.3. Older tools only take it on the
+    command line."""
+    if tool not in _MONGO_CONFIG_SUPPORT:
+        try:
+            r = subprocess.run([tool, "--help"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=15)
+            _MONGO_CONFIG_SUPPORT[tool] = b"--config" in (r.stdout + r.stderr)
+        except (OSError, subprocess.SubprocessError):
+            _MONGO_CONFIG_SUPPORT[tool] = False
+    return _MONGO_CONFIG_SUPPORT[tool]
+
+
+class _MongoAuth:
+    """Auth arguments for mongodump/mongorestore. The password goes in a
+    private --config file where the tool supports it, so it stays out of the
+    process list, where any local user could read it. Call close() when done."""
+
+    def __init__(self, host, port, user, password, auth_db):
+        self.host, self.port, self.user, self.password, self.auth_db = host, port, user, password, auth_db
+        self._config_path = None
+
+    def args(self, tool):
+        args = ["--host={}".format(self.host), "--port={}".format(self.port)]
+        if not (self.user and self.password):
+            return args
+        args.extend(["--username={}".format(self.user), "--authenticationDatabase={}".format(self.auth_db)])
+        if _mongo_tool_takes_config(tool):
+            if self._config_path is None:
+                fd, self._config_path = tempfile.mkstemp(prefix="bbs-mongo-", suffix=".yaml")
+                with os.fdopen(fd, "w") as f:
+                    # A JSON string is a valid YAML double-quoted scalar
+                    f.write("password: {}\n".format(json.dumps(str(self.password))))
+            args.append("--config={}".format(self._config_path))
+        else:
+            args.append("--password={}".format(self.password))
+        return args
+
+    def close(self):
+        if self._config_path:
+            try:
+                os.remove(self._config_path)
+            except OSError:
+                pass
+            self._config_path = None
+
+
+def _mongo_list_databases(shell, host, port, user, password, auth_db, timeout):
+    """Run the shell's listDatabases. With mongosh the credentials travel in
+    the environment and the script builds the connection from them, so the
+    password is not on the command line. The legacy mongo shell cannot read
+    the environment and still gets -p."""
+    script = "JSON.stringify(db.adminCommand('listDatabases').databases.map(d => d.name))"
+    env = None
+    if user and password and shell == "mongosh":
+        addr = "[{}]:{}".format(host, port) if ":" in host and not host.startswith("[") else "{}:{}".format(host, port)
+        env = os.environ.copy()
+        env.update({"BBS_MONGO_USER": str(user), "BBS_MONGO_PASS": str(password),
+                    "BBS_MONGO_ADDR": addr, "BBS_MONGO_AUTHDB": str(auth_db)})
+        cmd = [shell, "--nodb", "--quiet", "--eval",
+               "const e = process.env;"
+               "const m = new Mongo('mongodb://' + encodeURIComponent(e.BBS_MONGO_USER) + ':' + encodeURIComponent(e.BBS_MONGO_PASS)"
+               " + '@' + e.BBS_MONGO_ADDR + '/?authSource=' + encodeURIComponent(e.BBS_MONGO_AUTHDB));"
+               "print(JSON.stringify(m.getDB('admin').adminCommand('listDatabases').databases.map(d => d.name)));"]
+    else:
+        cmd = [shell, "--host", host, "--port", port]
+        if user and password:
+            cmd.extend(["-u", user, "-p", password, "--authenticationDatabase", auth_db])
+        cmd.extend(["--quiet", "--eval", script])
+    return subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout, env=env)
 
 
 def _find_mongosh():
@@ -2507,12 +2570,7 @@ def execute_plugin_mongo_dump(config):
         if not shell:
             raise Exception("Neither mongosh nor mongo found. Install MongoDB Database Tools.")
 
-        list_cmd = [shell, "--host", host, "--port", port]
-        if user and password:
-            list_cmd.extend(["-u", user, "-p", password, "--authenticationDatabase", auth_db])
-        list_cmd.extend(["--quiet", "--eval", "JSON.stringify(db.adminCommand('listDatabases').databases.map(d => d.name))"])
-
-        result = subprocess.run(list_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
+        result = _mongo_list_databases(shell, host, port, user, password, auth_db, 30)
         if result.returncode != 0:
             raise Exception("Failed to list databases: {}".format(result.stderr.decode('utf-8', errors='replace').strip()))
 
@@ -2526,24 +2584,26 @@ def execute_plugin_mongo_dump(config):
     databases = [_checked_db_name(db) for db in databases]
 
     dump_files = []
-    auth_args = _mongo_auth_args(host, port, user, password, auth_db)
+    auth = _MongoAuth(host, port, user, password, auth_db)
+    try:
+        for db in databases:
+            logger.info("Dumping MongoDB database {} to {}".format(db, dump_dir))
 
-    for db in databases:
-        logger.info("Dumping MongoDB database {} to {}".format(db, dump_dir))
+            cmd = ["mongodump"] + auth.args("mongodump") + ["--db={}".format(db), "--out={}".format(dump_dir)]
+            if compress:
+                cmd.append("--gzip")
+            if extra_options:
+                cmd.extend(_checked_extra_options("mongodump", extra_options))
 
-        cmd = ["mongodump"] + auth_args + ["--db={}".format(db), "--out={}".format(dump_dir)]
-        if compress:
-            cmd.append("--gzip")
-        if extra_options:
-            cmd.extend(_checked_extra_options("mongodump", extra_options))
+            r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=3600)
+            if r.returncode != 0:
+                raise Exception("mongodump failed for {}: {}".format(db, r.stderr.decode('utf-8', errors='replace')))
 
-        r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=3600)
-        if r.returncode != 0:
-            raise Exception("mongodump failed for {}: {}".format(db, r.stderr.decode('utf-8', errors='replace')))
-
-        # mongodump creates dump_dir/db_name/ directory
-        db_dump_path = os.path.join(dump_dir, db)
-        dump_files.append(db_dump_path)
+            # mongodump creates dump_dir/db_name/ directory
+            db_dump_path = os.path.join(dump_dir, db)
+            dump_files.append(db_dump_path)
+    finally:
+        auth.close()
 
     logger.info("MongoDB dump complete: {} database(s) in {}".format(len(databases), dump_dir))
     return {
@@ -2583,12 +2643,7 @@ def test_plugin_mongo_dump(config):
     if not shell:
         raise Exception("Neither mongosh nor mongo found. Install MongoDB Database Tools.")
 
-    cmd = [shell, "--host", host, "--port", port]
-    if user and password:
-        cmd.extend(["-u", user, "-p", password, "--authenticationDatabase", auth_db])
-    cmd.extend(["--quiet", "--eval", "JSON.stringify(db.adminCommand('listDatabases').databases.map(d => d.name))"])
-
-    result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=15)
+    result = _mongo_list_databases(shell, host, port, user, password, auth_db, 15)
     if result.returncode != 0:
         raise Exception("Connection failed: {}".format(result.stderr.decode('utf-8', errors='replace').strip()))
 
@@ -3807,64 +3862,67 @@ def execute_restore_mongo(config, task):
                 pass
 
     # Step 2: Restore each database using mongorestore
-    auth_args = _mongo_auth_args(host, port, user, password, auth_db)
+    auth = _MongoAuth(host, port, user, password, auth_db)
     imported = []
     errors = []
     total = len(databases)
-    for i, db_entry in enumerate(databases):
-        db_name = db_entry.get("database")
-        mode = db_entry.get("mode", "replace")
-        target_db = db_entry.get("target_name", "{}_copy".format(db_name)) if mode == "rename" else db_name
+    try:
+        for i, db_entry in enumerate(databases):
+            db_name = db_entry.get("database")
+            mode = db_entry.get("mode", "replace")
+            target_db = db_entry.get("target_name", "{}_copy".format(db_name)) if mode == "rename" else db_name
 
-        # mongodump creates dump_dir/db_name/ directory
-        db_dump_path = os.path.join(dump_dir, db_name)
-        if not os.path.isdir(db_dump_path):
-            errors.append("{}: dump directory not found at {}".format(db_name, db_dump_path))
-            continue
-
-        logger.info("Job #{}: Restoring {} as {} ({}/{})".format(job_id, db_name, target_db, i + 1, total))
-
-        # Report progress
-        api_request(config, "/api/agent/progress", method="POST", data={
-            "job_id": job_id,
-            "files_processed": i,
-            "files_total": total,
-            "output_log": "Restoring {} as {}...".format(db_name, target_db),
-        })
-
-        try:
-            # Safety backup: dump the current database before replacing it
-            if mode == "replace":
-                safety_path = os.path.join(dump_dir, "{}_pre_restore".format(target_db))
-                logger.info("Job #{}: Creating safety backup of {} to {}".format(job_id, target_db, safety_path))
-                try:
-                    safety_cmd = ["mongodump"] + auth_args + ["--db={}".format(target_db), "--out={}".format(dump_dir + "/_pre_restore")]
-                    if compress:
-                        safety_cmd.append("--gzip")
-                    r_safety = subprocess.run(safety_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=3600)
-                    if r_safety.returncode != 0:
-                        logger.warning("Job #{}: Safety backup of {} failed (continuing anyway): {}".format(
-                            job_id, target_db, r_safety.stderr.decode("utf-8", errors="replace")[:200]))
-                    else:
-                        logger.info("Job #{}: Safety backup saved to {}/_pre_restore/{}".format(job_id, dump_dir, target_db))
-                except Exception as e:
-                    logger.warning("Job #{}: Safety backup of {} failed (continuing anyway): {}".format(job_id, target_db, e))
-
-            cmd = ["mongorestore"] + auth_args + ["--db={}".format(target_db), "--drop"]
-            if compress:
-                cmd.append("--gzip")
-            cmd.append(db_dump_path)
-
-            r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=3600)
-            if r.returncode != 0:
-                stderr = r.stderr.decode('utf-8', errors='replace')[:500]
-                errors.append("{}: restore failed: {}".format(db_name, stderr))
+            # mongodump creates dump_dir/db_name/ directory
+            db_dump_path = os.path.join(dump_dir, db_name)
+            if not os.path.isdir(db_dump_path):
+                errors.append("{}: dump directory not found at {}".format(db_name, db_dump_path))
                 continue
 
-            imported.append("{} -> {}".format(db_name, target_db))
+            logger.info("Job #{}: Restoring {} as {} ({}/{})".format(job_id, db_name, target_db, i + 1, total))
 
-        except Exception as e:
-            errors.append("{}: {}".format(db_name, e))
+            # Report progress
+            api_request(config, "/api/agent/progress", method="POST", data={
+                "job_id": job_id,
+                "files_processed": i,
+                "files_total": total,
+                "output_log": "Restoring {} as {}...".format(db_name, target_db),
+            })
+
+            try:
+                # Safety backup: dump the current database before replacing it
+                if mode == "replace":
+                    safety_path = os.path.join(dump_dir, "{}_pre_restore".format(target_db))
+                    logger.info("Job #{}: Creating safety backup of {} to {}".format(job_id, target_db, safety_path))
+                    try:
+                        safety_cmd = ["mongodump"] + auth.args("mongodump") + ["--db={}".format(target_db), "--out={}".format(dump_dir + "/_pre_restore")]
+                        if compress:
+                            safety_cmd.append("--gzip")
+                        r_safety = subprocess.run(safety_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=3600)
+                        if r_safety.returncode != 0:
+                            logger.warning("Job #{}: Safety backup of {} failed (continuing anyway): {}".format(
+                                job_id, target_db, r_safety.stderr.decode("utf-8", errors="replace")[:200]))
+                        else:
+                            logger.info("Job #{}: Safety backup saved to {}/_pre_restore/{}".format(job_id, dump_dir, target_db))
+                    except Exception as e:
+                        logger.warning("Job #{}: Safety backup of {} failed (continuing anyway): {}".format(job_id, target_db, e))
+
+                cmd = ["mongorestore"] + auth.args("mongorestore") + ["--db={}".format(target_db), "--drop"]
+                if compress:
+                    cmd.append("--gzip")
+                cmd.append(db_dump_path)
+
+                r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=3600)
+                if r.returncode != 0:
+                    stderr = r.stderr.decode('utf-8', errors='replace')[:500]
+                    errors.append("{}: restore failed: {}".format(db_name, stderr))
+                    continue
+
+                imported.append("{} -> {}".format(db_name, target_db))
+
+            except Exception as e:
+                errors.append("{}: {}".format(db_name, e))
+    finally:
+        auth.close()
 
     # Report final status
     if errors and not imported:
@@ -5620,4 +5678,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-# bbs-signature: v1 oe/fLOHqzzPi9CDXRofkl/ezQ7ffwk1uL5SK0+xfmTs6tDyk8PDbI7tcVEOSll2h8KU48fIjFFUwdV5uT1FqDg==
+# bbs-signature: v1 sdIpv0nhSbMOiP3Nm0mRM1zae26UcB0gZ5BzVm0CkUV+jIbLq/NKICggrICeqA8mPRjFEtuNAZn63f8akrwBCA==
