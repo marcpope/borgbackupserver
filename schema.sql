@@ -688,6 +688,7 @@ CREATE TABLE borg_version_assets (
     asset_name VARCHAR(100) NOT NULL,
     download_url VARCHAR(500) NOT NULL,
     file_size BIGINT DEFAULT NULL,
+    sha256 CHAR(64) DEFAULT NULL,
     FOREIGN KEY (borg_version_id) REFERENCES borg_versions(id) ON DELETE CASCADE,
     UNIQUE KEY unique_asset (borg_version_id, platform, architecture, glibc_version)
 ) ENGINE=InnoDB;

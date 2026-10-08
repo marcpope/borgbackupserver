@@ -794,42 +794,256 @@ case "$ACTION" in
         ;;
 
     update-borg)
-        # Download and install a borg binary to /usr/local/bin/borg
-        # Usage: bbs-ssh-helper update-borg <download_url> <expected_version>
-        DOWNLOAD_URL="${2:-}"
+        # Download (or take from BBS's own server-hosted copies) and install a
+        # borg binary to /usr/local/bin/borg. Nothing is made executable or run
+        # before it has been checked.
+        # Usage: bbs-ssh-helper update-borg <github_url> <expected_version> <sha256>
+        #        bbs-ssh-helper update-borg <path under /var/www/bbs/public/borg> <expected_version>
+        SOURCE="${2:-}"
         EXPECTED_VERSION="${3:-}"
+        EXPECTED_SHA256="${4:-}"
 
-        if [ -z "$DOWNLOAD_URL" ] || [ -z "$EXPECTED_VERSION" ]; then
-            echo "Usage: bbs-ssh-helper update-borg <download_url> <expected_version>"
+        if [ -z "$SOURCE" ] || [ -z "$EXPECTED_VERSION" ]; then
+            echo "Usage: bbs-ssh-helper update-borg <download_url|server_path> <expected_version> [sha256]"
             exit 1
         fi
-
-        # Safety: only allow downloads from GitHub
-        if [[ ! "$DOWNLOAD_URL" =~ ^https://github\.com/borgbackup/borg/releases/download/[0-9A-Za-z._-]+/[0-9A-Za-z._-]+$ ]] \
-           || [[ "$DOWNLOAD_URL" == *..* ]] || [[ "$DOWNLOAD_URL" == *%* ]]; then
-            echo "Error: download URL must be from github.com/borgbackup/borg/releases"
+        if [[ ! "$EXPECTED_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Error: invalid version"
             exit 1
         fi
 
         BORG_PATH="/usr/local/bin/borg"
-        BORG_TMP="/usr/local/bin/borg.tmp"
+        BORG_TMP=$(mktemp /usr/local/bin/.borg.XXXXXX)
+        SIG_TMP=$(mktemp)
+        KEYRING=$(mktemp --suffix=.gpg)
+        trap 'rm -f "$BORG_TMP" "$SIG_TMP" "$KEYRING"' EXIT
 
-        # Download binary
-        if ! curl -sL -o "$BORG_TMP" "$DOWNLOAD_URL"; then
-            rm -f "$BORG_TMP"
-            echo "Error: failed to download from $DOWNLOAD_URL"
-            exit 1
+        # Signing keys live in this root-owned script, not next to the
+        # binaries: /var/www/bbs belongs to the web user.
+        borg_release_key() {
+            # Thomas Waldmann (borg releases), 6D5B EF9A DD20 7580 5747 B70F 9F88 FB52 FAF7 B393
+            base64 -d <<'KEY'
+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
+KEY
+        }
+        bbs_release_key() {
+            # Marc Pope (BBS server-hosted borg builds), 83DC EED9 45B6 1B33 4FC5 0655 4F82 8665 1C8B B8C4
+            base64 -d <<'KEY'
+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
+91VlMydtG2KePfyokYHWQ2aCW3yIT0TW
+KEY
+        }
+
+        SIGNED=""
+        if [[ "$SOURCE" == https://* ]]; then
+            # Official release: only from github.com/borgbackup/borg
+            if [[ ! "$SOURCE" =~ ^https://github\.com/borgbackup/borg/releases/download/[0-9A-Za-z._-]+/[0-9A-Za-z._-]+$ ]] \
+               || [[ "$SOURCE" == *..* ]] || [[ "$SOURCE" == *%* ]]; then
+                echo "Error: download URL must be from github.com/borgbackup/borg/releases"
+                exit 1
+            fi
+            if [[ ! "$EXPECTED_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
+                echo "Error: the release's SHA-256 digest is required; check for borg versions again and retry"
+                exit 1
+            fi
+            if ! curl -fsSL --proto '=https' --proto-redir '=https' --max-filesize 209715200 -o "$BORG_TMP" "$SOURCE"; then
+                echo "Error: failed to download from $SOURCE"
+                exit 1
+            fi
+            ACTUAL_SHA256=$(sha256sum "$BORG_TMP" | cut -d' ' -f1)
+            if [ "$ACTUAL_SHA256" != "$EXPECTED_SHA256" ]; then
+                echo "Error: download does not match the release's SHA-256 digest"
+                exit 1
+            fi
+            # Some release binaries are also signed; check the signature when there is one.
+            if curl -fsSL --proto '=https' --proto-redir '=https' --max-filesize 65536 -o "$SIG_TMP" "$SOURCE.asc" 2>/dev/null; then
+                borg_release_key > "$KEYRING"
+                if ! gpgv --keyring "$KEYRING" "$SIG_TMP" "$BORG_TMP" >/dev/null 2>&1; then
+                    echo "Error: borg release signature check failed"
+                    exit 1
+                fi
+                SIGNED=" (signature verified)"
+            fi
+        else
+            # Server-hosted build shipped with BBS: must carry a valid
+            # signature from the BBS release key.
+            REAL=$(realpath -e -- "$SOURCE" 2>/dev/null) || { echo "Error: binary not found"; exit 1; }
+            if [[ ! "$REAL" =~ ^/var/www/bbs/public/borg/[0-9]+\.[0-9]+\.[0-9]+/borg-[A-Za-z0-9._-]+$ ]] || [[ "$REAL" == *.asc ]]; then
+                echo "Error: server binaries must come from /var/www/bbs/public/borg/<version>/"
+                exit 1
+            fi
+            if [ ! -f "$REAL.asc" ]; then
+                echo "Error: $REAL has no signature (.asc)"
+                exit 1
+            fi
+            # Copy first, then check the copy: the file that is checked is the one installed.
+            cp -- "$REAL" "$BORG_TMP"
+            cp -- "$REAL.asc" "$SIG_TMP"
+            bbs_release_key > "$KEYRING"
+            if ! gpgv --keyring "$KEYRING" "$SIG_TMP" "$BORG_TMP" >/dev/null 2>&1; then
+                echo "Error: signature check failed for $REAL"
+                exit 1
+            fi
+            SIGNED=" (signature verified)"
         fi
 
         chmod 755 "$BORG_TMP"
 
         # Verify it runs and outputs expected version
         ACTUAL=$("$BORG_TMP" --version 2>/dev/null || true)
-        # Output may be "borg 1.4.3" or "borg.tmp 1.4.3" — extract version number
+        # Output may be "borg 1.4.3" or ".borg.XXXX 1.4.3" — extract version number
         ACTUAL_VER=$(echo "$ACTUAL" | grep -oP '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
 
         if [ "$ACTUAL_VER" != "$EXPECTED_VERSION" ]; then
-            rm -f "$BORG_TMP"
             echo "Error: version mismatch — expected $EXPECTED_VERSION, got $ACTUAL_VER"
             exit 1
         fi
@@ -841,7 +1055,7 @@ case "$ACTION" in
 
         # Atomic replace
         mv "$BORG_TMP" "$BORG_PATH"
-        echo "Installed borg $EXPECTED_VERSION to $BORG_PATH"
+        echo "Installed borg $EXPECTED_VERSION to $BORG_PATH$SIGNED"
         echo "OK"
         ;;
 
