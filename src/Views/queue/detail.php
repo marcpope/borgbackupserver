@@ -722,7 +722,7 @@ if ($job['task_type'] === 'backup_dry_run' && !empty($job['task_result'])) {
             }
         } else if (isJobActive && job.status === 'running') {
             // Full replace when transitioning from queued/sent to running (pre-progress phase)
-            var taskLabel2 = (job.task_type || 'backup').replace('_',' ').replace(/^\w/, c => c.toUpperCase());
+            var taskLabel2 = window.bbsTaskLabel(job.task_type || 'backup');
             var msg = job.status_message ? esc(job.status_message) : taskLabel2 + ' in progress...';
             var sub = job.status_message ? '' : '<div class="text-white-50 small">' + (isServerSide ? 'Running on server...' : 'Waiting for progress data from agent...') + '</div>';
             container.innerHTML = '<div class="card border-0 shadow-sm mb-4 queue-progress-panel"><div class="card-body py-3">' +

@@ -294,7 +294,7 @@ class AgentApiController extends Controller
                 'agent_id' => $agent['id'],
                 'backup_job_id' => $jobId,
                 'level' => 'info',
-                'message' => "Agent started {$job['task_type']} job #{$jobId}" . ($planName ? " for plan \"{$planName}\"" : ''),
+                'message' => "Agent started " . \BBS\Core\JobType::label($job['task_type']) . " job #{$jobId}" . ($planName ? " for plan \"{$planName}\"" : ''),
             ]);
         }
 
@@ -398,7 +398,7 @@ class AgentApiController extends Controller
                 'error_log' => 'Job abandoned — agent confirmed it is no longer running this task (status report likely lost)',
             ], "id = ? AND status IN ('sent', 'running')", [$jobId]);
 
-            $taskLabel = ucfirst(str_replace('_', ' ', $job['task_type']));
+            $taskLabel = \BBS\Core\JobType::label($job['task_type']);
             $this->db->insert('server_log', [
                 'agent_id' => $agent['id'],
                 'backup_job_id' => $jobId,
@@ -503,7 +503,7 @@ class AgentApiController extends Controller
 
         $this->db->update('backup_jobs', $data, "id = ? AND status IN ('sent', 'running')", [$jobId]);
 
-        $taskLabel = ucfirst(str_replace('_', ' ', $job['task_type']));
+        $taskLabel = \BBS\Core\JobType::label($job['task_type']);
 
         // For "cataloging", create the archive and return archive_id but skip
         // notifications, prune, and completion logging

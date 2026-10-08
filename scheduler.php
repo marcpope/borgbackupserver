@@ -246,7 +246,7 @@ foreach ($staleJobs as $sj) {
         'agent_id' => $sj['agent_id'],
         'backup_job_id' => $sj['id'],
         'level' => 'error',
-        'message' => "Job #{$sj['id']} ({$sj['task_type']}) failed — agent \"{$sj['agent_name']}\" went offline"
+        'message' => "Job #{$sj['id']} (" . \BBS\Core\JobType::label($sj['task_type']) . ") failed — agent \"{$sj['agent_name']}\" went offline"
                      . ($isBackup && $autoRetryEnabled ? " (retry limit {$autoRetryMax} exhausted)" : ""),
     ]);
 
@@ -300,7 +300,7 @@ foreach ($zombieJobs as $zj) {
         'agent_id' => $zj['agent_id'],
         'backup_job_id' => $zj['id'],
         'level' => 'error',
-        'message' => "Job #{$zj['id']} ({$zj['task_type']}) auto-failed — running >24h with no progress on online agent \"{$zj['agent_name']}\"",
+        'message' => "Job #{$zj['id']} (" . \BBS\Core\JobType::label($zj['task_type']) . ") auto-failed — running >24h with no progress on online agent \"{$zj['agent_name']}\"",
     ]);
 
     if ($zj['task_type'] === 'backup' && $zj['backup_plan_id']) {
@@ -450,7 +450,7 @@ foreach ($orphanedServerJobs as $oj) {
     $db->update('backup_jobs', [
         'status' => 'failed',
         'completed_at' => date('Y-m-d H:i:s'),
-        'error_log' => "The process running this {$oj['task_type']} job stopped without reporting a result. "
+        'error_log' => "The process running this " . \BBS\Core\JobType::label($oj['task_type']) . " job stopped without reporting a result. "
             . 'The server was most likely restarted while it was running. Nothing was left half-written — '
             . 'borg and rclone are safe to interrupt — so running it again is the fix.',
     ], 'id = ?', [$oj['id']]);
@@ -459,7 +459,7 @@ foreach ($orphanedServerJobs as $oj) {
         'agent_id' => $oj['agent_id'],
         'backup_job_id' => $oj['id'],
         'level' => 'warning',
-        'message' => "Server-side {$oj['task_type']} job #{$oj['id']} was released — the process running it (pid {$oj['worker_pid']}) is gone",
+        'message' => \BBS\Core\JobType::label($oj['task_type']) . " job #{$oj['id']} was released — the process running it (pid {$oj['worker_pid']}) is gone",
     ]);
 
     echo date('Y-m-d H:i:s') . " Released orphaned server-side job #{$oj['id']} ({$oj['task_type']}) — worker pid {$oj['worker_pid']} is gone\n";
@@ -489,7 +489,7 @@ foreach ($staleMgmt as $sm) {
         'agent_id' => $sm['agent_id'],
         'backup_job_id' => $sm['id'],
         'level' => 'warning',
-        'message' => "Job #{$sm['id']} ({$sm['task_type']}) expired — agent \"{$sm['agent_name']}\" did not poll for the update in {$staleMgmtCutoffDays} days",
+        'message' => "Job #{$sm['id']} (" . \BBS\Core\JobType::label($sm['task_type']) . ") expired — agent \"{$sm['agent_name']}\" did not poll for the update in {$staleMgmtCutoffDays} days",
     ]);
     echo date('Y-m-d H:i:s') . " Expired: job #{$sm['id']} ({$sm['task_type']}) — agent \"{$sm['agent_name']}\" offline >{$staleMgmtCutoffDays}d\n";
 }
@@ -2233,7 +2233,7 @@ foreach ($serverJobs as $sj) {
             'agent_id' => $sj['agent_id'],
             'backup_job_id' => $sj['id'],
             'level' => 'info',
-            'message' => ucfirst($sj['task_type']) . " command (remote SSH): borg {$cmdStr}",
+            'message' => \BBS\Core\JobType::label($sj['task_type']) . " command (remote SSH): borg {$cmdStr}",
         ]);
 
         if ($isStreamingJob) {
@@ -2295,7 +2295,7 @@ foreach ($serverJobs as $sj) {
             'agent_id' => $sj['agent_id'],
             'backup_job_id' => $sj['id'],
             'level' => 'info',
-            'message' => ucfirst($sj['task_type']) . " command: {$cmdStr}",
+            'message' => \BBS\Core\JobType::label($sj['task_type']) . " command: {$cmdStr}",
         ]);
 
         // Execute
@@ -2353,7 +2353,7 @@ foreach ($serverJobs as $sj) {
             'agent_id' => $sj['agent_id'],
             'backup_job_id' => $sj['id'],
             'level' => 'warning',
-            'message' => "Server-side {$sj['task_type']} job #{$sj['id']} finished, but its status was already '{$existingStatus}' (likely an abandoned/cancelled report came in mid-flight); not overwriting.",
+            'message' => \BBS\Core\JobType::label($sj['task_type']) . " job #{$sj['id']} finished, but its status was already '{$existingStatus}' (likely an abandoned/cancelled report came in mid-flight); not overwriting.",
         ]);
         echo date('Y-m-d H:i:s') . " Job #{$sj['id']} ({$sj['task_type']}) finished but row was already '{$existingStatus}' — leaving as-is\n";
         continue;
@@ -2364,7 +2364,7 @@ foreach ($serverJobs as $sj) {
         'agent_id' => $sj['agent_id'],
         'backup_job_id' => $sj['id'],
         'level' => $level,
-        'message' => "Server-side {$sj['task_type']} job #{$sj['id']} {$result}" . ($errorOutput ? ": $errorOutput" : ''),
+        'message' => \BBS\Core\JobType::label($sj['task_type']) . " job #{$sj['id']} {$result}" . ($errorOutput ? ": $errorOutput" : ''),
     ]);
 
     if ($isCheckJob && $result === 'completed' && $checkProgress && $checkProgress->problems) {
@@ -2400,7 +2400,7 @@ foreach ($serverJobs as $sj) {
                 'agent_id' => $sj['agent_id'],
                 'backup_job_id' => $sj['id'],
                 'level' => 'info',
-                'message' => ucfirst($sj['task_type']) . " output: " . $trimmedOutput,
+                'message' => \BBS\Core\JobType::label($sj['task_type']) . " output: " . $trimmedOutput,
             ]);
         }
     }

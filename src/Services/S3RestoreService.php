@@ -137,7 +137,7 @@ class S3RestoreService
                 [$repoId]
             );
             if ($activeJob) {
-                return $this->fail(409, "Cannot restore — repository has an active {$activeJob['task_type']} job (#{$activeJob['id']}).");
+                return $this->fail(409, "Cannot restore — repository has an active " . \BBS\Core\JobType::label($activeJob['task_type']) . " job (#{$activeJob['id']}).");
             }
         }
 

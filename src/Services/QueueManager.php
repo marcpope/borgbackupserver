@@ -482,7 +482,7 @@ class QueueManager
                     'agent_id' => $job['agent_id'],
                     'backup_job_id' => $job['id'],
                     'level' => 'info',
-                    'message' => "Job #{$job['id']} ({$job['task_type']}) sent to {$destination} queue",
+                    'message' => "Job #{$job['id']} (" . \BBS\Core\JobType::label($job['task_type']) . ") sent to {$destination} queue",
                 ]);
 
                 $promoted[] = $job;

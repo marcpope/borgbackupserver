@@ -810,7 +810,7 @@ $dfFix = function (string $s): string {
                                 ?>
                                 <tr style="cursor:pointer" onclick="window.location='/queue/<?= (int) $j['id'] ?>'">
                                     <td><?= htmlspecialchars($j['agent_name']) ?></td>
-                                    <td><?= htmlspecialchars(ucfirst($j['task_type'])) ?></td>
+                                    <td><?= htmlspecialchars(\BBS\Core\JobType::label($j['task_type'])) ?></td>
                                     <td class="d-table-cell-md"><?= htmlspecialchars($j['repo_name'] ?? '--') ?></td>
                                     <td>
                                         <?php if ($pct !== null && $j['status'] === 'running'): ?>
@@ -954,7 +954,7 @@ $dfFix = function (string $s): string {
                         ?>
                         <tr style="cursor:pointer" onclick="window.location='/queue/<?= (int) $j['id'] ?>'">
                             <td><?= htmlspecialchars($j['agent_name']) ?></td>
-                            <td class="text-nowrap"><i class="bi <?= $taskIcon ?> me-1"></i><?= htmlspecialchars(ucfirst($j['task_type'])) ?></td>
+                            <td class="text-nowrap"><i class="bi <?= $taskIcon ?> me-1"></i><?= htmlspecialchars(\BBS\Core\JobType::label($j['task_type'])) ?></td>
                             <td class="d-table-cell-md"><?= htmlspecialchars($j['plan_name'] ?? '--') ?></td>
                             <td class="d-table-cell-md"><?= htmlspecialchars($j['repo_name'] ?? '--') ?></td>
                             <td><?= TimeHelper::ago($j['completed_at']) ?></td>

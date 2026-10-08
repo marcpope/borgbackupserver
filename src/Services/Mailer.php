@@ -167,25 +167,7 @@ class Mailer
 
     private static function taskLabel(string $taskType): string
     {
-        static $labels = [
-            'backup'               => 'Backup',
-            'restore'              => 'Restore',
-            'check'                => 'Repository Check',
-            'prune'                => 'Prune',
-            'compact'              => 'Compact',
-            'update_borg'          => 'Borg Update',
-            'update_agent'         => 'Agent Update',
-            's3_sync'              => 'Offsite Sync',
-            's3_restore'           => 'Offsite Restore',
-            'repo_repair'          => 'Repository Repair',
-            'break_lock'           => 'Break Lock',
-            'catalog_sync'         => 'Catalog Sync',
-            'catalog_rebuild'      => 'Catalog Rebuild',
-            'catalog_rebuild_full' => 'Catalog Rebuild',
-            'archive_delete'       => 'Archive Delete',
-            'archive_lock'         => 'Archive Lock',
-        ];
-        return $labels[$taskType] ?? ucfirst(str_replace('_', ' ', $taskType));
+        return \BBS\Core\JobType::label($taskType);
     }
 
     public static function inferSecure(int $port): string

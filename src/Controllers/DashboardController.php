@@ -452,19 +452,7 @@ class DashboardController extends Controller
 
         $toasts = [];
         foreach ($jobs as $job) {
-            $label = match($job['task_type']) {
-                'backup' => 'Backup',
-                'restore', 'restore_mysql', 'restore_pg', 'restore_mongo' => 'Restore',
-                'update_agent' => 'Agent Update',
-                'update_borg' => 'Borg Update',
-                'plugin_test' => 'Plugin Test',
-                'plugin_post' => 'Post-Script',
-                'prune' => 'Prune',
-                'compact' => 'Compact',
-                'catalog_rebuild' => 'Catalog Rebuild',
-                'catalog_rebuild_full' => 'Catalog Rebuild (Full)',
-                default => ucfirst($job['task_type']),
-            };
+            $label = \BBS\Core\JobType::label($job['task_type']);
             if ($job['status'] === 'running') {
                 $toasts[] = ['message' => "{$job['agent_name']}: {$label} started", 'type' => 'info'];
             } elseif ($job['status'] === 'completed') {

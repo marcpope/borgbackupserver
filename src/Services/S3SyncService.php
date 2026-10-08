@@ -222,7 +222,7 @@ class S3SyncService
             'level' => 'info',
             'message' => "Offsite sync to \"{$dest['name']}\" queued by request (job #{$jobId})",
         ]);
-        $note = $active ? "It runs after the {$active['task_type']} job #{$active['id']} that is on this repository now, so the copy is taken from a settled repository." : null;
+        $note = $active ? "It runs after the " . \BBS\Core\JobType::label($active['task_type']) . " job #{$active['id']} that is on this repository now, so the copy is taken from a settled repository." : null;
         return ['ok' => true, 'code' => 202, 'error' => null, 'job_id' => $jobId, 'note' => $note];
     }
 
