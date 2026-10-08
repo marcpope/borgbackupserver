@@ -101,6 +101,37 @@ class RemoteSshService
     }
 
     /**
+     * Why a host's stored settings can't be used, or null when they can.
+     * Saving validates them, but a host saved before validation existed
+     * may still hold a user or host that borg's ssh would read as an option
+     * (borg puts user@host on the ssh command line with no "--").
+     */
+    public static function configProblem(array $config): ?string
+    {
+        $err = self::fieldError($config['remote_host'] ?? '', $config['remote_user'] ?? '', $config['borg_remote_path'] ?? null);
+        return $err === null ? null : "This Remote SSH host's settings are not valid: {$err} Edit the host and save it again.";
+    }
+
+    /**
+     * The same check for repository URLs (ssh://user@host[:port]/path) in
+     * borg arguments: repository paths store the user and host from when
+     * the repository was created.
+     */
+    public static function borgArgsProblem(array $args): ?string
+    {
+        foreach ($args as $arg) {
+            if (!is_string($arg) || !str_starts_with($arg, 'ssh://')) {
+                continue;
+            }
+            if (!preg_match('#^ssh://([^@/]*)@(\[[^\]]*\]|[^/:]*)#', $arg, $m)
+                || self::fieldError($m[2], $m[1], null) !== null) {
+                return 'The repository path has an invalid SSH user or host. Edit the Remote SSH host and save it again.';
+            }
+        }
+        return null;
+    }
+
+    /**
      * The Remote Borg Path if it is a plain command name or path, else null.
      * Checked again where it is used, so a value stored before validation
      * existed can never reach a command line.
@@ -117,6 +148,9 @@ class RemoteSshService
      */
     public function testConnection(array $config): array
     {
+        if (($problem = self::configProblem($config)) !== null) {
+            return ['success' => false, 'error' => $problem];
+        }
         $keyFile = null;
         try {
             $sshKey = $this->decryptKey($config);
@@ -174,6 +208,9 @@ class RemoteSshService
      */
     public function initRepo(array $config, string $repoPath, string $encryption, string $passphrase = ''): array
     {
+        if (($problem = self::configProblem($config) ?? self::borgArgsProblem([$repoPath])) !== null) {
+            return ['success' => false, 'output' => $problem, 'exit_code' => -1];
+        }
         $borgRemotePath = self::safeBorgPath($config['borg_remote_path'] ?? null);
         $cmd = ['borg', 'init', '--encryption=' . $encryption];
         if ($borgRemotePath) {
@@ -206,6 +243,9 @@ class RemoteSshService
      */
     public function runBorgCommand(array $config, string $repoPath, array $borgArgs, string $passphrase = '', array $extraEnv = []): array
     {
+        if (($problem = self::configProblem($config) ?? self::borgArgsProblem(array_merge([$repoPath], $borgArgs))) !== null) {
+            return ['success' => false, 'output' => $problem, 'exit_code' => -1];
+        }
         $borgRemotePath = self::safeBorgPath($config['borg_remote_path'] ?? null);
 
         $cmd = array_merge(['borg'], $borgArgs);
@@ -313,6 +353,10 @@ class RemoteSshService
     {
         $keyFile = null;
         $this->lastDiskError = null;
+        if (($problem = self::configProblem($config)) !== null) {
+            $this->lastDiskError = $problem;
+            return null;
+        }
         try {
             $sshKey = $this->decryptKey($config);
             $keyFile = $this->writeTempKey($sshKey);
@@ -324,7 +368,7 @@ class RemoteSshService
             // that runs on the REMOTE shell (proc_open's array form only
             // protects the local side). Reject anything that isn't a plain
             // POSIX path so shell metacharacters can't escape.
-            if (!preg_match('#^[A-Za-z0-9_./\-]+$#', $basePath)) {
+            if (!preg_match('#^[A-Za-z0-9_./][A-Za-z0-9_./\-]*$#', $basePath)) {
                 $this->lastDiskError = 'Base path contains characters that are unsafe to send to a remote shell';
                 return null;
             }
@@ -340,7 +384,7 @@ class RemoteSshService
                 '-o', 'ConnectTimeout=10',
                 '--',
                 "{$config['remote_user']}@{$config['remote_host']}",
-                "df -k {$basePath}",
+                "df -k -- {$basePath}",
             ];
 
             $proc = proc_open($sshCmd, [
@@ -596,6 +640,9 @@ class RemoteSshService
      */
     public function getRepositorySizeBytes(array $config, string $repoPath): ?int
     {
+        if (self::configProblem($config) !== null) {
+            return null;
+        }
         $remotePath = $this->remoteFilesystemPathFromRepoUrl($repoPath);
         if ($remotePath === null || $remotePath === '' || str_contains($remotePath, "\0")) {
             return null;
@@ -739,6 +786,9 @@ class RemoteSshService
      */
     public function openBorgProcess(array $config, array $borgArgs, string $passphrase = ''): array
     {
+        if (($problem = self::configProblem($config) ?? self::borgArgsProblem($borgArgs)) !== null) {
+            return ['error' => $problem];
+        }
         $borgRemotePath = self::safeBorgPath($config['borg_remote_path'] ?? null);
         $cmd = array_merge(['borg'], $borgArgs);
         if ($borgRemotePath && count($borgArgs) >= 1) {

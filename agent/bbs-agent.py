@@ -4370,6 +4370,14 @@ _FORBIDDEN_BORG_OPTIONS = ("--content-from-command", "--paths-from-command",
                            "--paths-from-stdin", "--rsh")
 
 
+# A repository URL's user and host go on borg's ssh command line with no
+# "--" in front, so one starting with "-" would be read as an ssh option
+# (-oProxyCommand=...). Same rules the server applies when a host is saved.
+_SSH_URL_RE = re.compile(r"^ssh://(?:([^@/]*)@)?(\[[^\]]*\]|[^/:]*)")
+_SSH_USER_RE = re.compile(r"^[A-Za-z0-9._][A-Za-z0-9._-]*$")
+_SSH_HOST_RE = re.compile(r"^[A-Za-z0-9._:\[\]][A-Za-z0-9._:\[\]-]*$")
+
+
 def _unsafe_borg_command(command):
     """Return why a task's borg argv must not run, or None if it may."""
     if not command:
@@ -4382,6 +4390,11 @@ def _unsafe_borg_command(command):
         name = tok.split("=", 1)[0]
         if name in _FORBIDDEN_BORG_OPTIONS:
             return "refusing to run borg with {}: it would execute a command on this host".format(name)
+        if tok.startswith("ssh://"):
+            m = _SSH_URL_RE.match(tok)
+            user, host = (m.group(1), m.group(2)) if m else (None, "")
+            if not _SSH_HOST_RE.match(host or "") or (user is not None and not _SSH_USER_RE.match(user)):
+                return "refusing to run borg: the repository URL has an invalid SSH user or host"
     return None
 
 
@@ -5678,4 +5691,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-# bbs-signature: v1 sdIpv0nhSbMOiP3Nm0mRM1zae26UcB0gZ5BzVm0CkUV+jIbLq/NKICggrICeqA8mPRjFEtuNAZn63f8akrwBCA==
+# bbs-signature: v1 fHBRRxs5NYUdNz7sTh5E3ST/51QLmipuWfpsyYKhurQ28rmQEo5kT05jytr0/un47+Fo3yOLqg0tXz3disnVCQ==
