@@ -151,12 +151,12 @@ class AuthController extends Controller
         if (!empty($redirectOverride['value'])) {
             $redirectUri = trim($redirectOverride['value']);
         } else {
-            $serverHost = $this->db->fetchOne("SELECT `value` FROM settings WHERE `key` = 'server_host'");
-            $host = $serverHost['value'] ?? $_SERVER['HTTP_HOST'] ?? 'localhost';
-            $scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
-                || (isset($_SERVER['HTTP_X_FORWARDED_PROTO']) && $_SERVER['HTTP_X_FORWARDED_PROTO'] === 'https')
-                ? 'https' : 'http';
-            $redirectUri = "{$scheme}://{$host}/login/oidc/callback";
+            $base = OidcService::serverBaseUrl(true);
+            if ($base === null) {
+                $this->flash('danger', 'SSO needs this server\'s address. Set Server Host in Settings, or the SSO redirect URL.');
+                $this->redirect('/login');
+            }
+            $redirectUri = "{$base}/login/oidc/callback";
         }
 
         try {
@@ -185,12 +185,12 @@ class AuthController extends Controller
         if (!empty($redirectOverride['value'])) {
             $redirectUri = trim($redirectOverride['value']);
         } else {
-            $serverHost = $this->db->fetchOne("SELECT `value` FROM settings WHERE `key` = 'server_host'");
-            $host = $serverHost['value'] ?? $_SERVER['HTTP_HOST'] ?? 'localhost';
-            $scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
-                || (isset($_SERVER['HTTP_X_FORWARDED_PROTO']) && $_SERVER['HTTP_X_FORWARDED_PROTO'] === 'https')
-                ? 'https' : 'http';
-            $redirectUri = "{$scheme}://{$host}/login/oidc/callback";
+            $base = OidcService::serverBaseUrl(true);
+            if ($base === null) {
+                $this->flash('danger', 'SSO needs this server\'s address. Set Server Host in Settings, or the SSO redirect URL.');
+                $this->redirect('/login');
+            }
+            $redirectUri = "{$base}/login/oidc/callback";
         }
 
         // API-brokered SSO: /api/v1/auth/oidc/start stashed
@@ -351,11 +351,10 @@ class AuthController extends Controller
     {
         $oidcLogoutUrl = null;
         if (($_SESSION['auth_provider'] ?? 'local') === 'oidc') {
-            $oidcService = new OidcService();
-            $serverHost = $this->db->fetchOne("SELECT `value` FROM settings WHERE `key` = 'server_host'");
-            $host = $serverHost['value'] ?? $_SERVER['HTTP_HOST'] ?? 'localhost';
-            $scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
-            $oidcLogoutUrl = $oidcService->getLogoutUrl("{$scheme}://{$host}/login");
+            $base = OidcService::serverBaseUrl(false);
+            if ($base !== null) {
+                $oidcLogoutUrl = (new OidcService())->getLogoutUrl("{$base}/login");
+            }
         }
 
         session_destroy();

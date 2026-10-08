@@ -225,12 +225,12 @@ class MobileAuthController extends Controller
         if (!empty($redirectOverride['value'])) {
             $redirectUri = trim($redirectOverride['value']);
         } else {
-            $serverHost = $this->db->fetchOne("SELECT `value` FROM settings WHERE `key` = 'server_host'");
-            $host = $serverHost['value'] ?? $_SERVER['HTTP_HOST'] ?? 'localhost';
-            $scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
-                || (isset($_SERVER['HTTP_X_FORWARDED_PROTO']) && $_SERVER['HTTP_X_FORWARDED_PROTO'] === 'https')
-                ? 'https' : 'http';
-            $redirectUri = "{$scheme}://{$host}/login/oidc/callback";
+            $base = \BBS\Services\OidcService::serverBaseUrl(true);
+            if ($base === null) {
+                unset($_SESSION['mobile_oidc']);
+                $this->json(['error' => 'SSO needs the server address: set Server Host in Settings, or the SSO redirect URL'], 500);
+            }
+            $redirectUri = "{$base}/login/oidc/callback";
         }
 
         try {
