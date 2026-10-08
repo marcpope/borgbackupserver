@@ -72,26 +72,28 @@ class BorgVersionService
                 continue;
             }
 
-            // Skip if already stored
+            // A release already stored still has its assets refreshed: that
+            // fills in digests and picks up assets uploaded after the first
+            // sync.
             $existing = $this->db->fetchOne(
                 "SELECT id FROM borg_versions WHERE version = ?",
                 [$version]
             );
             if ($existing) {
-                continue;
+                $versionId = (int) $existing['id'];
+            } else {
+                // Extract release date
+                $releaseDate = substr($release['published_at'] ?? $release['created_at'] ?? date('Y-m-d'), 0, 10);
+
+                // Insert version
+                $versionId = $this->db->insert('borg_versions', [
+                    'version' => $version,
+                    'release_tag' => $tag,
+                    'release_date' => $releaseDate,
+                    'is_prerelease' => 0,
+                    'release_notes' => $release['body'] ?? '',
+                ]);
             }
-
-            // Extract release date
-            $releaseDate = substr($release['published_at'] ?? $release['created_at'] ?? date('Y-m-d'), 0, 10);
-
-            // Insert version
-            $versionId = $this->db->insert('borg_versions', [
-                'version' => $version,
-                'release_tag' => $tag,
-                'release_date' => $releaseDate,
-                'is_prerelease' => 0,
-                'release_notes' => $release['body'] ?? '',
-            ]);
 
             // Process assets
             $assets = $release['assets'] ?? [];
@@ -131,7 +133,9 @@ class BorgVersionService
                 );
             }
 
-            $added++;
+            if (!$existing) {
+                $added++;
+            }
         }
 
         $this->setSetting('last_borg_version_check', date('Y-m-d H:i:s'));
