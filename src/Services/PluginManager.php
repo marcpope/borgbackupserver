@@ -504,7 +504,7 @@ class PluginManager
             if ($dir !== '' && !str_starts_with($dir, '/') && !preg_match('#^[A-Za-z]:[\\\\/]#', $dir)) {
                 return 'Dump directory must be an absolute path.';
             }
-            if ($dir !== '' && preg_match('#^/(etc|bin|sbin|lib|lib32|lib64|boot|dev|proc|sys|usr|snap|root/\.ssh)(/|$)|^/(root|var|home|tmp|opt|srv)?/?$#', $dir)) {
+            if ($dir !== '' && preg_match('#^/(etc|bin|sbin|lib|lib32|lib64|boot|dev|proc|sys|usr|snap|root/\.ssh)(/|$)|^/(root|var|home|tmp|opt|srv|var/lib|var/www)?/?$#', $dir)) {
                 return 'Dump directory cannot be a system directory. Its .sql files are deleted after each backup.';
             }
         }
