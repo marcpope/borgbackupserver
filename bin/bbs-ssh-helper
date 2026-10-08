@@ -1920,7 +1920,10 @@ SSHEOF
         TMPDIR=$(readlink -m "$TMPDIR")
 
         if [ -d "$TMPDIR" ]; then
-            chgrp -R www-data "$TMPDIR"
+            # Owner, not just group: the staging tree lives in a sticky
+            # directory, where only its owner can remove it afterwards.
+            # chown -R changes symlinks themselves, never their targets.
+            chown -R www-data:www-data "$TMPDIR"
             find "$TMPDIR" -type d -exec chmod 770 {} +
             find "$TMPDIR" -type f -exec chmod 660 {} +
         fi

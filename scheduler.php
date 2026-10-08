@@ -3379,6 +3379,21 @@ if ($cleaned > 0) {
     echo date('Y-m-d H:i:s') . " Cleaned up {$cleaned} orphaned temp file(s)\n";
 }
 
+// Step 16d: Download staging left behind by a request that died part way
+// (a crash, a killed worker). A finished download removes its own.
+foreach (array_merge(glob('/var/bbs/tmp/bbs-download-*') ?: [], glob(sys_get_temp_dir() . '/bbs-download-*') ?: []) as $staging) {
+    if (!preg_match('#^(/var/bbs/tmp|' . preg_quote(sys_get_temp_dir(), '#') . ')/bbs-download-[A-Za-z0-9]+$#', $staging)
+        || is_link($staging) || !is_dir($staging) || (time() - (int) @filemtime($staging)) < 86400) {
+        continue;
+    }
+    // The tree belongs to the client's user until the helper hands it over
+    exec('sudo /usr/local/bin/bbs-ssh-helper fix-download-perms ' . escapeshellarg($staging) . ' 2>/dev/null');
+    exec('rm -rf -- ' . escapeshellarg($staging) . ' 2>/dev/null');
+    if (!file_exists($staging)) {
+        echo date('Y-m-d H:i:s') . " Removed leftover download staging {$staging}\n";
+    }
+}
+
 // Step 16a: Deferred shell-hook post-scripts (#402).
 //
 // A shell_hook set to "after all repository jobs" does not run its post-script

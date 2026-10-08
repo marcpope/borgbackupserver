@@ -386,8 +386,10 @@ class ArchiveDownloadService
             \RecursiveIteratorIterator::CHILD_FIRST
         );
         foreach ($items as $item) {
-            $item->isDir() ? rmdir($item->getPathname()) : unlink($item->getPathname());
+            // A symlink to a directory is removed like a file; isDir()
+            // follows it, and rmdir() on a link fails.
+            ($item->isDir() && !$item->isLink()) ? @rmdir($item->getPathname()) : @unlink($item->getPathname());
         }
-        rmdir($dir);
+        @rmdir($dir);
     }
 }
