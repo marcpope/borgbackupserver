@@ -149,6 +149,7 @@ class DryRunLogService
     /** Send an open list as a text download, then end the request. */
     public static function send($fh, int $jobId): void
     {
+        set_time_limit(0); // a list can be hundreds of MB
         while (ob_get_level()) {
             ob_end_clean();
         }

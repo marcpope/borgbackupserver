@@ -4401,31 +4401,31 @@ class AdminApiController extends Controller
      * The dry run's full file list as text/plain, one "included <path>" or
      * "excluded <path>" per line (#414). 404 once deleted or a day old.
      */
-    public function getDryRunLog(int $jobId): void
+    public function getDryRunLog(int $id): void
     {
         $ctx = $this->requireApiAuth();
-        [$job, $agent] = $this->apiDryRunJob($ctx, $jobId);
+        [$job, $agent] = $this->apiDryRunJob($ctx, $id);
         $fh = \BBS\Services\DryRunLogService::open($job, $agent);
         if (!$fh) {
             $this->json(['error' => 'No file list for this dry run. Lists are kept for one day.'], 404);
         }
-        \BBS\Services\DryRunLogService::send($fh, $jobId);
+        \BBS\Services\DryRunLogService::send($fh, $id);
     }
 
     /**
      * DELETE /api/v1/queue/{id}/dry-run-log
      * Deletes that list and nothing else. Needs Trigger Backup.
      */
-    public function deleteDryRunLog(int $jobId): void
+    public function deleteDryRunLog(int $id): void
     {
         $ctx = $this->requireApiAuth();
-        [$job, $agent] = $this->apiDryRunJob($ctx, $jobId);
+        [$job, $agent] = $this->apiDryRunJob($ctx, $id);
         $this->apiRequirePermission($ctx, \BBS\Services\PermissionService::TRIGGER_BACKUP, (int) $job['agent_id']);
         $deleted = \BBS\Services\DryRunLogService::delete($job, $agent);
         if ($deleted) {
             $this->db->insert('server_log', [
                 'agent_id' => $job['agent_id'],
-                'backup_job_id' => $jobId,
+                'backup_job_id' => $id,
                 'level' => 'info',
                 'message' => 'Dry run file list deleted via API',
             ]);

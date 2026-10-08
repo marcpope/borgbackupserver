@@ -99,6 +99,11 @@ class ArchiveDownloadService
 
         $remoteSshKeyFile = null; // Track temp SSH key for cleanup
 
+        // Extracting and streaming a large selection takes far longer than
+        // PHP's default 30 seconds of script time, which cut downloads off
+        // part way (around 500 MB) with a truncated .tar.gz.
+        set_time_limit(0);
+
         // The user closing the browser mid-download kills this request after
         // the extract has already landed on disk — make sure the staging dir
         // is removed no matter how the request ends.
