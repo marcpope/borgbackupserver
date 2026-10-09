@@ -19,7 +19,7 @@ final class OsLabel
             return 'macOS';
         }
         // Architecture at the end, release codename in parentheses
-        $os = preg_replace('/\s+(x86_64|amd64|arm64|aarch64|i[3-6]86|armv\d+l?|ppc64le|s390x)$/i', '', $os);
+        $os = preg_replace('/\s+(x86_64|x86|amd64|arm64|aarch64|i[3-6]86|armv\d+l?|ppc64le|s390x)$/i', '', $os);
         $os = preg_replace('/\s*\([^)]*\)/', '', $os);
         $os = str_replace(' GNU/Linux', '', $os);
         // Windows reports its kernel version; build 22000 and later is 11
