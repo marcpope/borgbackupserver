@@ -4685,7 +4685,10 @@ const csrfToken = '<?= $this->csrfToken() ?>';
         li.className = 'dirbrowse-node';
         li.dataset.path = node.path;
         li.dataset.type = node.type;
-        li.dataset.loaded = (node.children && node.children.length) || node.type !== 'directory' ? '1' : '0';
+        // A folder the agent stopped partway through (it hit the entry cap)
+        // is not loaded: expanding it fetches its full contents.
+        li.dataset.loaded = node.type !== 'directory'
+            || (node.children && node.children.length && !node.truncated) ? '1' : '0';
 
         const row = document.createElement('div');
         row.className = 'dirbrowse-row d-flex align-items-center';
@@ -4921,6 +4924,7 @@ const csrfToken = '<?= $this->csrfToken() ?>';
             treeEl.innerHTML = '';
             const root = renderNode(tree, 0);
             root.dataset.level = '0';
+            root.dataset.loaded = '1';
             treeEl.appendChild(root);
             // Auto-expand the root so the user sees children immediately
             const wrap = root.querySelector(':scope > .dirbrowse-children');
