@@ -340,14 +340,6 @@ class AgentApiController extends Controller
             && !preg_match('/^[^\x00-\x1f\x7f\-][^\x00-\x1f\x7f]{0,199}$/u', (string) $input['archive_name'])) {
             $input['archive_name'] = '';
         }
-        // Bound free text from the agent before it reaches the database,
-        // emails and notification commands
-        foreach (['error_log', 'output_log'] as $k) {
-            if (isset($input[$k]) && is_string($input[$k]) && strlen($input[$k]) > 65536) {
-                $input[$k] = substr($input[$k], 0, 65536) . "\n[truncated]";
-            }
-        }
-
         $jobId = (int) ($input['job_id'] ?? 0);
         $result = $input['result'] ?? '';  // 'completed', 'failed', or 'cataloging'
 
@@ -362,6 +354,18 @@ class AgentApiController extends Controller
 
         if (!$job) {
             $this->json(['error' => 'Job not found'], 404);
+        }
+
+        // Bound free text from the agent before it reaches the database,
+        // emails and notification commands. A list_dir result is the folder
+        // browser's JSON tree, not text: cutting it breaks the JSON, so it
+        // gets a limit that fits its bounded size (up to 20000 entries)
+        // and the MEDIUMTEXT column (#536).
+        foreach (['error_log', 'output_log'] as $k) {
+            $limit = ($k === 'output_log' && $job['task_type'] === 'list_dir') ? 8388608 : 65536;
+            if (isset($input[$k]) && is_string($input[$k]) && strlen($input[$k]) > $limit) {
+                $input[$k] = substr($input[$k], 0, $limit) . "\n[truncated]";
+            }
         }
 
         // Idempotency: if job is already in a terminal state, return OK without
