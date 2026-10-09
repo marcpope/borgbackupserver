@@ -22,6 +22,10 @@ final class OsLabel
         $os = preg_replace('/\s+(x86_64|amd64|arm64|aarch64|i[3-6]86|armv\d+l?|ppc64le|s390x)$/i', '', $os);
         $os = preg_replace('/\s*\([^)]*\)/', '', $os);
         $os = str_replace(' GNU/Linux', '', $os);
+        // Windows reports its kernel version; build 22000 and later is 11
+        if (preg_match('/^Windows 10\.0\.(\d+)$/i', $os, $m)) {
+            return (int) $m[1] >= 22000 ? 'Windows 11' : 'Windows 10';
+        }
         return trim(preg_replace('/\s{2,}/', ' ', $os));
     }
 
