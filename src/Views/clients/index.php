@@ -114,6 +114,7 @@
                 <thead class="table-light">
                     <tr>
                         <th data-sortable>Name</th>
+                        <th data-sortable>OS</th>
                         <th data-sortable>Agent<br>Version</th>
                         <th data-sortable>Last<br>Successful</th>
                         <th data-sortable title="Backup attempts that failed since the last successful one">Missed Since<br>Success</th>
@@ -129,7 +130,7 @@
                 <tbody>
                     <?php if (empty($agents)): ?>
                     <tr>
-                        <td colspan="11" class="text-center text-muted py-4">No clients configured. Click "Add Client" to get started.</td>
+                        <td colspan="12" class="text-center text-muted py-4">No clients configured. Click "Add Client" to get started.</td>
                     </tr>
                     <?php endif; ?>
                     <?php foreach ($agents as $agent): ?>
@@ -141,6 +142,14 @@
                             <?php endif; ?>
                             <?php if (!empty($agent['location'])): ?>
                                 <br><small class="text-muted ms-4"><i class="bi bi-geo-alt me-1"></i><?= htmlspecialchars($agent['location']) ?></small>
+                            <?php endif; ?>
+                        </td>
+                        <?php $osShort = \BBS\Core\OsLabel::short($agent['os_info'] ?? null, $agent['platform'] ?? null); ?>
+                        <td class="text-nowrap text-truncate" style="max-width: 11rem;" title="<?= htmlspecialchars($agent['os_info'] ?? '') ?>">
+                            <?php if ($osShort !== ''): ?>
+                                <i class="bi <?= \BBS\Core\OsLabel::icon($agent['os_info'] ?? null, $agent['platform'] ?? null) ?> me-1 text-muted"></i><?= htmlspecialchars($osShort) ?>
+                            <?php else: ?>
+                                <span class="text-muted">--</span>
                             <?php endif; ?>
                         </td>
                         <td>
