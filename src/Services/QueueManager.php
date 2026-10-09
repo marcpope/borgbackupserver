@@ -411,7 +411,11 @@ class QueueManager
                     'client_name' => $job['agent_name'] ?? '',
                 ];
                 if (!empty($plugins)) {
-                    $extra['plugins'] = $plugins;
+                    // An empty config must reach the agent as {}, not [] (#535)
+                    $extra['plugins'] = array_map(
+                        fn($p) => $p['config'] === [] ? array_merge($p, ['config' => new \stdClass()]) : $p,
+                        $plugins
+                    );
                 }
                 // The agent snapshots the volumes and backs up from them.
                 $extra['snapshot'] = !empty($job['snapshot']);
@@ -678,7 +682,11 @@ class QueueManager
                     'client_name' => $job['agent_name'] ?? '',
                 ];
                 if (!empty($plugins)) {
-                    $extra['plugins'] = $plugins;
+                    // An empty config must reach the agent as {}, not [] (#535)
+                    $extra['plugins'] = array_map(
+                        fn($p) => $p['config'] === [] ? array_merge($p, ['config' => new \stdClass()]) : $p,
+                        $plugins
+                    );
                 }
                 // The agent snapshots the volumes and backs up from them.
                 $extra['snapshot'] = !empty($job['snapshot']);
