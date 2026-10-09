@@ -27,6 +27,48 @@
         return label;
     };
 
+    // Elapsed time with seconds, for a job that is still running (#533):
+    // "45s", "23m 05s", "1h 23m 05s", "2d 3h 04m".
+    BBS.formatElapsed = function(seconds) {
+        seconds = Math.max(0, Math.floor(seconds) || 0);
+        const pad = function(n) { return (n < 10 ? '0' : '') + n; };
+        const d = Math.floor(seconds / 86400);
+        const h = Math.floor((seconds % 86400) / 3600);
+        const m = Math.floor((seconds % 3600) / 60);
+        const s = seconds % 60;
+        if (d > 0) return d + 'd ' + h + 'h ' + pad(m) + 'm';
+        if (h > 0) return h + 'h ' + pad(m) + 'm ' + pad(s) + 's';
+        if (m > 0) return m + 'm ' + pad(s) + 's';
+        return s + 's';
+    };
+
+    // A job's start time (UTC "Y-m-d H:i:s") as unix seconds, or null.
+    BBS.utcSeconds = function(value) {
+        if (!value) return null;
+        const t = Date.parse(String(value).replace(' ', 'T') + 'Z');
+        return isNaN(t) ? null : Math.floor(t / 1000);
+    };
+
+    // Elements with data-running-since="<unix seconds>" show how long ago
+    // that was, updated every second. Measured on the server's clock
+    // (BBS_SERVER_NOW, set by the layout), so a browser whose clock is off
+    // still shows the right time. Optional data-running-prefix/-suffix wrap
+    // the value.
+    const pageLoaded = Date.now() / 1000;
+    BBS.serverNow = function() {
+        const serverAtLoad = window.BBS_SERVER_NOW;
+        return typeof serverAtLoad === 'number' ? serverAtLoad + (Date.now() / 1000 - pageLoaded) : Date.now() / 1000;
+    };
+    BBS.tickElapsed = function() {
+        const now = BBS.serverNow();
+        document.querySelectorAll('[data-running-since]').forEach(function(el) {
+            const since = parseInt(el.getAttribute('data-running-since'), 10);
+            if (!since) return;
+            el.textContent = (el.getAttribute('data-running-prefix') || '') + BBS.formatElapsed(now - since) + (el.getAttribute('data-running-suffix') || '');
+        });
+    };
+    setInterval(function() { BBS.tickElapsed(); }, 1000);
+
     // navigator.clipboard only exists in secure contexts (HTTPS/localhost);
     // plain-HTTP installs need the execCommand fallback (#333).
     BBS.copyText = function(text) {

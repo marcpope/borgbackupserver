@@ -11,6 +11,10 @@ $statusLabel = ($job['status'] === 'completed' && !empty($job['had_warnings']))
     : ucfirst($job['status']);
 
 $durLabel = \BBS\Core\TimeHelper::duration((int) ($job['duration_seconds'] ?? 0));
+// A running job shows how long it has been running (#533); the page's
+// ticker keeps it current.
+$runningSince = ($job['status'] === 'running' && !empty($job['started_at'])) ? strtotime($job['started_at'] . ' UTC') : null;
+$runningLabel = $runningSince ? \BBS\Core\TimeHelper::duration(max(0, time() - $runningSince)) : '';
 
 $pct = 0;
 if (($job['files_total'] ?? 0) > 0 && $job['files_processed'] > 0) {
@@ -140,6 +144,7 @@ $taskLabel = \BBS\Core\JobType::label($job['task_type']);
                 <h4 class="mb-1">
                     Job #<?= $job['id'] ?>
                     <span class="badge text-bg-<?= $statusClass ?> fs-6 ms-2"><?= htmlspecialchars($statusLabel) ?></span>
+                    <span id="jobElapsed" class="text-muted fs-6 fw-normal ms-2"<?= $runningSince ? ' data-running-since="' . $runningSince . '" data-running-prefix="Running for "' : ' hidden' ?>><?= $runningSince ? 'Running for ' . htmlspecialchars($runningLabel) : '' ?></span>
                 </h4>
                 <div class="queue-meta-strip">
                     <span class="queue-meta-pill"><i class="bi bi-cpu me-1"></i><?= htmlspecialchars($taskLabel) ?></span>
@@ -402,7 +407,7 @@ $taskLabel = \BBS\Core\JobType::label($job['task_type']);
                         </tr>
                         <tr>
                             <td class="text-muted fw-semibold ps-3">Duration</td>
-                            <td><?= $durLabel ?></td>
+                            <td<?= $runningSince ? ' data-running-since="' . $runningSince . '" data-running-suffix=" (in progress)"' : '' ?>><?= $runningSince ? htmlspecialchars($runningLabel) . ' (in progress)' : $durLabel ?></td>
                         </tr>
                     </tbody>
                 </table>
@@ -764,6 +769,7 @@ if ($job['task_type'] === 'backup_dry_run' && !empty($job['task_result'])) {
     }
 
     function updateDetails(job) {
+        const runningSince = job.status === 'running' ? window.BBS.utcSeconds(job.started_at) : null;
         // Update stats
         const statsMap = {
             'Files Total': job.files_total ? Number(job.files_total).toLocaleString() : '--',
@@ -781,8 +787,29 @@ if ($job['task_type'] === 'backup_dry_run' && !empty($job['task_result'])) {
             }
             if (key === 'Started At' && job.started_at) td.nextElementSibling.textContent = fmtDate(job.started_at);
             if (key === 'Completed At' && job.completed_at) td.nextElementSibling.textContent = fmtDate(job.completed_at);
-            if (key === 'Duration') td.nextElementSibling.textContent = window.BBS.formatDuration(job.duration_seconds);
+            if (key === 'Duration') {
+                const cell = td.nextElementSibling;
+                if (runningSince) {
+                    cell.setAttribute('data-running-since', runningSince);
+                    cell.setAttribute('data-running-suffix', ' (in progress)');
+                } else {
+                    cell.removeAttribute('data-running-since');
+                    cell.textContent = window.BBS.formatDuration(job.duration_seconds);
+                }
+            }
         });
+        const elapsed = document.getElementById('jobElapsed');
+        if (elapsed) {
+            if (runningSince) {
+                elapsed.setAttribute('data-running-since', runningSince);
+                elapsed.setAttribute('data-running-prefix', 'Running for ');
+                elapsed.hidden = false;
+            } else {
+                elapsed.removeAttribute('data-running-since');
+                elapsed.hidden = true;
+            }
+        }
+        window.BBS.tickElapsed();
     }
 
     function updateLogs(logs) {

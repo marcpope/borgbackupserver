@@ -313,6 +313,10 @@
                             };
                             ?>
                             <span class="badge text-bg-<?= $sc ?>"><?= $job['status'] ?></span>
+                            <?php if ($job['status'] === 'running' && !empty($job['started_at'])):
+                                $since = strtotime($job['started_at'] . ' UTC'); ?>
+                            <div class="small text-muted text-nowrap" data-running-since="<?= $since ?>"><?= htmlspecialchars(\BBS\Core\TimeHelper::duration(max(0, time() - $since))) ?></div>
+                            <?php endif; ?>
                         </td>
                         <td class="text-end" onclick="event.stopPropagation()">
                             <a href="/queue/<?= $job['id'] ?>" class="btn btn-sm btn-outline-secondary" title="View Details"><i class="bi bi-eye"></i></a>
@@ -489,6 +493,13 @@ document.querySelectorAll('[data-bs-toggle="tooltip"]').forEach(el => new bootst
                 '<div class="progress-bar progress-bar-striped progress-bar-animated bg-info" style="width:100%">Preparing...</div></div>';
         }
 
+        // How long a running job has been going (#533); the shared ticker
+        // keeps it current between polls.
+        const since = job.status === 'running' ? window.BBS.utcSeconds(job.started_at) : null;
+        const elapsed = since
+            ? '<div class="small text-muted text-nowrap" data-running-since="' + since + '">' + window.BBS.formatElapsed(window.BBS.serverNow() - since) + '</div>'
+            : '';
+
         let actions = '<a href="/queue/' + job.id + '" class="btn btn-sm btn-outline-secondary" title="View Details"><i class="bi bi-eye"></i></a>';
         if (job.status === 'queued' || job.status === 'sent' || job.status === 'running') {
             actions += ' <form method="POST" action="/queue/' + job.id + '/cancel" class="d-inline" data-confirm="Cancel this job?">' +
@@ -503,7 +514,7 @@ document.querySelectorAll('[data-bs-toggle="tooltip"]').forEach(el => new bootst
             '<td class="d-none d-md-table-cell">' + (['repo_check','repo_repair','archive_delete'].includes(job.task_type) ? '--' : Number(job.files_total || 0).toLocaleString()) + '</td>' +
             '<td>' + progress + '</td>' +
             '<td class="d-none d-md-table-cell">' + esc(job.repo_name || '--') + '</td>' +
-            '<td>' + statusBadge(job.status) + '</td>' +
+            '<td>' + statusBadge(job.status) + elapsed + '</td>' +
             '<td class="text-end" onclick="event.stopPropagation()">' + actions + '</td></tr>';
     }
 
