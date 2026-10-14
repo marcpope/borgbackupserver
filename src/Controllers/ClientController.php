@@ -1481,6 +1481,46 @@ class ClientController extends Controller
         }
     }
 
+    /** Download only database dumps recorded for this archive and connector. */
+    public function downloadDatabases(int $id): void
+    {
+        $this->requireAuth();
+        $this->verifyCsrf();
+
+        $agent = $this->getAgent($id);
+        if (!$agent) {
+            $this->flash('danger', 'Client not found.');
+            $this->redirect('/clients');
+        }
+        $this->requirePermission(PermissionService::RESTORE, $id);
+
+        $archiveId = (int) ($_POST['archive_id'] ?? 0);
+        $configId = (int) ($_POST['plugin_config_id'] ?? 0);
+        $names = $_POST['databases'] ?? [];
+        if (!$archiveId || !$configId || !is_array($names) || !$names) {
+            $this->flash('danger', 'Select an archive, connector, and at least one database to download.');
+            $this->redirect("/clients/{$id}?tab=restore");
+        }
+
+        $archive = $this->loadArchiveForDownload($archiveId, $id);
+        $config = (new \BBS\Services\PluginManager())->getPluginConfig($configId);
+        if (!$archive || empty($archive['databases_backed_up']) || !$config
+            || (int) $config['agent_id'] !== $id
+            || !in_array($config['slug'], ['mysql_dump', 'pg_dump', 'mongo_dump'], true)) {
+            $this->flash('danger', 'Archive or database connector not found.');
+            $this->redirect("/clients/{$id}?tab=restore");
+        }
+
+        try {
+            $groups = (new \BBS\Services\ArchiveDatabaseService())->groups($id, $archiveId, $archive['databases_backed_up']);
+            $paths = \BBS\Services\ArchiveDatabaseService::downloadPaths($groups, $configId, $config['slug'], $names);
+            (new \BBS\Services\ArchiveDownloadService())->stream($agent, $archive, $paths);
+        } catch (\Exception $e) {
+            $this->flash('danger', 'Download failed: ' . $e->getMessage());
+            $this->redirect("/clients/{$id}?tab=restore");
+        }
+    }
+
     /**
      * The archive row a download needs, joined with its repository and any
      * remote-SSH configuration. Shared by the web and API download paths.

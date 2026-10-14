@@ -685,12 +685,14 @@
         const dbLoading = document.getElementById('db-loading');
         const dbSelectedCount = document.getElementById('db-selected-count');
         const dbRestoreBtn = document.getElementById('db-restore-btn');
+        const dbDownloadBtn = document.getElementById('db-download-btn');
         const dbAllDbNote = document.getElementById('db-all-databases-note');
         const dbConfigId = document.getElementById('db-config-id');
 
         let dbRestoreMode = 'files';
         let dbPerDatabase = true;
         let dbGroups = [];      // per-config database groups from the listing (#382)
+        let dbActiveGroup = null;
         let dbBackedUpAt = '';
 
         // Render one row per database into the table body.
@@ -703,6 +705,7 @@
                     '<td>' +
                         '<select class="form-select form-select-sm db-mode-select" name="dbmode_' + escapedName + '" data-db="' + escapedName + '">' +
                             '<option value="none">None</option>' +
+                            '<option value="download">Download</option>' +
                             '<option value="replace">Replace</option>' +
                             (perDatabase ? '<option value="rename">Copy</option>' : '') +
                         '</select>' +
@@ -724,7 +727,8 @@
         // Show the databases belonging to the currently-selected connection's
         // group. Two configs of the same engine each restore independently.
         function refreshDbTableForConnection() {
-            if (!dbGroups.length) { dbTable.style.display = 'none'; return; }
+            dbActiveGroup = null;
+            if (!dbGroups.length) { dbTable.style.display = 'none'; updateDbSelection(); return; }
             var sel = parseConfigValue();
             var group = null;
             if (dbGroups.length === 1 && (dbGroups[0].config_id === null || dbGroups[0].config_id === undefined)) {
@@ -742,6 +746,7 @@
                 return;
             }
             dbNoData.style.display = 'none';
+            dbActiveGroup = group;
             dbPerDatabase = group.per_database !== false;
             dbAllDbNote.style.display = dbPerDatabase ? 'none' : '';
             renderDbRows(group.databases || [], group.mtimes || {}, dbPerDatabase);
@@ -844,6 +849,8 @@
         if (dbArchiveSelect) {
             dbArchiveSelect.addEventListener('change', function() {
                 const archiveId = this.value;
+                dbGroups = [];
+                dbActiveGroup = null;
                 dbTableBody.innerHTML = '';
                 dbTable.style.display = 'none';
                 dbAllDbNote.style.display = 'none';
@@ -861,6 +868,7 @@
                 fetch('/clients/' + agentId + '/archive/' + archiveId + '/databases', { credentials: 'same-origin' })
                     .then(r => r.json())
                     .then(data => {
+                        if (dbArchiveSelect.value !== archiveId) return;
                         dbLoading.style.display = 'none';
                         dbGroups = data.groups || [];
                         dbBackedUpAt = data.backed_up_at || '';
@@ -877,6 +885,7 @@
                         refreshDbTableForConnection();
                     })
                     .catch(function() {
+                        if (dbArchiveSelect.value !== archiveId) return;
                         dbLoading.style.display = 'none';
                         dbNoData.style.display = '';
                         dbNoData.innerHTML = '<i class="bi bi-exclamation-triangle d-block mb-2" style="font-size:2rem;opacity:0.3;"></i>Failed to load database info';
@@ -884,24 +893,47 @@
             });
         }
 
-        function getSelectedDbs() {
+        function getSelectedDbs(action) {
             var selected = [];
             dbTableBody.querySelectorAll('.db-mode-select').forEach(function(sel) {
+                if (action === 'download' && sel.value !== 'download') return;
+                if (action === 'restore' && sel.value !== 'replace' && sel.value !== 'rename') return;
                 if (sel.value !== 'none') selected.push(sel);
             });
             return selected;
         }
 
         function updateDbSelection() {
-            var selected = getSelectedDbs();
-            dbSelectedCount.textContent = selected.length;
-            dbRestoreBtn.disabled = selected.length === 0 || !window.DB_CONFIG_AVAILABLE;
+            dbSelectedCount.textContent = getSelectedDbs().length;
+            const ready = !!dbArchiveSelect.value && !!dbActiveGroup && !!parseConfigValue().id;
+            dbRestoreBtn.disabled = !ready || !window.DB_CONFIG_AVAILABLE || getSelectedDbs('restore').length === 0;
+            dbDownloadBtn.disabled = !ready || getSelectedDbs('download').length === 0;
         }
+
+        dbDownloadBtn.addEventListener('click', function() {
+            const selected = getSelectedDbs('download');
+            if (dbDownloadBtn.disabled || !selected.length) return;
+            confirmAction('Download ' + selected.length + ' selected database backup(s) as a .tar.gz archive?', function() {
+                const form = document.getElementById('db-download-form');
+                const fields = document.getElementById('db-download-fields');
+                fields.innerHTML = '';
+                document.getElementById('db-download-archive-id').value = dbArchiveSelect.value;
+                document.getElementById('db-download-config-id').value = parseConfigValue().id;
+                selected.forEach(function(sel) {
+                    const input = document.createElement('input');
+                    input.type = 'hidden';
+                    input.name = 'databases[]';
+                    input.value = sel.dataset.db;
+                    fields.appendChild(input);
+                });
+                form.submit();
+            });
+        });
 
         // Submit DB restore
         dbRestoreBtn.addEventListener('click', function() {
-            const selected = getSelectedDbs();
-            if (selected.length === 0) return;
+            const selected = getSelectedDbs('restore');
+            if (dbRestoreBtn.disabled || selected.length === 0) return;
 
             const lines = [];
             selected.forEach(function(sel) {

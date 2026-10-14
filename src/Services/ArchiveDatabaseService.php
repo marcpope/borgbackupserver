@@ -95,4 +95,61 @@ class ArchiveDatabaseService
 
         return $groups;
     }
+
+    /** Resolve only recorded dump paths, never paths supplied by the browser. */
+    public static function downloadPaths(array $groups, int $configId, string $engine, array $selectedNames): array
+    {
+        if (!$configId || !$selectedNames || !in_array($engine, ['mysql_dump', 'pg_dump', 'mongo_dump'], true)) {
+            throw new \InvalidArgumentException('Select a connector and at least one database to download.');
+        }
+
+        $group = null;
+        foreach ($groups as $candidate) {
+            if ((int) ($candidate['config_id'] ?? 0) === $configId && ($candidate['engine'] ?? $engine) === $engine) {
+                $group = $candidate;
+                break;
+            }
+        }
+        // Older archives have one ungrouped database dump. Their metadata has
+        // no connector ID or engine, so use the selected connector's type.
+        if ($group === null && count($groups) === 1 && empty($groups[0]['config_id'])
+            && in_array($groups[0]['engine'] ?? null, [null, $engine], true)) {
+            $group = $groups[0];
+        }
+        if ($group === null) {
+            throw new \InvalidArgumentException('This connector has no database dumps in the selected archive.');
+        }
+
+        $dumpDir = rtrim((string) ($group['dump_dir'] ?? ''), '/');
+        if ($dumpDir === '' && empty($group['config_id'])) {
+            $dumpDir = $engine === 'pg_dump' ? '/home/bbs/pgdump' : '/home/bbs/mysql';
+        }
+        if (!str_starts_with($dumpDir, '/') || str_contains($dumpDir, '\\')
+            || preg_match('~(^|/)\.\.?(?:/|$)~', $dumpDir)
+            || preg_match('/[\x00-\x1f]/', $dumpDir)) {
+            throw new \InvalidArgumentException('The database dump directory is invalid or unavailable.');
+        }
+
+        $available = $group['databases'] ?? [];
+        if (!is_array($available)) {
+            throw new \InvalidArgumentException('This archive has no valid database list.');
+        }
+        $basePath = ltrim($dumpDir, '/');
+        $paths = [];
+        foreach ($selectedNames as $name) {
+            if (!is_string($name) || $name === '' || $name[0] === '-' || str_contains($name, '/') || str_contains($name, '\\')
+                || str_contains($name, "\0") || in_array($name, ['.', '..'], true) || !in_array($name, $available, true)) {
+                throw new \InvalidArgumentException('A selected database is not in this archive.');
+            }
+            if ($engine === 'mongo_dump') {
+                $paths[] = $basePath . '/' . $name;
+            } elseif (empty($group['per_database'])) {
+                $paths[] = $basePath . '/all_databases.sql' . (!empty($group['compress']) ? '.gz' : '');
+            } else {
+                $paths[] = $basePath . '/' . $name . '.sql' . (!empty($group['compress']) ? '.gz' : '');
+            }
+        }
+
+        return array_values(array_unique($paths));
+    }
 }

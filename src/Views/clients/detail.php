@@ -4038,7 +4038,7 @@ GRANT ALL PRIVILEGES ON DATABASE mydb TO <span id="pgUser2g">bbs_backup</span>;<
     <?php if ($dbPluginEnabled): ?>
     <div id="db-restore-section" class="mt-3" style="display:none;">
         <div class="restore-panel-header" style="background: linear-gradient(135deg, #4a90d9 0%, #357abd 100%);">
-            <i class="bi bi-database me-1"></i> Databases to Restore (<span id="db-selected-count">0</span>)
+            <i class="bi bi-database me-1"></i> Databases Selected (<span id="db-selected-count">0</span>)
         </div>
         <div class="restore-panel-body p-0" style="height:auto;" id="db-list-body">
             <div class="p-4 text-muted text-center" id="db-no-data">
@@ -4063,12 +4063,17 @@ GRANT ALL PRIVILEGES ON DATABASE mydb TO <span id="pgUser2g">bbs_backup</span>;<
             <div id="db-all-databases-note" class="alert alert-info small mb-2 py-1 px-2" style="display:none;">
                 <i class="bi bi-info-circle me-1"></i> This backup used a single combined dump file. Copy mode is not available.
             </div>
-            <button class="btn btn-success mb-3" id="db-restore-btn" disabled>
-                <i class="bi bi-arrow-counterclockwise me-1"></i> Restore Selected Databases
-            </button>
+            <div class="d-flex flex-wrap gap-2 mb-3">
+                <button class="btn btn-success" id="db-restore-btn" disabled>
+                    <i class="bi bi-arrow-counterclockwise me-1"></i> Restore Selected Databases
+                </button>
+                <button class="btn btn-primary" id="db-download-btn" disabled>
+                    <i class="bi bi-download me-1"></i> Download .tar.gz
+                </button>
+            </div>
             <div class="alert alert-warning small py-2 px-3 mb-0">
                 <i class="bi bi-shield-exclamation me-1"></i>
-                If you don't already have it set up, the database restore requires a user with write permissions such as below:
+                Restoring to the client requires a database user with write permissions, such as below. Downloading a backup does not:
                 <code class="d-block mt-1" id="db-restore-grant-code" style="font-size:0.8em;">GRANT SELECT, LOCK TABLES, SHOW VIEW, EVENT, TRIGGER, CREATE, INSERT, DROP, ALTER, INDEX, REFERENCES ON *.* TO '<span id="db-restore-grant-user"><?= htmlspecialchars($defaultDbUser) ?></span>'@'localhost'; FLUSH PRIVILEGES;</code>
             </div>
         </div>
@@ -4078,6 +4083,12 @@ GRANT ALL PRIVILEGES ON DATABASE mydb TO <span id="pgUser2g">bbs_backup</span>;<
             <input type="hidden" name="archive_id" id="db-restore-archive-id">
             <input type="hidden" name="plugin_config_id" id="db-restore-config-id">
             <div id="db-restore-fields"></div>
+        </form>
+        <form id="db-download-form" method="POST" action="/clients/<?= $agent['id'] ?>/download-databases" style="display:none;">
+            <input type="hidden" name="csrf_token" value="<?= $this->csrfToken() ?>">
+            <input type="hidden" name="archive_id" id="db-download-archive-id">
+            <input type="hidden" name="plugin_config_id" id="db-download-config-id">
+            <div id="db-download-fields"></div>
         </form>
     </div>
     <?php endif; ?>
