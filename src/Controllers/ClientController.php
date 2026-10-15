@@ -580,6 +580,10 @@ class ClientController extends Controller
             'remoteSshConfigs' => (new \BBS\Services\RemoteSshService())->getAll(),
             'storageLocations' => $this->db->fetchAll("SELECT * FROM storage_locations ORDER BY is_default DESC, label"),
             'clickhouseAvailable' => $clickhouseAvailable,
+            'restoreChecks' => ($_GET['tab'] ?? '') === 'restore'
+                && $this->hasPermission(\BBS\Services\PermissionService::RESTORE, (int) $id)
+                ? (new \BBS\Services\RestoreCheckPlanService($this->db))->summaryForAgent((int) $id)
+                : null,
         ]);
     }
 

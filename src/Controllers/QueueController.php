@@ -253,8 +253,14 @@ class QueueController extends Controller
             $dryRunLog = $dryJob ? \BBS\Services\DryRunLogService::info($dryJob, $dryAgent) : null;
         }
 
+        // A restore check job is the queue entry; its evidence is the run.
+        $restoreCheckRun = $job['task_type'] === 'restore_check'
+            ? $this->db->fetchOne("SELECT id, agent_id, result FROM restore_check_runs WHERE backup_job_id = ?", [$id])
+            : null;
+
         $this->view('queue/detail', [
             'pageTitle' => 'Job #' . $id,
+            'restoreCheckRun' => $restoreCheckRun,
             'dryRunLog' => $dryRunLog,
             'canDeleteDryRunLog' => $dryRunLog !== null && $this->hasPermission(PermissionService::TRIGGER_BACKUP, (int) $job['agent_id']),
             'job' => $job,
@@ -429,8 +435,12 @@ class QueueController extends Controller
             $this->redirect('/queue');
         }
 
-        // Require trigger_backup permission to cancel jobs
-        $this->requirePermission(PermissionService::TRIGGER_BACKUP, $job['agent_id']);
+        // Require trigger_backup permission to cancel jobs; a restore check
+        // is restore work, so it takes the restore permission instead.
+        $this->requirePermission(
+            $job['task_type'] === 'restore_check' ? PermissionService::RESTORE : PermissionService::TRIGGER_BACKUP,
+            $job['agent_id']
+        );
 
         $this->db->update('backup_jobs', [
             'status' => 'cancelled',
@@ -479,6 +489,14 @@ class QueueController extends Controller
         // Require trigger_backup permission to retry jobs
         // Re-running a job needs the permission the job itself needs
         $this->requirePermission(PermissionService::forTaskType((string) $job['task_type']), $job['agent_id']);
+
+        // A restore check's job is only the queue entry for its run, which
+        // carries the frozen settings and the evidence. Run it again from the
+        // check itself so a new run is recorded.
+        if ($job['task_type'] === 'restore_check') {
+            $this->flash('warning', 'Restore checks are re-run with Run now on the client\'s Restore tab, which records a new run.');
+            $this->redirect('/queue');
+        }
 
         // Create a new queued job based on the failed one
         $newJobId = $this->db->insert('backup_jobs', [

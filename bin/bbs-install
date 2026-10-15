@@ -450,6 +450,13 @@ chmod 755 /var/bbs /var/bbs/cache /var/bbs/home
 ok "Created /var/bbs/cache"
 ok "Created /var/bbs/home (default storage path)"
 
+# Restore check staging. Root-owned: bbs-ssh-helper creates one directory per
+# run inside it. Mount a separate filesystem here to cap its size.
+mkdir -p /var/bbs/restore-checks
+chown root:root /var/bbs/restore-checks
+chmod 755 /var/bbs/restore-checks
+ok "Created /var/bbs/restore-checks (restore check staging)"
+
 # ─── Step 6: SSH helper & sudoers ───────────────────────────────────────────
 step "7/11" "Install SSH helper & sudoers"
 

@@ -4148,6 +4148,8 @@ GRANT ALL PRIVILEGES ON DATABASE mydb TO <span id="pgUser2g">bbs_backup</span>;<
 
     <?php endif; ?>
 
+    <?php require __DIR__ . '/_restore_checks.php'; ?>
+
 <?php elseif ($tab === 'install' && $isOwnerOrAdmin): ?>
     <h5 class="mb-3">Install Agent</h5>
 

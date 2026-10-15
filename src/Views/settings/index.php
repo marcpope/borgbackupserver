@@ -594,6 +594,11 @@ $eventGroups = [
     'Restores' => [
         'restore_completed' => 'Restore Completed',
         'restore_failed' => 'Restore Failed',
+        'restore_check_passed' => 'Restore Check Passed',
+        'restore_check_warning' => 'Restore Check Warnings',
+        'restore_check_failed' => 'Restore Check Failed',
+        'restore_check_overdue' => 'Restore Check Overdue',
+        'restore_check_cleanup_failed' => 'Restore Check Cleanup Failed',
     ],
     'Clients' => [
         'agent_offline' => 'Client Offline',
@@ -626,13 +631,18 @@ $eventColors = [
     'agent_online' => 'success',
     'repo_compact_done' => 'success',
     's3_sync_done' => 'success',
+    'restore_check_passed' => 'success',
     // Failure events - red
     'backup_failed' => 'danger',
     'restore_failed' => 'danger',
     'repo_check_failed' => 'danger',
     's3_sync_failed' => 'danger',
+    'restore_check_failed' => 'danger',
+    'restore_check_cleanup_failed' => 'danger',
     // Warning events - orange/warning
     'backup_warning' => 'warning',
+    'restore_check_warning' => 'warning',
+    'restore_check_overdue' => 'warning',
     'agent_offline' => 'warning',
     'storage_low' => 'warning',
     'certificate_expiring' => 'warning',

@@ -510,5 +510,24 @@ class App
         $this->router->map('GET', '/clients/[i:id]/archive/[i:archive_id]/databases', 'ClientController@archiveDatabases');
         $this->router->map('POST', '/clients/[i:id]/download', 'ClientController@download');
         $this->router->map('POST', '/clients/[i:id]/download-databases', 'ClientController@downloadDatabases');
+
+        // Restore checks. Literal segments (new, runs) before [i:planId].
+        $this->router->map('GET', '/clients/[i:id]/restore-checks/new', 'RestoreCheckController@create');
+        $this->router->map('POST', '/clients/[i:id]/restore-checks', 'RestoreCheckController@store');
+        $this->router->map('GET', '/clients/[i:id]/restore-checks/runs/[i:runId]', 'RestoreCheckController@run');
+        $this->router->map('GET', '/clients/[i:id]/restore-checks/runs/[i:runId]/report.json', 'RestoreCheckController@reportJson');
+        $this->router->map('GET', '/clients/[i:id]/restore-checks/runs/[i:runId]/report', 'RestoreCheckController@reportPrint');
+        $this->router->map('GET', '/clients/[i:id]/restore-checks/[i:planId]', 'RestoreCheckController@show');
+        $this->router->map('GET', '/clients/[i:id]/restore-checks/[i:planId]/edit', 'RestoreCheckController@edit');
+        $this->router->map('POST', '/clients/[i:id]/restore-checks/[i:planId]/edit', 'RestoreCheckController@update');
+        $this->router->map('POST', '/clients/[i:id]/restore-checks/[i:planId]/enable', 'RestoreCheckController@enable');
+        $this->router->map('POST', '/clients/[i:id]/restore-checks/[i:planId]/disable', 'RestoreCheckController@disable');
+        $this->router->map('POST', '/clients/[i:id]/restore-checks/[i:planId]/delete', 'RestoreCheckController@delete');
+        $this->router->map('POST', '/clients/[i:id]/restore-checks/[i:planId]/run', 'RestoreCheckController@runNow');
+        // Admin view of all evidence, including runs whose client was deleted.
+        $this->router->map('GET', '/restore-checks', 'RestoreCheckController@adminIndex');
+        $this->router->map('GET', '/restore-checks/runs/[i:runId]', 'RestoreCheckController@adminRun');
+        $this->router->map('GET', '/restore-checks/runs/[i:runId]/report.json', 'RestoreCheckController@adminReportJson');
+        $this->router->map('GET', '/restore-checks/runs/[i:runId]/report', 'RestoreCheckController@adminReportPrint');
     }
 }

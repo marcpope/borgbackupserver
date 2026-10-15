@@ -26,7 +26,7 @@ class QueueManager
             . \BBS\Core\JobType::label($taskType) . ' is not available on it.';
     }
 
-    public const SERVER_SIDE_TYPES = ['prune', 'compact', 's3_sync', 's3_restore', 'repo_check', 'repo_repair', 'break_lock', 'catalog_sync', 'catalog_rebuild', 'catalog_rebuild_full', 'archive_delete', 'archive_lock'];
+    public const SERVER_SIDE_TYPES = ['prune', 'compact', 's3_sync', 's3_restore', 'repo_check', 'repo_repair', 'break_lock', 'catalog_sync', 'catalog_rebuild', 'catalog_rebuild_full', 'archive_delete', 'archive_lock', 'restore_check'];
 
     private Database $db;
     private int $maxQueue;
@@ -116,7 +116,7 @@ class QueueManager
         // jobs shouldn't block the entire queue).
         $activeCount = $this->db->count('backup_jobs',
             "status IN ('sent', 'running')
-             AND task_type NOT IN ('prune', 'compact', 's3_sync', 's3_restore', 'repo_check', 'repo_repair', 'break_lock', 'catalog_sync', 'catalog_rebuild', 'catalog_rebuild_full', 'archive_delete', 'archive_lock', 'update_borg', 'update_agent')
+             AND task_type NOT IN ('prune', 'compact', 's3_sync', 's3_restore', 'repo_check', 'repo_repair', 'break_lock', 'catalog_sync', 'catalog_rebuild', 'catalog_rebuild_full', 'archive_delete', 'archive_lock', 'restore_check', 'update_borg', 'update_agent')
              AND agent_id IN (SELECT id FROM agents WHERE status = 'online')"
         );
 
@@ -199,6 +199,14 @@ class QueueManager
         $s3Active = $s3Cap > 0 ? (int) $this->db->count('backup_jobs',
             "status IN ('sent', 'running') AND task_type IN ('s3_sync', 's3_restore')") : 0;
 
+        // Restore checks extract whole selections to the server's own disk,
+        // so they are capped too (default one at a time across the server),
+        // on top of the per-repository exclusion every job gets.
+        $rcSetting = $this->db->fetchOne("SELECT `value` FROM settings WHERE `key` = 'restore_check_max_concurrent'");
+        $rcCap = max(1, (int) ($rcSetting['value'] ?? 1));
+        $rcActive = (int) $this->db->count('backup_jobs',
+            "status IN ('sent', 'running') AND task_type = 'restore_check'");
+
         // Get agents that currently have a backup/restore running (for management task gating)
         $busyAgents = $this->db->fetchAll(
             "SELECT DISTINCT agent_id FROM backup_jobs
@@ -226,6 +234,9 @@ class QueueManager
             // `continue`, not `break`: a queue full of syncs must not stop a
             // backup or a prune behind them from being promoted.
             if ($s3Cap > 0 && $s3Active >= $s3Cap && in_array($job['task_type'], $s3Types, true)) {
+                continue;
+            }
+            if ($job['task_type'] === 'restore_check' && $rcActive >= $rcCap) {
                 continue;
             }
 
@@ -451,7 +462,7 @@ class QueueManager
                         'message' => "Plugins: " . implode(', ', $pluginSlugs),
                     ]);
                 }
-            } elseif (in_array($job['task_type'], ['prune', 'compact', 's3_sync', 's3_restore', 'repo_check', 'repo_repair', 'break_lock', 'catalog_sync', 'catalog_rebuild', 'catalog_rebuild_full', 'archive_delete', 'archive_lock'])) {
+            } elseif (in_array($job['task_type'], ['prune', 'compact', 's3_sync', 's3_restore', 'repo_check', 'repo_repair', 'break_lock', 'catalog_sync', 'catalog_rebuild', 'catalog_rebuild_full', 'archive_delete', 'archive_lock', 'restore_check'])) {
                 // Server-side jobs — mark as sent, scheduler will execute them
                 $taskPayload = ['task' => $job['task_type'], 'server_side' => true, 'job_id' => $job['id']];
             } elseif ($job['task_type'] === 'restore') {
@@ -520,6 +531,9 @@ class QueueManager
                 if (in_array($job['task_type'], $s3Types, true)) {
                     $s3Active++;
                 }
+                if ($job['task_type'] === 'restore_check') {
+                    $rcActive++;
+                }
 
                 // Mark this repo and plan as busy for remaining iterations
                 if ($job['repository_id']) {
@@ -566,7 +580,7 @@ class QueueManager
             LEFT JOIN agents a ON a.id = bj.agent_id
             WHERE bj.agent_id = ?
               AND bj.status = 'sent'
-              AND bj.task_type NOT IN ('prune', 'compact', 's3_sync', 's3_restore', 'catalog_sync', 'catalog_rebuild', 'catalog_rebuild_full')
+              AND bj.task_type NOT IN ('prune', 'compact', 's3_sync', 's3_restore', 'catalog_sync', 'catalog_rebuild', 'catalog_rebuild_full', 'restore_check')
             ORDER BY bj.queued_at ASC
         ", [$agentId]);
 
@@ -778,7 +792,7 @@ class QueueManager
             LEFT JOIN agents a ON a.id = bj.agent_id
             LEFT JOIN remote_ssh_configs rsc ON rsc.id = r.remote_ssh_config_id
             WHERE bj.status = 'sent'
-              AND bj.task_type IN ('prune', 'compact', 's3_sync', 's3_restore', 'repo_check', 'repo_repair', 'break_lock', 'catalog_sync', 'catalog_rebuild', 'catalog_rebuild_full', 'archive_delete', 'archive_lock')
+              AND bj.task_type IN ('prune', 'compact', 's3_sync', 's3_restore', 'repo_check', 'repo_repair', 'break_lock', 'catalog_sync', 'catalog_rebuild', 'catalog_rebuild_full', 'archive_delete', 'archive_lock', 'restore_check')
             ORDER BY bj.queued_at ASC
         ");
     }

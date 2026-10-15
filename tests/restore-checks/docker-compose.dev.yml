@@ -1,0 +1,26 @@
+# Disposable development stack for the restore check tests.
+#
+# Builds the image from this checkout (the main docker-compose.yml runs the
+# published image, so it would not test local changes) and keeps its own
+# project name, container, ports and volume so it never touches a real
+# installation. Remove everything with:
+#   docker compose -p bbs-rc-dev -f tests/restore-checks/docker-compose.dev.yml down -v
+name: bbs-rc-dev
+services:
+  bbs:
+    build:
+      context: ../..
+    image: bbs-dev:restore-checks
+    container_name: bbs-rc-dev
+    ports:
+      - "127.0.0.1:18080:80"
+      - "127.0.0.1:12222:22"
+    environment:
+      - APP_URL=http://localhost:18080
+      - SSH_PORT=12222
+      - WEB_PORT=18080
+      - ADMIN_PASS=rc-dev-admin-pass
+    volumes:
+      - bbs-rc-dev-data:/var/bbs
+volumes:
+  bbs-rc-dev-data:

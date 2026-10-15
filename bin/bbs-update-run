@@ -242,6 +242,13 @@ fi
 mkdir -p /var/bbs/tmp
 chmod 1777 /var/bbs/tmp 2>/dev/null || true
 
+# Restore check staging (root-owned; the helper creates per-run directories).
+if [ ! -L /var/bbs/restore-checks ]; then
+    mkdir -p /var/bbs/restore-checks
+    chown root:root /var/bbs/restore-checks
+    chmod 755 /var/bbs/restore-checks
+fi
+
 # Apache systemd override for hardened units (Ubuntu 26.04+): the stock
 # apache2.service hides /etc/sudoers and mounts /etc read-only, breaking the
 # sudo -> bbs-ssh-helper provisioning flow (#368). Same drop-in bbs-install

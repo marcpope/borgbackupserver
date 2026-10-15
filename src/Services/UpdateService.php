@@ -260,7 +260,7 @@ class UpdateService
                    'prune', 'compact', 's3_sync', 's3_restore',
                    'repo_check', 'repo_repair', 'break_lock',
                    'catalog_sync', 'catalog_rebuild', 'catalog_rebuild_full',
-                   'archive_delete', 'archive_lock')
+                   'archive_delete', 'archive_lock', 'restore_check')
                AND (agent_id IS NULL
                     OR agent_id IN (SELECT id FROM agents WHERE status = 'online'))"
         )['cnt'] ?? 0);

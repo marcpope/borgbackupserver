@@ -161,7 +161,7 @@ $staleJobs = $db->fetchAll("
            OR a.last_heartbeat < DATE_SUB(NOW(), INTERVAL COALESCE(cp.job_offline_grace_minutes, {$graceMinutes}) MINUTE))
       AND (bj.last_progress_at IS NULL
            OR bj.last_progress_at < DATE_SUB(NOW(), INTERVAL COALESCE(cp.job_offline_grace_minutes, {$graceMinutes}) MINUTE))
-      AND bj.task_type NOT IN ('prune', 'compact', 's3_sync', 's3_restore', 'repo_check', 'repo_repair', 'break_lock', 'catalog_sync', 'catalog_rebuild', 'catalog_rebuild_full', 'archive_delete', 'archive_lock', 'update_borg', 'update_agent')
+      AND bj.task_type NOT IN ('prune', 'compact', 's3_sync', 's3_restore', 'repo_check', 'repo_repair', 'break_lock', 'catalog_sync', 'catalog_rebuild', 'catalog_rebuild_full', 'archive_delete', 'archive_lock', 'restore_check', 'update_borg', 'update_agent')
 ");
 
 // Auto-retry settings (#249). Only kicks in for offline-induced backup
@@ -284,7 +284,7 @@ $zombieJobs = $db->fetchAll("
     JOIN agents a ON a.id = bj.agent_id
     WHERE bj.status IN ('running', 'sent')
       AND a.status = 'online'
-      AND bj.task_type NOT IN ('prune', 'compact', 's3_sync', 's3_restore', 'repo_check', 'repo_repair', 'break_lock', 'catalog_sync', 'catalog_rebuild', 'catalog_rebuild_full', 'archive_delete', 'archive_lock')
+      AND bj.task_type NOT IN ('prune', 'compact', 's3_sync', 's3_restore', 'repo_check', 'repo_repair', 'break_lock', 'catalog_sync', 'catalog_rebuild', 'catalog_rebuild_full', 'archive_delete', 'archive_lock', 'restore_check')
       AND bj.queued_at < DATE_SUB(NOW(), INTERVAL 24 HOUR)
       AND (bj.last_progress_at IS NULL OR bj.last_progress_at < DATE_SUB(NOW(), INTERVAL 60 MINUTE))
 ");
@@ -423,7 +423,7 @@ $orphanedServerJobs = $db->fetchAll("
       AND worker_host = ?
       AND task_type IN ('prune', 'compact', 's3_sync', 's3_restore', 'repo_check', 'repo_repair',
                         'break_lock', 'catalog_sync', 'catalog_rebuild', 'catalog_rebuild_full',
-                        'archive_delete', 'archive_lock')
+                        'archive_delete', 'archive_lock', 'restore_check')
       -- A grace period so a worker that has just claimed its job and not yet
       -- been seen by /proc is never mistaken for a dead one.
       AND started_at < DATE_SUB(NOW(), INTERVAL 2 MINUTE)
@@ -500,6 +500,25 @@ $created = $scheduler->run();
 
 foreach ($created as $job) {
     echo date('Y-m-d H:i:s') . " Queued: {$job['plan']} (job #{$job['job_id']}, agent #{$job['agent_id']})\n";
+}
+
+// Step 3a: Restore checks — queue due plans, close runs a dead worker left,
+// finish failed cleanups, and (hourly) alert on overdue plans. Each part is
+// isolated so a fault here never stops the rest of the scheduling pass.
+try {
+    $rcPlans = new \BBS\Services\RestoreCheckPlanService();
+    foreach ($rcPlans->tick() as $line) {
+        echo date('Y-m-d H:i:s') . " {$line}\n";
+    }
+    $rcRunner = new \BBS\Services\RestoreCheckRunner();
+    foreach ($rcRunner->reconcile((int) date('i') % 10 === 0) as $line) {
+        echo date('Y-m-d H:i:s') . " {$line}\n";
+    }
+    if ((int) date('i') === 5) {
+        $rcPlans->checkOverdue();
+    }
+} catch (\Throwable $e) {
+    echo date('Y-m-d H:i:s') . " Restore checks: " . $e->getMessage() . "\n";
 }
 
 // Step 3b: Auto-queue catalog rebuilds for repos with unindexed archives
@@ -657,6 +676,17 @@ foreach ($serverJobs as $sj) {
     }
 
     echo date('Y-m-d H:i:s') . " Executing server-side: job #{$sj['id']} ({$sj['task_type']})\n";
+
+    // Restore checks own their whole lifecycle — staging, borg, validation,
+    // cleanup and the job's final status — in RestoreCheckRunner.
+    if ($sj['task_type'] === 'restore_check') {
+        try {
+            (new \BBS\Services\RestoreCheckRunner())->executeJob((int) $sj['id']);
+        } catch (\Throwable $e) {
+            echo date('Y-m-d H:i:s') . " Restore check job #{$sj['id']} error: " . $e->getMessage() . "\n";
+        }
+        continue;
+    }
 
     // S3 sync — uses rclone, not borg (skip for remote SSH repos — already offsite)
     if ($sj['task_type'] === 's3_sync') {
@@ -2983,6 +3013,18 @@ if (!$lastJobCleanupTime || strtotime($lastJobCleanupTime) < time() - 86400) {
     $count = $deleted->rowCount();
     if ($count > 0) {
         echo date('Y-m-d H:i:s') . " Job cleanup: removed {$count} jobs older than 30 days\n";
+    }
+
+    // Restore check evidence has its own retention (restore_check_evidence_days,
+    // default 365); the job rows it pointed at are gone by now, which it
+    // survives through its own snapshots.
+    try {
+        $purgedRuns = (new \BBS\Services\RestoreCheckRunner())->purgeEvidence();
+        if ($purgedRuns > 0) {
+            echo date('Y-m-d H:i:s') . " Restore check evidence: removed {$purgedRuns} runs past retention\n";
+        }
+    } catch (\Throwable $e) {
+        echo date('Y-m-d H:i:s') . " Restore check evidence purge failed: " . $e->getMessage() . "\n";
     }
 
     $db->query(

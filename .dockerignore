@@ -14,3 +14,4 @@ docker-compose.yml
 README.md
 LICENSE
 docs/
+tests
