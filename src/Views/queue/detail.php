@@ -36,7 +36,7 @@ $isActive = in_array($job['status'], ['queued', 'sent', 'running']);
 // Check and archive delete jobs report borg's own progress (phase text and
 // counts, not files and bytes).
 $isCheckJob = in_array($job['task_type'], ['repo_check', 'repo_repair', 'archive_delete'], true);
-$isServerSide = $isCheckJob || in_array($job['task_type'], ['prune', 'compact', 's3_sync', 's3_restore', 'catalog_sync', 'catalog_rebuild', 'catalog_rebuild_full', 'archive_lock']);
+$isServerSide = $isCheckJob || in_array($job['task_type'], ['prune', 'compact', 's3_sync', 's3_restore', 'catalog_sync', 'catalog_rebuild', 'catalog_rebuild_full', 'archive_lock', 'restore_check']);
 $taskLabel = \BBS\Core\JobType::label($job['task_type']);
 ?>
 
@@ -380,9 +380,16 @@ $taskLabel = \BBS\Core\JobType::label($job['task_type']);
                                 'update_borg' => 'arrow-up-circle',
                                 's3_sync' => 'cloud-upload',
                                 's3_restore' => 'cloud-download',
+                                'restore_check' => 'clipboard-check',
                                 default => 'gear',
                             } ?> me-1"></i><?= htmlspecialchars($taskLabel) ?></td>
                         </tr>
+                        <?php if (!empty($restoreCheckRun) && !empty($restoreCheckRun['agent_id'])): ?>
+                        <tr>
+                            <td class="text-muted fw-semibold ps-3">Evidence</td>
+                            <td><a href="/clients/<?= (int) $restoreCheckRun['agent_id'] ?>/restore-checks/runs/<?= (int) $restoreCheckRun['id'] ?>"><i class="bi bi-clipboard-check me-1"></i>Restore check run #<?= (int) $restoreCheckRun['id'] ?></a></td>
+                        </tr>
+                        <?php endif; ?>
                         <tr>
                             <td class="text-muted fw-semibold ps-3">Repository</td>
                             <td><?= htmlspecialchars($job['repo_name'] ?? '--') ?></td>
@@ -694,7 +701,7 @@ if ($job['task_type'] === 'backup_dry_run' && !empty($job['task_result'])) {
         const container = document.getElementById('progress-section');
         if (!container) return;
 
-        const isServerSide = ['prune','compact','s3_sync','s3_restore','repo_check','repo_repair','break_lock','catalog_sync','catalog_rebuild','catalog_rebuild_full','archive_delete','archive_lock'].includes(job.task_type);
+        const isServerSide = ['prune','compact','s3_sync','s3_restore','repo_check','repo_repair','break_lock','catalog_sync','catalog_rebuild','catalog_rebuild_full','archive_delete','archive_lock','restore_check'].includes(job.task_type);
         const pct = (job.files_total > 0 && job.files_processed > 0) ? Math.round((job.files_processed / job.files_total) * 100) : 0;
         const isJobActive = ['queued','sent','running'].includes(job.status);
 

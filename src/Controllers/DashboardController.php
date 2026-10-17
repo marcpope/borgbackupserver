@@ -19,6 +19,7 @@ class DashboardController extends Controller
             'check', 'repo_check', 'repo_repair', 'break_lock',
             'catalog_sync', 'catalog_rebuild', 'catalog_rebuild_full',
             'archive_delete', 'archive_lock', 'update_borg', 'update_agent', 'plugin_test', 'plugin_post',
+            'restore_check',
         ],
     ];
 

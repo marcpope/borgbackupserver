@@ -48,6 +48,12 @@ class PushService
         // dozens of pushes, a single home server is one welcome "it ran".
         'backup_completed' => false,
         'agent_offline'    => true,
+        // Restore checks: failures and stale evidence, not routine passes.
+        'restore_check_failed' => true,
+        'restore_check_overdue' => true,
+        'restore_check_cleanup_failed' => true,
+        'restore_check_warning' => false,
+        'restore_check_passed' => false,
         'storage_low'      => true,
         'missed_schedule'  => false,
     ];

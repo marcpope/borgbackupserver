@@ -939,6 +939,7 @@ $dfFix = function (string $s): string {
                             's3_restore'      => 'bi-cloud-download text-info',
                             'catalog_sync'    => 'bi-list-ul text-success',
                             'catalog_rebuild' => 'bi-list-ul text-success',
+                            'restore_check'   => 'bi-clipboard-check text-primary',
                         ];
                     ?>
                     <?php foreach ($recentJobs as $j): ?>
@@ -1464,6 +1465,7 @@ document.addEventListener('DOMContentLoaded', function () {
             's3_restore':      'bi-cloud-download text-info',
             'catalog_sync':    'bi-list-ul text-success',
             'catalog_rebuild': 'bi-list-ul text-success',
+            'restore_check':   'bi-clipboard-check text-primary',
         };
 
         function renderRows(jobs) {

@@ -2125,6 +2125,254 @@ SSHEOF
         exit $?
         ;;
 
+    restore-check)
+        # Scheduled restore checks: private staging, borg as the repository's
+        # user, and deletion of exactly one run directory.
+        #
+        # Usage:
+        #   restore-check prepare <token> <owner>
+        #   restore-check borg <token> <username> <archives|items|extract> <lock_wait> <timeout> <repo[::archive]> [pp:path...]
+        #       (passphrase on the first line of stdin)
+        #   restore-check grant-read <token>
+        #   restore-check abort <token>
+        #   restore-check busy <token>
+        #   restore-check cleanup <token>
+        #   restore-check list-runs
+        #
+        # Each run lives in <root>/<token>: a root-owned directory holding a
+        # root-owned marker and data/, the only place borg may write. Archive
+        # contents land in data/ and can never create or replace the marker,
+        # and every operation here is confined to the one directory its token
+        # names. The root is fixed, not a parameter: an operator who wants a
+        # separate filesystem mounts it at /var/bbs/restore-checks.
+        #
+        # /var/bbs belongs to www-data, so www-data can rename the root and
+        # put a symlink in its place at any moment. The root's name is
+        # therefore used once, by rc_root, which changes into the real
+        # directory and checks where it landed. Every later path is relative
+        # to that working directory ($TOKEN, $TOKEN/data), which a rename
+        # cannot redirect; inside a root-owned 755 directory nobody else can
+        # replace those names either. RUN and DATA are absolute only to be
+        # compared with the (always resolved) working directories of processes.
+        RC_ROOT="$(readlink -f /var/bbs)/restore-checks"
+        OP="${2:-}"
+        TOKEN="${3:-}"
+
+        rc_fail() { echo "Error: $*" >&2; exit 2; }
+
+        # Enter the staging root and prove it is the real one: physically
+        # resolved to the expected path, owned by root, writable by root only.
+        rc_root() {
+            if [ ! -e "$RC_ROOT" ] && [ ! -L "$RC_ROOT" ]; then
+                mkdir -m 755 "$RC_ROOT" || rc_fail "cannot create $RC_ROOT"
+                chown -h root:root "$RC_ROOT"
+            fi
+            cd -P -- "$RC_ROOT" 2>/dev/null || rc_fail "$RC_ROOT is not accessible"
+            [ "$(pwd -P)" = "$RC_ROOT" ] || rc_fail "$RC_ROOT is not a plain directory"
+            [ "$(stat -c %u .)" = "0" ] || rc_fail "$RC_ROOT is not owned by root"
+            [ $(( 0$(stat -c %a .) & 022 )) -eq 0 ] || rc_fail "$RC_ROOT is writable by group or others"
+        }
+
+        # A run directory created by prepare: real directory, root-owned,
+        # with a root-owned marker naming this same token.
+        rc_run_dir() {
+            [[ "$TOKEN" =~ ^[0-9a-f]{32}$ ]] || rc_fail "invalid run token"
+            rc_root
+            RUN="$RC_ROOT/$TOKEN"
+            DATA="$RUN/data"
+            MARKER="$TOKEN/.bbs-restore-check"
+            [ -d "$TOKEN" ] && [ ! -L "$TOKEN" ] || rc_fail "run directory does not exist"
+            [ "$(stat -c %u "$TOKEN")" = "0" ] || rc_fail "run directory is not owned by root"
+            [ -f "$MARKER" ] && [ ! -L "$MARKER" ] || rc_fail "run marker is missing"
+            [ "$(stat -c %u "$MARKER")" = "0" ] || rc_fail "run marker is not owned by root"
+            read -r MARKER_TOKEN RUN_OWNER _ < "$MARKER" || true
+            [ "$MARKER_TOKEN" = "$TOKEN" ] || rc_fail "run marker does not match token"
+            [[ "$RUN_OWNER" =~ ^(bbs-[a-z0-9_-]+|www-data)$ ]] || rc_fail "run marker names an invalid owner"
+        }
+
+        rc_data_dir() {
+            [ -d "$TOKEN/data" ] && [ ! -L "$TOKEN/data" ] || rc_fail "run data directory is missing"
+        }
+
+        # PIDs of processes working inside a run: their cwd is the run
+        # directory or below. The cwd is set by prepare's unpredictable
+        # path, so a reused PID never matches, and borg's ssh child (remote
+        # repositories) inherits it too.
+        rc_pids() {
+            local P CWD
+            for P in /proc/[0-9]*; do
+                CWD=$(readlink "$P/cwd" 2>/dev/null) || continue
+                case "$CWD" in
+                    "$RUN"|"$RUN"/*) echo "${P#/proc/}" ;;
+                esac
+            done
+        }
+
+        rc_as_owner() {
+            local GID
+            GID=$(id -g "$RUN_OWNER") || rc_fail "unknown user $RUN_OWNER"
+            setpriv --reuid="$RUN_OWNER" --regid="$GID" --init-groups -- "$@"
+        }
+
+        case "$OP" in
+            prepare)
+                OWNER="${4:-}"
+                [[ "$TOKEN" =~ ^[0-9a-f]{32}$ ]] || rc_fail "invalid run token"
+                [[ "$OWNER" =~ ^(bbs-[a-z0-9_-]+|www-data)$ ]] || rc_fail "owner must be a bbs-* user or www-data"
+                id "$OWNER" >/dev/null 2>&1 || rc_fail "unknown user $OWNER"
+                rc_root
+                # mkdir fails if the name exists, so everything after acts on
+                # the directory just created here.
+                mkdir -m 755 -- "$TOKEN" 2>/dev/null || rc_fail "run directory already exists"
+                chown -h root:root "$TOKEN"
+                ( umask 022; printf '%s %s %s\n' "$TOKEN" "$OWNER" "$(date +%s)" > "$TOKEN/.bbs-restore-check" )
+                mkdir -m 2750 -- "$TOKEN/data"
+                chown -h "$OWNER":www-data "$TOKEN/data"
+                chmod 2750 "$TOKEN/data"
+                echo "$RC_ROOT/$TOKEN/data"
+                ;;
+
+            borg)
+                USERNAME="${4:-}"
+                BORG_OP="${5:-}"
+                LOCK_WAIT="${6:-}"
+                TIME_LIMIT="${7:-}"
+                TARGET="${8:-}"
+                shift 8 2>/dev/null || rc_fail "missing arguments"
+                IFS= read -r PASSPHRASE || PASSPHRASE=""
+
+                [[ "$USERNAME" =~ ^bbs-[a-z0-9_-]+$ ]] || rc_fail "username must match bbs-[a-z0-9_-]+"
+                [[ "$LOCK_WAIT" =~ ^[0-9]{1,5}$ ]] || rc_fail "invalid lock wait"
+                [[ "$TIME_LIMIT" =~ ^[0-9]{1,6}$ ]] && [ "$TIME_LIMIT" -gt 0 ] || rc_fail "invalid time limit"
+                rc_run_dir
+                [ "$RUN_OWNER" = "$USERNAME" ] || rc_fail "run belongs to another user"
+                rc_data_dir
+
+                # The repository must be one BBS manages, and the target one
+                # argument that cannot be read as an option.
+                REPO_PART="${TARGET%%::*}"
+                [[ "$TARGET" != -* ]] || rc_fail "invalid target"
+                [[ "$TARGET" != *$'\n'* ]] || rc_fail "invalid target"
+                is_allowed_path "$REPO_PART" || rc_fail "repository path is not under an allowed storage location"
+                case "$BORG_OP" in
+                    archives)
+                        [ $# -eq 0 ] || rc_fail "archives takes no paths"
+                        [[ "$TARGET" != *::* ]] || rc_fail "archives takes a repository, not an archive"
+                        ;;
+                    items|extract)
+                        [[ "$TARGET" == *::?* ]] || rc_fail "target must be repo::archive"
+                        ;;
+                    *) rc_fail "unknown borg operation" ;;
+                esac
+                # Only literal path-prefix patterns: borg would read sh:, re:
+                # or fm: in a path as a pattern and select more than asked.
+                for P in "$@"; do
+                    [[ "$P" == pp:?* ]] || rc_fail "paths must be pp: patterns"
+                    [[ "$P" != *[[:cntrl:]]* ]] || rc_fail "control characters in path"
+                done
+
+                # The user's borg cache: a real directory, never a symlink.
+                BORG_DIR="/var/bbs/cache/$USERNAME"
+                [ -L "$BORG_DIR" ] && rc_fail "$BORG_DIR is a symlink"
+                [ -d "$BORG_DIR" ] || mkdir -m 700 -- "$BORG_DIR" 2>/dev/null || [ -d "$BORG_DIR" ] || rc_fail "cannot create $BORG_DIR"
+                [ -L "$BORG_DIR" ] && rc_fail "$BORG_DIR is a symlink"
+                chown -h "$USERNAME":"$USERNAME" "$BORG_DIR"
+
+                case "$BORG_OP" in
+                    archives) BORG_ARGS=(list --lock-wait "$LOCK_WAIT" --json -- "$TARGET") ;;
+                    items)    BORG_ARGS=(list --lock-wait "$LOCK_WAIT" --json-lines -- "$TARGET" "$@") ;;
+                    extract)  BORG_ARGS=(extract --lock-wait "$LOCK_WAIT" --log-json --progress --list -- "$TARGET" "$@") ;;
+                esac
+
+                # Passphrase travels in the environment, never argv. timeout
+                # bounds the run even if the PHP worker that started it dies.
+                cd -- "$TOKEN/data"
+                [ "$(pwd -P)" = "$DATA" ] || rc_fail "run data directory moved"
+                export BORG_PASSPHRASE="$PASSPHRASE"
+                set +e
+                timeout -k 30 "$TIME_LIMIT" setpriv --reuid="$USERNAME" --regid="$(id -g "$USERNAME")" --init-groups -- \
+                    env HOME="$BORG_DIR" BORG_BASE_DIR="$BORG_DIR" \
+                        BORG_UNKNOWN_UNENCRYPTED_REPO_ACCESS_IS_OK=yes \
+                        BORG_RELOCATED_REPO_ACCESS_IS_OK=yes \
+                        borg "${BORG_ARGS[@]}"
+                EXIT_CODE=$?
+                set -e
+                exit $EXIT_CODE
+                ;;
+
+            grant-read)
+                # Let www-data read what was extracted, as the run's owner:
+                # archives carry their own modes and groups (a 000 file, a
+                # directory nobody may enter). Neither command follows
+                # symlinks met in the walk.
+                rc_run_dir
+                rc_data_dir
+                set +e
+                rc_as_owner chgrp -R -h www-data -- "$TOKEN/data" 2>/dev/null
+                rc_as_owner chmod -R u+rwX,g+rX,g-w,o-rwx,ug-s -- "$TOKEN/data" 2>/dev/null
+                set -e
+                # Report anything still unreadable rather than fail here; the
+                # validation step decides what that means for the result.
+                exit 0
+                ;;
+
+            abort)
+                rc_run_dir
+                PIDS=$(rc_pids)
+                [ -z "$PIDS" ] && { echo 0; exit 0; }
+                kill -TERM $PIDS 2>/dev/null || true
+                for _ in $(seq 1 20); do
+                    sleep 0.5
+                    PIDS=$(rc_pids)
+                    [ -z "$PIDS" ] && { echo 0; exit 0; }
+                done
+                kill -KILL $PIDS 2>/dev/null || true
+                sleep 1
+                PIDS=$(rc_pids)
+                echo "$(echo "$PIDS" | grep -c . || true)"
+                [ -z "$PIDS" ] || exit 3
+                ;;
+
+            busy)
+                rc_run_dir
+                rc_pids | grep -c . || true
+                ;;
+
+            cleanup)
+                rc_run_dir
+                [ -z "$(rc_pids)" ] || rc_fail "processes are still running in this run"
+                # Never delete into something mounted below the run: that is
+                # someone else's filesystem, not restored data.
+                if findmnt -rn -o TARGET | grep -qxF -e "$RUN" -e "$DATA" || \
+                   findmnt -rn -o TARGET | grep -qF "$RUN/"; then
+                    rc_fail "a filesystem is mounted inside the run directory"
+                fi
+                if [ -e "$TOKEN/data" ] || [ -L "$TOKEN/data" ]; then
+                    # rm does not follow symlinks; --one-file-system refuses to
+                    # cross into a mount that appeared after the check above.
+                    rm -rf --one-file-system -- "$TOKEN/data" || rc_fail "could not remove restored data"
+                fi
+                [ ! -e "$TOKEN/data" ] && [ ! -L "$TOKEN/data" ] || rc_fail "restored data is still present"
+                rm -f -- "$MARKER"
+                rmdir -- "$TOKEN" || rc_fail "run directory is not empty"
+                echo "removed"
+                ;;
+
+            list-runs)
+                rc_root
+                for D in *; do
+                    [[ "$D" =~ ^[0-9a-f]{32}$ ]] && [ -d "$D" ] && [ ! -L "$D" ] && echo "$D"
+                done
+                exit 0
+                ;;
+
+            *)
+                echo "Usage: bbs-ssh-helper restore-check <prepare|borg|grant-read|abort|busy|cleanup|list-runs> ..."
+                exit 1
+                ;;
+        esac
+        ;;
+
     *)
         # Self-maintaining action list — the old hardcoded usage string went
         # stale as subcommands were added, which made "unknown action" errors

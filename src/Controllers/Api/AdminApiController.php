@@ -4573,7 +4573,10 @@ class AdminApiController extends Controller
         if (!in_array($job['status'], ['queued', 'sent', 'running'])) {
             $this->json(['error' => 'Job cannot be cancelled (status: ' . $job['status'] . ')'], 409);
         }
-        if (!$this->apiHasPermission($ctx, \BBS\Services\PermissionService::TRIGGER_BACKUP, (int) $job['agent_id'])) {
+        $cancelPermission = $job['task_type'] === 'restore_check'
+            ? \BBS\Services\PermissionService::RESTORE
+            : \BBS\Services\PermissionService::TRIGGER_BACKUP;
+        if (!$this->apiHasPermission($ctx, $cancelPermission, (int) $job['agent_id'])) {
             $this->json(['error' => 'You do not have permission to cancel jobs on this client'], 403);
         }
 
@@ -4619,6 +4622,9 @@ class AdminApiController extends Controller
         }
         if (!$this->apiHasPermission($ctx, \BBS\Services\PermissionService::forTaskType((string) $job['task_type']), (int) $job['agent_id'])) {
             $this->json(['error' => 'You do not have permission to retry jobs on this client'], 403);
+        }
+        if ($job['task_type'] === 'restore_check') {
+            $this->json(['error' => 'Restore checks are re-run from the restore check itself, which records a new run.'], 409);
         }
 
         $newJobId = $this->db->insert('backup_jobs', [

@@ -782,9 +782,10 @@ class RemoteSshService
      * Returns process handle, pipes, and temp key path for cleanup.
      * Caller must fclose pipes, proc_close, and call cleanupStreamingProcess().
      *
+     * @param ?string $cwd Working directory for borg; extract writes into it.
      * @return array{proc: resource, pipes: array, key_file: string}|array{error: string}
      */
-    public function openBorgProcess(array $config, array $borgArgs, string $passphrase = ''): array
+    public function openBorgProcess(array $config, array $borgArgs, string $passphrase = '', ?string $cwd = null): array
     {
         if (($problem = self::configProblem($config) ?? self::borgArgsProblem($borgArgs)) !== null) {
             return ['error' => $problem];
@@ -819,7 +820,7 @@ class RemoteSshService
             0 => ['pipe', 'r'],
             1 => ['pipe', 'w'],
             2 => ['pipe', 'w'],
-        ], $pipes, null, $env);
+        ], $pipes, $cwd, $env);
 
         if (!is_resource($proc)) {
             $this->cleanupTempKey($keyFile);

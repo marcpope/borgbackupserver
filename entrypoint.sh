@@ -340,6 +340,9 @@ ensure_dir /var/bbs/home            www-data:www-data   755
 ensure_dir /var/bbs/cache           www-data:www-data   755
 ensure_dir /var/bbs/backups         www-data:www-data   750
 ensure_dir /var/bbs/tmp             www-data:www-data   1777
+# Restore check staging: root-owned; each run gets its own directory from
+# bbs-ssh-helper. Kept out of the www-data ownership repair below on purpose.
+ensure_dir /var/bbs/restore-checks  root:root           755
 
 # PHP sessions live in TMPDIR (/var/bbs/tmp), which is on the persisted
 # volume. If the app UID drifts across a container recreate, the session
