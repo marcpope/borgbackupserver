@@ -619,14 +619,24 @@ const serviceSchemas = {
         label: 'ntfy',
         fields: [
             { name: 'topic', label: 'Topic', type: 'text', required: true, placeholder: 'my-backup-alerts', width: 'col-md-6' },
-            { name: 'server', label: 'Server (optional)', type: 'text', placeholder: 'ntfy.sh', width: 'col-md-6' }
+            { name: 'server', label: 'Server (optional)', type: 'text', placeholder: 'ntfy.sh or https://ntfy.example.com', width: 'col-md-6' },
+            { name: 'token', label: 'Access Token (optional)', type: 'text', placeholder: 'tk_...', width: 'col-md-6' }
         ],
-        help: 'Subscribe to the topic in your ntfy app. Default server is ntfy.sh',
+        help: 'Subscribe to the topic in your ntfy app. Default server is ntfy.sh. Start a self-hosted server with https:// to reach it over HTTPS.',
         build: function(f) {
-            if (f.server && f.server !== 'ntfy.sh') {
-                return `ntfy://${f.server}/${f.topic || ''}`;
+            // A scheme typed into the server field picks ntfy or ntfys instead of
+            // ending up inside the URL as ntfy://https://...
+            const match = (f.server || '').trim().match(/^(?:(https?|ntfys?):\/\/)?(.*?)\/*$/i);
+            const secure = /^(https|ntfys)$/i.test(match[1] || '');
+            const server = match[2];
+            const token = (f.token || '').trim();
+            if (!token && !secure && (!server || server === 'ntfy.sh')) {
+                return `ntfy://${f.topic || ''}`;
             }
-            return `ntfy://${f.topic || ''}`;
+            // ntfy.sh is only served over HTTPS
+            const host = server || 'ntfy.sh';
+            const scheme = secure || host === 'ntfy.sh' ? 'ntfys' : 'ntfy';
+            return `${scheme}://${token ? token + '@' : ''}${host}/${f.topic || ''}`;
         }
     },
     gotify: {
