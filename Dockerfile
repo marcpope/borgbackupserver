@@ -1,5 +1,10 @@
 FROM php:8.4-apache
 
+# Refuse to build on a base older than 8.4.27, the release that fixes the
+# PHP2Shell RCEs (CVE-2026-109618, CVE-2026-109619). The 8.4-apache tag
+# floats, so this catches a stale cache or a mirror that hasn't caught up.
+RUN php -r 'if (version_compare(PHP_VERSION, "8.4.27", "<")) { fwrite(STDERR, "PHP " . PHP_VERSION . " is vulnerable to CVE-2026-109618/109619; need 8.4.27+\n"); exit(1); }'
+
 # Install system dependencies, apply security patches, and clean up in one layer.
 # dist-upgrade pulls kernel-abi and other fixes that plain upgrade skips — helps
 # reduce Docker Hub CVE scan counts.
