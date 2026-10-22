@@ -323,13 +323,7 @@ class QueueController extends Controller
                 $catalogPath = $jobAgent['ssh_home_dir']
                              . '/.catalog-logs/catalog-' . $id . '.jsonl';
                 if (file_exists($catalogPath)) {
-                    $lastLine = trim(shell_exec('tail -n 1 ' . escapeshellarg($catalogPath)) ?? '');
-                    if ($lastLine) {
-                        $entry = json_decode($lastLine, true);
-                        if ($entry && !empty($entry['path'])) {
-                            $currentFile = rtrim($entry['path'], '/');
-                        }
-                    }
+                    $currentFile = $this->currentCatalogFile($catalogPath);
                 }
             }
         }

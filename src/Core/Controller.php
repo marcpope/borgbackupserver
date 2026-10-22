@@ -561,6 +561,34 @@ class Controller
         $this->db->delete('rate_limits', 'ip_address = ? AND endpoint = ?', [$ip, $endpoint]);
     }
 
+    /**
+     * The path a running backup is on, from the end of its catalog log.
+     *
+     * The SSH gate writes the stream with `head -c`, which flushes in 4 KB
+     * blocks, so the file usually ends partway through a line. Use the last
+     * complete line instead of the last line (#546).
+     */
+    protected function currentCatalogFile(string $catalogPath): ?string
+    {
+        $fh = @fopen($catalogPath, 'rb');
+        if (!$fh) {
+            return null;
+        }
+        $size = (int) (fstat($fh)['size'] ?? 0);
+        $readBytes = min($size, 65536);
+        fseek($fh, $size - $readBytes);
+        $tail = $readBytes > 0 ? (string) fread($fh, $readBytes) : '';
+        fclose($fh);
+
+        foreach (array_reverse(explode("\n", $tail)) as $line) {
+            $entry = json_decode(trim($line), true);
+            if (is_array($entry) && !empty($entry['path'])) {
+                return rtrim($entry['path'], '/');
+            }
+        }
+        return null;
+    }
+
     protected function flash(string $type, string $message): void
     {
         $_SESSION['flash'] = ['type' => $type, 'message' => $message];

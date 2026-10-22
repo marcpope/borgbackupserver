@@ -38,6 +38,12 @@ $isActive = in_array($job['status'], ['queued', 'sent', 'running']);
 $isCheckJob = in_array($job['task_type'], ['repo_check', 'repo_repair', 'archive_delete'], true);
 $isServerSide = $isCheckJob || in_array($job['task_type'], ['prune', 'compact', 's3_sync', 's3_restore', 'catalog_sync', 'catalog_rebuild', 'catalog_rebuild_full', 'archive_lock']);
 $taskLabel = \BBS\Core\JobType::label($job['task_type']);
+// Restores report bytes but no file total, so fall back to the byte
+// percentage when there are no file counts to go on (#546).
+$byBytes = $pct === 0 && !$isCheckJob && $bytesPct > 0;
+if ($byBytes) {
+    $pct = $bytesPct;
+}
 ?>
 
 <style>
@@ -194,7 +200,7 @@ $taskLabel = \BBS\Core\JobType::label($job['task_type']);
             <div class="progress mb-1" style="height: 22px; background-color: rgba(255,255,255,0.15);">
                 <div class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar"
                      style="width: <?= $pct ?>%; background-color: #5b9bd5;" aria-valuenow="<?= $pct ?>" aria-valuemin="0" aria-valuemax="100">
-                    <?= number_format($job['files_processed']) ?> / <?= number_format($job['files_total']) ?><?= $isCheckJob ? '' : ' files' ?>
+                    <?= $byBytes ? formatBytes($job['bytes_processed']) . ' / ' . formatBytes($job['bytes_total']) : number_format($job['files_processed']) . ' / ' . number_format($job['files_total']) . ($isCheckJob ? '' : ' files') ?>
                 </div>
             </div>
             <div class="text-white-50 small text-truncate" id="currentFile" style="max-width: 100%;"></div>
@@ -695,7 +701,11 @@ if ($job['task_type'] === 'backup_dry_run' && !empty($job['task_result'])) {
         if (!container) return;
 
         const isServerSide = ['prune','compact','s3_sync','s3_restore','repo_check','repo_repair','break_lock','catalog_sync','catalog_rebuild','catalog_rebuild_full','archive_delete','archive_lock'].includes(job.task_type);
-        const pct = (job.files_total > 0 && job.files_processed > 0) ? Math.round((job.files_processed / job.files_total) * 100) : 0;
+        let pct = (job.files_total > 0 && job.files_processed > 0) ? Math.round((job.files_processed / job.files_total) * 100) : 0;
+        // Restores report bytes but no file total: use the byte percentage (#546)
+        const byBytes = pct === 0 && !['repo_check','repo_repair','archive_delete'].includes(job.task_type)
+            && job.bytes_total > 0 && job.bytes_processed > 0;
+        if (byBytes) pct = Math.round((job.bytes_processed / job.bytes_total) * 100);
         const isJobActive = ['queued','sent','running'].includes(job.status);
 
         if (job.status === 'completed') {
@@ -720,7 +730,9 @@ if ($job['task_type'] === 'backup_dry_run' && !empty($job['task_result'])) {
             var taskLabel = window.bbsTaskLabel(job.task_type || 'backup');
             var isCheckJob = ['repo_check','repo_repair','archive_delete'].includes(job.task_type);
             var headText = (isCheckJob && job.status_message) ? job.status_message : taskLabel + '... ' + pct + '%';
-            var barText = Number(job.files_processed).toLocaleString() + ' / ' + Number(job.files_total).toLocaleString() + (isCheckJob ? '' : ' files');
+            var barText = byBytes
+                ? fmtBytes(job.bytes_processed) + ' / ' + fmtBytes(job.bytes_total)
+                : Number(job.files_processed).toLocaleString() + ' / ' + Number(job.files_total).toLocaleString() + (isCheckJob ? '' : ' files');
             var bytesText = isCheckJob ? '' : fmtBytes(job.bytes_processed) + (job.bytes_total > 0 ? ' of ' + fmtBytes(job.bytes_total) : '') + ' processed';
             var currentFile = data.currentFile ? data.currentFile.replace(/\/+$/, '') : '';
             var fileHtml = currentFile ? '<div class="text-white-50 small text-truncate" style="max-width:100%;" title="' + esc(currentFile) + '">' + esc(currentFile) + '</div>' : '';

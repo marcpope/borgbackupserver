@@ -4553,13 +4553,7 @@ class AdminApiController extends Controller
             if ($jobAgent && !empty($jobAgent['ssh_home_dir'])) {
                 $catalogPath = $jobAgent['ssh_home_dir'] . '/.catalog-logs/catalog-' . $jobId . '.jsonl';
                 if (file_exists($catalogPath)) {
-                    $lastLine = trim(shell_exec('tail -n 1 ' . escapeshellarg($catalogPath)) ?? '');
-                    if ($lastLine) {
-                        $entry = json_decode($lastLine, true);
-                        if ($entry && !empty($entry['path'])) {
-                            $currentFile = rtrim($entry['path'], '/');
-                        }
-                    }
+                    $currentFile = $this->currentCatalogFile($catalogPath);
                 }
             }
         }
