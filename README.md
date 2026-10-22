@@ -48,6 +48,12 @@ Both installation paths are documented step by step on the Wiki — start there 
 
 ---
 
+## One-Click Deploy
+
+[![Deploy on RepoCloud](https://d16t0pc4846x52.cloudfront.net/deploylobe.svg)](https://repocloud.io/details/Borg%20Backup%20Server/)
+
+---
+
 ## 📱 BBS Manager is here
 
 **[BBS Manager](https://www.borgbackupserver.com/bbs-manager/) is now available on the Apple App Store** — manage your Borg Backup Server from your phone, with native push notifications for failed backups, server status, and more. It's an optional companion app; see the [announcement](https://github.com/marcpope/borgbackupserver/discussions/460) for details and how to connect it under **Settings → Push Service**. Update to the latest release for the best experience with the app.
