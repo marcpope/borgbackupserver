@@ -1179,14 +1179,31 @@ const serviceSchemas = {
         label: 'ntfy',
         fields: [
             { name: 'topic', label: 'Topic', type: 'text', required: true, placeholder: 'my-backup-alerts', width: 'col-md-6' },
-            { name: 'server', label: 'Server (optional)', type: 'text', placeholder: 'ntfy.sh', width: 'col-md-6' }
+            { name: 'server', label: 'Server (optional)', type: 'text', placeholder: 'ntfy.sh', width: 'col-md-6' },
+            { name: 'secure', label: 'Connection', type: 'select', width: 'col-md-6', options: [
+                { value: 'https', label: 'HTTPS' },
+                { value: 'http', label: 'HTTP' }
+            ]},
+            { name: 'token', label: 'Access token (optional)', type: 'password', placeholder: 'tk_...', width: 'col-md-6' }
         ],
-        help: 'Subscribe to the topic in your ntfy app. Default server is ntfy.sh',
+        help: 'Subscribe to the topic in your ntfy app. Leave Server empty for ntfy.sh. The access token is for servers or topics that need a login.',
         build: function(f) {
-            if (f.server && f.server !== 'ntfy.sh') {
-                return `ntfy://${f.server}/${f.topic || ''}`;
+            // Accept a pasted URL in Server: its scheme picks the connection (#550).
+            let server = (f.server || '').trim();
+            let secure = f.secure !== 'http';
+            const m = server.match(/^(https?|ntfys?):\/\//i);
+            if (m) {
+                secure = /^(https|ntfys)$/i.test(m[1]);
+                server = server.slice(m[0].length);
             }
-            return `ntfy://${f.topic || ''}`;
+            server = server.replace(/\/+$/, '');
+            const topic = f.topic || '';
+            const token = (f.token || '').trim();
+            const query = token ? `?token=${encodeURIComponent(token)}` : '';
+            if (server && server.toLowerCase() !== 'ntfy.sh') {
+                return `${secure ? 'ntfys' : 'ntfy'}://${server}/${topic}${query}`;
+            }
+            return `ntfy://${topic}${query}`;
         }
     },
     gotify: {
@@ -1383,7 +1400,7 @@ $appriseExamples = [
     ['Telegram', 'tgram://bot_token/chat_id[:thread]'],
     ['Slack',    'slack://tokenA/tokenB/tokenC'],
     ['Pushover', 'pover://user@token'],
-    ['ntfy',     'ntfy://topic'],
+    ['ntfy',     'ntfy://topic or ntfys://host/topic?token=tk_...'],
     ['Gotify',   'gotify://hostname/token'],
     ['Email',    'mailto://user:pass@smtp.example.com'],
     ['Webhook',  'json://your-webhook-url'],
