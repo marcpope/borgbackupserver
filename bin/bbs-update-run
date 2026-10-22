@@ -61,6 +61,26 @@ fi
 # 5. ClickHouse — ensure running and schema is current
 echo "[5/9] Checking ClickHouse..."
 if command -v clickhouse-server &>/dev/null; then
+    # Hold the packages at the installed version. Installs from before v2.66.0
+    # weren't held, so a routine `apt upgrade` pulled the latest ClickHouse,
+    # whose setup asks for a default-user password and locks BBS out (#554),
+    # or which may not run on older CPUs (#327). Holding doesn't change the
+    # installed version.
+    CH_PKGS=""
+    for pkg in clickhouse-common-static clickhouse-server clickhouse-client; do
+        case "$(dpkg-query -W -f='${Status}' "$pkg" 2>/dev/null || true)" in
+            *" ok installed") CH_PKGS="$CH_PKGS $pkg" ;;
+        esac
+    done
+    if [ -n "$CH_PKGS" ]; then
+        CH_UNHELD=$(comm -23 <(printf '%s\n' $CH_PKGS | sort) <(apt-mark showhold 2>/dev/null | sort))
+        if [ -n "$CH_UNHELD" ]; then
+            apt-mark hold $CH_UNHELD >/dev/null 2>&1 \
+                && echo "  Held ClickHouse packages at their installed version so apt upgrade leaves them alone" \
+                || true
+        fi
+    fi
+
     # Ensure config override is in place
     mkdir -p /etc/clickhouse-server/config.d
     CH_OVERRIDE_CHANGED=0
@@ -98,7 +118,15 @@ if command -v clickhouse-server &>/dev/null; then
     # Ensure database and tables exist (idempotent)
     clickhouse-client --query "CREATE DATABASE IF NOT EXISTS bbs" 2>/dev/null || true
     clickhouse-client -d bbs --multiquery < "$BBS_DIR/schema-clickhouse.sql" 2>/dev/null || true
-    echo "  OK"
+    # BBS connects as the passwordless default user. A ClickHouse package
+    # upgrade can set a password, and then every catalog import fails.
+    if clickhouse-client --query "SELECT 1" 2>&1 | grep -qE "REQUIRED_PASSWORD|AUTHENTICATION_FAILED|Authentication failed"; then
+        echo "  WARNING: ClickHouse rejects the default user, so file catalogs can't be imported."
+        echo "  A ClickHouse upgrade probably set a password. To remove it:"
+        echo "    rm /etc/clickhouse-server/users.d/default-password.xml && systemctl restart clickhouse-server"
+    else
+        echo "  OK"
+    fi
 else
     echo "  Warning: ClickHouse not installed (catalog features unavailable)"
     echo "  Run the installer to set up ClickHouse, or reinstall BBS."
