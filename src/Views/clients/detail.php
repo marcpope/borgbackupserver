@@ -3587,13 +3587,16 @@ FLUSH PRIVILEGES;</pre>
 GRANT CONNECT ON DATABASE mydb TO <span id="pgUser1b">bbs_backup</span>;
 GRANT USAGE ON SCHEMA public TO <span id="pgUser1c">bbs_backup</span>;
 GRANT SELECT ON ALL TABLES IN SCHEMA public TO <span id="pgUser1d">bbs_backup</span>;
-ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO <span id="pgUser1e">bbs_backup</span>;</pre>
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO <span id="pgUser1e">bbs_backup</span>;
+GRANT pg_read_all_data TO <span id="pgUser1f">bbs_backup</span>;  -- PostgreSQL 14+</pre>
+                                        <p class="text-muted mb-2">pg_dump locks every table it dumps, so it needs read access to all of them, including tables outside the <code>public</code> schema and ones created after the grant. <code>pg_read_all_data</code> covers that on PostgreSQL 14 and later.</p>
                                         <strong>Backup + Restore</strong>
                                         <pre class="bg-body-secondary border rounded p-2 mt-1 mb-0" style="font-size:0.78rem;white-space:pre-wrap;">CREATE ROLE <span id="pgUser2">bbs_backup</span> WITH LOGIN PASSWORD '<span id="pgPass2"><?= htmlspecialchars($randomPass) ?></span>';
 GRANT CONNECT ON DATABASE mydb TO <span id="pgUser2b">bbs_backup</span>;
 GRANT USAGE ON SCHEMA public TO <span id="pgUser2c">bbs_backup</span>;
 GRANT SELECT ON ALL TABLES IN SCHEMA public TO <span id="pgUser2d">bbs_backup</span>;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO <span id="pgUser2e">bbs_backup</span>;
+GRANT pg_read_all_data TO <span id="pgUser2h">bbs_backup</span>;  -- PostgreSQL 14+
 ALTER ROLE <span id="pgUser2f">bbs_backup</span> CREATEDB;
 GRANT ALL PRIVILEGES ON DATABASE mydb TO <span id="pgUser2g">bbs_backup</span>;</pre>
                                     </div>
@@ -3718,7 +3721,7 @@ GRANT ALL PRIVILEGES ON DATABASE mydb TO <span id="pgUser2g">bbs_backup</span>;<
         const u = document.getElementById('newPgUser'), p = document.getElementById('newPgPass');
         if (!u || !p) return;
         function update() {
-            ['pgUser1','pgUser1b','pgUser1c','pgUser1d','pgUser1e','pgUser2','pgUser2b','pgUser2c','pgUser2d','pgUser2e','pgUser2f','pgUser2g'].forEach(id => { const el = document.getElementById(id); if (el) el.textContent = u.value || 'bbs_backup'; });
+            ['pgUser1','pgUser1b','pgUser1c','pgUser1d','pgUser1e','pgUser1f','pgUser2','pgUser2b','pgUser2c','pgUser2d','pgUser2e','pgUser2f','pgUser2g','pgUser2h'].forEach(id => { const el = document.getElementById(id); if (el) el.textContent = u.value || 'bbs_backup'; });
             ['pgPass1','pgPass2'].forEach(id => { const el = document.getElementById(id); if (el) el.textContent = p.value || 'PASSWORD'; });
         }
         u.addEventListener('input', update); p.addEventListener('input', update);

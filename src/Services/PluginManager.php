@@ -1006,7 +1006,10 @@ class PluginManager
                 . "GRANT CONNECT ON DATABASE mydb TO backup_user;\n"
                 . "GRANT USAGE ON SCHEMA public TO backup_user;\n"
                 . "GRANT SELECT ON ALL TABLES IN SCHEMA public TO backup_user;\n"
-                . "ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO backup_user;\n\n"
+                . "ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO backup_user;\n"
+                . "-- PostgreSQL 14+: read access to every table, including ones in\n"
+                . "-- other schemas or created later, so pg_dump can lock them.\n"
+                . "GRANT pg_read_all_data TO backup_user;\n\n"
                 . "-- For database restore via GUI (requires additional privileges):\n"
                 . "ALTER ROLE backup_user CREATEDB;\n"
                 . "GRANT ALL PRIVILEGES ON DATABASE mydb TO backup_user;",
