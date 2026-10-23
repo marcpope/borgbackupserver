@@ -365,7 +365,7 @@ class ClientController extends Controller
         ", [$id]);
 
         $plans = $this->db->fetchAll("
-            SELECT bp.*, r.name as repo_name, r.storage_type as repo_storage_type, s.frequency, s.times, s.day_of_week, s.day_of_month, s.enabled as schedule_enabled, s.id as schedule_id, s.next_run
+            SELECT bp.*, r.name as repo_name, r.storage_type as repo_storage_type, s.frequency, s.times, s.day_of_week, s.day_of_month, s.timezone as schedule_timezone, s.enabled as schedule_enabled, s.id as schedule_id, s.next_run
             FROM backup_plans bp
             LEFT JOIN repositories r ON r.id = bp.repository_id
             LEFT JOIN schedules s ON s.backup_plan_id = bp.id
@@ -551,6 +551,8 @@ class ClientController extends Controller
 
         $this->view('clients/detail', [
             'profileDefaults' => (new \BBS\Services\ClientProfileService())->planDefaults((int) $id),
+            // Zone a plan created on this page is stored in; shown on the form (#559)
+            'planTimezone' => (new \BBS\Services\ClientProfileService())->planTimezoneFor((int) $id, $_SESSION['timezone'] ?? null),
             'clientProfiles' => (new \BBS\Services\ClientProfileService())->all(),
             'pageTitle' => 'Clients',
             'agent' => $agent,

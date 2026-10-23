@@ -1079,7 +1079,7 @@ class AdminApiController extends Controller
         // this the schedule silently ran in UTC while looking correct
         // everywhere (#462).
         if ($timezone === '') {
-            $timezone = (new \BBS\Services\ClientProfileService())->planDefaults($id)['timezone'] ?? 'UTC';
+            $timezone = (new \BBS\Services\ClientProfileService())->planTimezoneFor($id);
         }
 
         // Create schedule

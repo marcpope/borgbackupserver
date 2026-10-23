@@ -78,14 +78,16 @@ class BackupPlanController extends Controller
             'prune_years' => $pruneYears,
         ]);
 
-        // Create associated schedule
-        $nextRun = $this->calculateNextRun($frequency, $times, $dayOfWeek, $dayOfMonth);
-
         // The zone comes from the client's profile, not from whoever is
         // creating the plan: two admins in different places would otherwise
         // produce schedules that run hours apart from the same profile (#411).
-        $planTz = (new \BBS\Services\ClientProfileService())->planDefaults($agentId)['timezone']
-            ?? ($_SESSION['timezone'] ?? 'America/New_York');
+        // A profile without a zone falls back to the creating admin's own,
+        // which is the zone the form's hours are shown in (#559).
+        $planTz = (new \BBS\Services\ClientProfileService())
+            ->planTimezoneFor($agentId, $_SESSION['timezone'] ?? null);
+
+        // Create associated schedule
+        $nextRun = $this->calculateNextRun($frequency, $times, $dayOfWeek, $dayOfMonth, $planTz);
 
         $this->db->insert('schedules', [
             'backup_plan_id' => $planId,
@@ -184,14 +186,18 @@ class BackupPlanController extends Controller
             $times = trim($_POST['times'] ?? '');
             $dayOfWeek = \BBS\Services\SchedulerService::formatDaysOfWeek($_POST['day_of_week'] ?? '');
             $dayOfMonth = isset($_POST['day_of_month']) && $_POST['day_of_month'] !== '' ? $_POST['day_of_month'] : null;
-            $nextRun = $this->calculateNextRun($frequency, $times, $dayOfWeek, $dayOfMonth);
+            // Same resolution as plan creation, so editing a plan does not
+            // move it from the profile's zone to the editor's (#559).
+            $planTz = (new \BBS\Services\ClientProfileService())
+                ->planTimezoneFor((int) $plan['agent_id'], $_SESSION['timezone'] ?? null);
+            $nextRun = $this->calculateNextRun($frequency, $times, $dayOfWeek, $dayOfMonth, $planTz);
 
             $this->db->update('schedules', [
                 'frequency' => $frequency,
                 'times' => $times ?: null,
                 'day_of_week' => $dayOfWeek,
                 'day_of_month' => $dayOfMonth,
-                'timezone' => $_SESSION['timezone'] ?? 'America/New_York',
+                'timezone' => $planTz,
                 'enabled' => $frequency === 'manual' ? 0 : 1,
                 'next_run' => $nextRun,
             ], 'backup_plan_id = ?', [$id]);
@@ -461,13 +467,19 @@ class BackupPlanController extends Controller
         return null;
     }
 
-    private function calculateNextRun(string $frequency, string $times, ?string $dayOfWeek, $dayOfMonth): ?string
+    private function calculateNextRun(string $frequency, string $times, ?string $dayOfWeek, $dayOfMonth, string $timezone = 'UTC'): ?string
     {
         if ($frequency === 'manual') {
             return null;
         }
 
-        $userTz = new \DateTimeZone($_SESSION['timezone'] ?? 'America/New_York');
+        // The schedule's own zone: the first run used to be computed in the
+        // editor's zone while the scheduler used the plan's (#559).
+        try {
+            $userTz = new \DateTimeZone($timezone);
+        } catch (\Exception $e) {
+            $userTz = new \DateTimeZone('UTC');
+        }
         $utcTz = new \DateTimeZone('UTC');
         $now = new \DateTime('now', $utcTz);
 

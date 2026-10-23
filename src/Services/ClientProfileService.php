@@ -99,6 +99,31 @@ class ClientProfileService
      * happens to be looking — a schedule that moved when a different admin
      * applied a profile would be a worse bug than the one this fixes.
      */
+    /**
+     * The zone a new plan's schedule is stored in: the client's profile zone
+     * when the profile sets one, else the server zone setting, else the
+     * caller's fallback (the admin's own profile zone on the web form).
+     *
+     * The old resolution fell through to UTC for a profile without a zone,
+     * so "02:00" picked on the form ran, and showed on the calendar, at
+     * 02:00 UTC while nothing on the form said so (#559).
+     */
+    public function planTimezoneFor(int $agentId, ?string $fallback = null): string
+    {
+        $profile = $this->forAgent($agentId) ?: [];
+        if (!empty($profile['timezone'])) {
+            return $profile['timezone'];
+        }
+        $row = $this->db->fetchOne("SELECT `value` FROM settings WHERE `key` = 'server_timezone'");
+        if (!empty($row['value'])) {
+            return $row['value'];
+        }
+        if ($fallback && in_array($fallback, timezone_identifiers_list(), true)) {
+            return $fallback;
+        }
+        return 'UTC';
+    }
+
     public function timezoneFor(array $profile): string
     {
         if (!empty($profile['timezone'])) {

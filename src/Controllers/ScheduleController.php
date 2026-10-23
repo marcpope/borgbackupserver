@@ -306,9 +306,11 @@ class ScheduleController extends Controller
                     $h = (int) ($parts[0] ?? 0);
                     $m = (int) ($parts[1] ?? 0);
 
-                    // Build the concrete time in the schedule's tz, then convert to viewer tz
-                    $schedDate = clone $ref;
-                    $schedDate->setTimezone($schedTz);
+                    // Build the concrete time in the schedule's tz, then convert to viewer tz.
+                    // Start from the calendar date of the viewer's Monday, not the
+                    // instant: converting Monday 00:00 to a zone west of the viewer
+                    // lands on Sunday evening and put every block a day early (#559).
+                    $schedDate = new \DateTime($ref->format('Y-m-d'), $schedTz);
                     $schedDate->modify("+{$dayIdx} days");
                     $schedDate->setTime($h, $m);
                     $schedDate->setTimezone($viewerTz);

@@ -2132,6 +2132,8 @@ $sizeDisplay = $totalSize > 0 ? \BBS\Services\ServerStats::formatBytes((int) $to
                                 <option value="weekly" <?= $editFreq === 'weekly' ? 'selected' : '' ?>>Weekly</option>
                                 <option value="monthly" <?= $editFreq === 'monthly' ? 'selected' : '' ?>>Monthly</option>
                             </select>
+                            <?php $editTz = $plan['schedule_timezone'] ?: 'UTC'; $viewerTzNote = $_SESSION['timezone'] ?? ''; ?>
+                            <div class="form-text schedule-tz-note">Times are in <strong><?= htmlspecialchars($editTz) ?></strong><?= $viewerTzNote && $viewerTzNote !== $editTz ? ' (the client profile\'s zone; the calendar shows them in yours, ' . htmlspecialchars($viewerTzNote) . ')' : '' ?>.</div>
                         </div>
                     </div>
 
@@ -2463,6 +2465,8 @@ $sizeDisplay = $totalSize > 0 ? \BBS\Services\ServerStats::formatBytes((int) $to
                             <option value="weekly" <?= $pf === 'weekly' ? 'selected' : '' ?>>Weekly</option>
                             <option value="monthly" <?= $pf === 'monthly' ? 'selected' : '' ?>>Monthly</option>
                         </select>
+                        <?php $newTz = $planTimezone ?? 'UTC'; $viewerTzNote = $_SESSION['timezone'] ?? ''; ?>
+                        <div class="form-text schedule-tz-note">Times are in <strong><?= htmlspecialchars($newTz) ?></strong><?= $viewerTzNote && $viewerTzNote !== $newTz ? ' (the client profile\'s zone; the calendar shows them in yours, ' . htmlspecialchars($viewerTzNote) . ')' : '' ?>.</div>
                     </div>
                 </div>
 
