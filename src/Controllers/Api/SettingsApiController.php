@@ -49,6 +49,7 @@ class SettingsApiController extends Controller
             'auto_update_agents' => 'bool',
             'auto_compact_day' => 'int',
             'auto_compact_hour' => 'int',
+            'auto_compact_timezone' => 'str',
             'self_backup_enabled' => 'bool',
             'self_backup_catalogs' => 'bool',
             'self_backup_retention' => 'int',
@@ -279,6 +280,11 @@ class SettingsApiController extends Controller
             }
             $row = $this->db->fetchOne("SELECT `value` FROM settings WHERE `key` = 'server_host'");
             $oldServerHost = $row['value'] ?? '';
+        }
+
+        if (array_key_exists('auto_compact_timezone', $input)
+            && !in_array((string) $input['auto_compact_timezone'], timezone_identifiers_list(), true)) {
+            $this->json(['error' => 'auto_compact_timezone must be an IANA timezone name, e.g. Europe/Berlin'], 422);
         }
 
         foreach ($fields as $key => $type) {

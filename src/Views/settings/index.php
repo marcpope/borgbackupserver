@@ -21,6 +21,11 @@ if ($activeTab === 'updates') { $updatesSection = $updatesSection ?? ($_GET['sec
 $dayNames = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
 $compactDay  = (int) ($settings['auto_compact_day'] ?? 6);
 $compactHour = (int) ($settings['auto_compact_hour'] ?? 2);
+// The zone the compact day/hour are read in. Installs from before 2.99.4
+// have none stored and still run in UTC until the schedule is saved again;
+// a save stamps the schedule with the saving admin's profile zone (#556).
+$compactTz   = (string) ($settings['auto_compact_timezone'] ?? '');
+$viewerTz    = (string) ($_SESSION['timezone'] ?? 'UTC');
 ?>
 <form method="POST" action="/settings">
     <input type="hidden" name="csrf_token" value="<?= $this->csrfToken() ?>">
@@ -178,14 +183,22 @@ $compactHour = (int) ($settings['auto_compact_hour'] ?? 2);
         <div>
             <div class="settings-row-label">Weekly Compact Schedule</div>
             <p class="settings-row-help">When repositories are auto-compacted to reclaim freed space. Runs at or after this time on the chosen day, so storage that isn't powered on around the clock still gets compacted.</p>
+            <p class="settings-row-help" id="compactTzNote">
+                <?php if ($compactTz !== ''): ?>
+                Time is in <strong><?= htmlspecialchars($compactTz) ?></strong><?= $compactTz !== $viewerTz ? '; changing it stores the time in your zone, ' . htmlspecialchars($viewerTz) : '' ?>.
+                <?php else: ?>
+                Time is in <strong>UTC</strong> until saved; saving stores it in your zone, <?= htmlspecialchars($viewerTz) ?>.
+                <?php endif; ?>
+            </p>
         </div>
         <div class="settings-row-control">
-            <select class="form-select" name="auto_compact_day" style="max-width:150px;">
+            <input type="hidden" name="auto_compact_timezone" id="autoCompactTimezone" value="<?= htmlspecialchars($compactTz !== '' ? $compactTz : $viewerTz) ?>">
+            <select class="form-select" name="auto_compact_day" style="max-width:150px;" onchange="document.getElementById('autoCompactTimezone').value=<?= json_encode($viewerTz) ?>">
                 <?php foreach ($dayNames as $i => $dn): ?>
                 <option value="<?= $i ?>" <?= $compactDay === $i ? 'selected' : '' ?>><?= $dn ?></option>
                 <?php endforeach; ?>
             </select>
-            <select class="form-select" name="auto_compact_hour" style="max-width:120px;">
+            <select class="form-select" name="auto_compact_hour" style="max-width:120px;" onchange="document.getElementById('autoCompactTimezone').value=<?= json_encode($viewerTz) ?>">
                 <?php for ($h = 0; $h < 24; $h++): ?>
                 <option value="<?= $h ?>" <?= $compactHour === $h ? 'selected' : '' ?>><?= sprintf('%02d:00', $h) ?></option>
                 <?php endfor; ?>

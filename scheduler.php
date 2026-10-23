@@ -3091,8 +3091,21 @@ if ($selfBackup->isEnabled() && $selfBackup->isDue()) {
 // day at OR AFTER the configured hour (not an exact hour match) so a machine
 // that only comes online later that day still catches the once-per-week run.
 // Jobs are queued sequentially and processed one at a time by the scheduler.
-$dayOfWeek = (int) date('w'); // 0=Sunday, 6=Saturday
-$hourOfDay = (int) date('G'); // 0-23
+//
+// The day and hour are read in the zone the setting was saved in (the saving
+// admin's profile zone, kept in auto_compact_timezone). Before that was
+// stored, the check ran in UTC while every other schedule ran in a profile
+// zone, so "Thursday 05:00" fired at 07:00 for an admin two hours east (#556).
+$compactTzSetting = $db->fetchOne("SELECT `value` FROM settings WHERE `key` = 'auto_compact_timezone'");
+$compactTzName = $compactTzSetting['value'] ?? '';
+try {
+    $compactTz = new \DateTimeZone($compactTzName !== '' ? $compactTzName : 'UTC');
+} catch (\Exception $e) {
+    $compactTz = new \DateTimeZone('UTC');
+}
+$compactNow = new \DateTime('now', $compactTz);
+$dayOfWeek = (int) $compactNow->format('w'); // 0=Sunday, 6=Saturday
+$hourOfDay = (int) $compactNow->format('G'); // 0-23
 
 $compactDaySetting  = $db->fetchOne("SELECT `value` FROM settings WHERE `key` = 'auto_compact_day'");
 $compactHourSetting = $db->fetchOne("SELECT `value` FROM settings WHERE `key` = 'auto_compact_hour'");

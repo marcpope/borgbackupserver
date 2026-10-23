@@ -249,7 +249,14 @@ class SettingsController extends Controller
         $this->requireAdmin();
         $this->verifyCsrf();
 
-        $allowed = ['max_queue', 's3_max_concurrent', 'server_host', 'ssh_port', 'agent_poll_interval', 'stall_timeout_minutes', 'session_timeout_hours', 'default_theme', 'smtp_host', 'smtp_port', 'smtp_user', 'smtp_secure', 'smtp_from', 'notification_retention_days', 'storage_alert_threshold', 'apprise_urls', 'self_backup_retention', 'auto_retry_max_attempts', 'job_offline_grace_minutes', 'auto_retry_backoff_minutes', 'agent_offline_notify_minutes', 'auto_compact_day', 'auto_compact_hour', 'backup_overdue_hours'];
+        $allowed = ['max_queue', 's3_max_concurrent', 'server_host', 'ssh_port', 'agent_poll_interval', 'stall_timeout_minutes', 'session_timeout_hours', 'default_theme', 'smtp_host', 'smtp_port', 'smtp_user', 'smtp_secure', 'smtp_from', 'notification_retention_days', 'storage_alert_threshold', 'apprise_urls', 'self_backup_retention', 'auto_retry_max_attempts', 'job_offline_grace_minutes', 'auto_retry_backoff_minutes', 'agent_offline_notify_minutes', 'auto_compact_day', 'auto_compact_hour', 'auto_compact_timezone', 'backup_overdue_hours'];
+
+        // The compact schedule is read in this zone (#556); anything that is
+        // not a known zone falls back to the saving admin's profile zone.
+        if (isset($_POST['auto_compact_timezone'])
+            && !in_array($_POST['auto_compact_timezone'], timezone_identifiers_list(), true)) {
+            $_POST['auto_compact_timezone'] = $_SESSION['timezone'] ?? 'UTC';
+        }
 
         $oldServerHost = null;
         if (isset($_POST['server_host'])) {
