@@ -133,7 +133,7 @@ class ClientController extends Controller
         // disaster happened (#141).
         $categoryMap = [
             'backup' => 'backups',
-            'restore' => 'restores', 'restore_mysql' => 'restores', 'restore_pg' => 'restores', 'restore_mongo' => 'restores',
+            'restore' => 'restores', 'restore_mysql' => 'restores', 'restore_pg' => 'restores', 'restore_mongo' => 'restores', 'restore_mssql' => 'restores',
             's3_sync' => 's3_sync',
         ];
 
@@ -1440,6 +1440,109 @@ class ClientController extends Controller
         ]);
 
         $this->flash('success', 'MongoDB restore job queued. It will run when a slot is available.');
+        $this->redirect("/queue/{$jobId}");
+    }
+
+    /**
+     * Submit a SQL Server database restore job.
+     * POST /clients/{id}/restore-mssql
+     */
+    public function restoreMssqlSubmit(int $id): void
+    {
+        $this->requireAuth();
+        $this->verifyCsrf();
+
+        $agent = $this->getAgent($id);
+        if (!$agent) {
+            $this->flash('danger', 'Client not found.');
+            $this->redirect('/clients');
+        }
+
+        // Require restore permission
+        $this->requirePermission(PermissionService::RESTORE, $id);
+
+        $archive_id = (int) ($_POST['archive_id'] ?? 0);
+        $databases = $_POST['databases'] ?? [];
+        $pluginConfigId = (int) ($_POST['plugin_config_id'] ?? 0);
+
+        if (!$archive_id || empty($databases)) {
+            $this->flash('danger', 'Select an archive and at least one database to restore.');
+            $this->redirect("/clients/{$id}?tab=restore");
+        }
+
+        $pluginManager = new \BBS\Services\PluginManager($this->db);
+        if ($pluginConfigId) {
+            $configCheck = $pluginManager->getPluginConfig($pluginConfigId);
+            if (!$configCheck || $configCheck['agent_id'] != $id || $configCheck['slug'] !== 'mssql_dump') {
+                $this->flash('danger', 'Invalid SQL Server connection selected.');
+                $this->redirect("/clients/{$id}?tab=restore");
+            }
+        }
+
+        $archive = $this->db->fetchOne("
+            SELECT ar.*, r.path as repo_path, r.passphrase_encrypted
+            FROM archives ar
+            JOIN repositories r ON r.id = ar.repository_id
+            WHERE ar.id = ? AND r.agent_id = ?
+        ", [$archive_id, $id]);
+
+        if (!$archive || empty($archive['databases_backed_up'])) {
+            $this->flash('danger', 'Archive not found or has no database backup info.');
+            $this->redirect("/clients/{$id}?tab=restore");
+        }
+
+        $enabledPlugins = $pluginManager->getEnabledAgentPlugins($id);
+        $mssqlEnabled = false;
+        foreach ($enabledPlugins as $p) {
+            if ($p['slug'] === 'mssql_dump') {
+                $mssqlEnabled = true;
+                break;
+            }
+        }
+        if (!$mssqlEnabled) {
+            $this->flash('danger', 'SQL Server plugin is not enabled for this client.');
+            $this->redirect("/clients/{$id}?tab=restore");
+        }
+
+        $restoreDatabases = [];
+        foreach ($databases as $entry) {
+            $dbName = $entry['name'] ?? '';
+            $mode = $entry['mode'] ?? 'replace';
+            if ($dbName && in_array($mode, ['replace', 'rename'])) {
+                $item = ['database' => $dbName, 'mode' => $mode];
+                if ($mode === 'rename' && !empty($entry['target_name'])) {
+                    $item['target_name'] = preg_replace('/[^a-zA-Z0-9_]/', '', $entry['target_name']);
+                }
+                $restoreDatabases[] = $item;
+            }
+        }
+
+        if (empty($restoreDatabases)) {
+            $this->flash('danger', 'No valid databases selected.');
+            $this->redirect("/clients/{$id}?tab=restore");
+        }
+
+        $jobId = $this->db->insert('backup_jobs', [
+            'agent_id' => $id,
+            'backup_plan_id' => null,
+            'repository_id' => $archive['repository_id'],
+            'task_type' => 'restore_mssql',
+            'status' => 'queued',
+            'queued_at' => date('Y-m-d H:i:s'),
+            'restore_archive_id' => $archive_id,
+            'restore_databases' => json_encode($restoreDatabases),
+            'plugin_config_id' => $pluginConfigId ?: null,
+        ]);
+
+        $dbNames = array_column($restoreDatabases, 'database');
+        $this->db->insert('server_log', [
+            'agent_id' => $id,
+            'backup_job_id' => $jobId,
+            'level' => 'info',
+            'message' => "SQL Server restore queued: " . implode(', ', $dbNames) . " from archive {$archive['archive_name']}",
+        ]);
+
+        $this->flash('success', 'SQL Server restore job queued. It will run when a slot is available.');
         $this->redirect("/queue/{$jobId}");
     }
 

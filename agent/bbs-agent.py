@@ -11,8 +11,10 @@ import datetime
 import hashlib
 import json
 import logging
+import ntpath
 import os
 import platform
+import posixpath
 import re
 import shlex
 import signal
@@ -214,6 +216,29 @@ SSH_ROUTINE_NOTICES = (
 
 def _is_ssh_routine_notice(message):
     return any(n in message for n in SSH_ROUTINE_NOTICES)
+
+
+def _translate_borg_rsh_windows(rsh):
+    """The server builds BORG_RSH with Unix paths (/etc/bbs-agent/ssh_key,
+    /tmp/bbs-remote-ssh-key) and the system ssh; on Windows they have to
+    name the agent's own key files and the bundled ssh.exe.
+    Forward slashes are used on purpose: Windows ssh accepts them and
+    backslashes get stripped as escape characters when passed through
+    subprocess/shell."""
+    # Note: "/dev/null" in UserKnownHostsFile is intentionally NOT rewritten
+    # to "NUL". The bundled MinGit/MSYS2 ssh maps "/dev/null" to the real
+    # null device but would create a literal, undeletable reserved-name file
+    # named NUL for "NUL" (#300).
+    rsh = rsh.replace(
+        "/etc/bbs-agent/ssh_key", SSH_KEY_PATH.replace("\\", "/")
+    ).replace(
+        "/tmp/bbs-remote-ssh-key", REMOTE_KEY_PATH.replace("\\", "/")
+    )
+    # Replace bare "ssh" command with our bundled ssh.exe to avoid the
+    # Windows built-in OpenSSH stdin forwarding bug that hangs borg.
+    if SSH_CMD != "ssh" and rsh.startswith("ssh "):
+        rsh = '"' + SSH_CMD + '"' + rsh[3:]
+    return rsh
 
 
 def _rewrite_borg_rsh_for_dropbear(rsh):
@@ -1793,6 +1818,7 @@ PLUGIN_DISPLAY_NAMES = {
     "mysql_dump": "MySQL Dump",
     "pg_dump": "PostgreSQL Dump",
     "mongo_dump": "MongoDB Dump",
+    "mssql_dump": "SQL Server Backup",
     "interworx": "InterWorx Backup",
     "shell_hook": "Shell Script Hook",
 }
@@ -1935,6 +1961,14 @@ def _plugin_summary(slug, config, result):
                         total_size += os.path.getsize(fp)
         size_str = _format_size(total_size)
         return "MongoDB dump: {} database(s) ({}) dumped to {} ({})".format(len(databases), ', '.join(databases), dump_dir, size_str)
+    if slug == "mssql_dump":
+        dump_files = result.get("dump_files", [])
+        total_size = sum(os.path.getsize(f) for f in dump_files if os.path.exists(f))
+        text = "SQL Server backup: {} database(s) ({}) written to {} ({})".format(
+            len(dump_files), ", ".join(result.get("databases", [])), result.get("dump_dir", ""), _format_size(total_size))
+        if result.get("partial_error"):
+            text += " - WARNING: " + result["partial_error"]
+        return text
     if slug == "interworx":
         dump_dir = result.get("dump_dir", "")
         backup_type = result.get("backup_type", "full")
@@ -3144,6 +3178,361 @@ def test_plugin_mongo_dump(config):
     raw_output = result.stdout.decode("utf-8", errors="replace").strip()
     dbs = _parse_mongo_db_list(raw_output)
     return "Connection successful. Found {} database(s): {}".format(len(dbs), ', '.join(dbs[:10]))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Microsoft SQL Server plugin (mssql_dump)
+#
+# Backup is T-SQL's own BACKUP DATABASE ... WITH COPY_ONLY, so the .bak files
+# the plugin writes never touch the differential base or the log chain of any
+# other backup tool the customer runs. The command executes inside SQL Server,
+# which writes the file; the agent therefore has to run on the SQL Server
+# machine and the service account needs write access to the dump directory.
+#
+# Nothing is installed on the client for Windows: queries go through the .NET
+# SqlClient that ships with Windows PowerShell. Elsewhere sqlcmd is used.
+# Credentials travel in environment variables, never on a command line.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_MSSQL_SYSTEM_DBS = ("master", "model", "msdb", "tempdb")
+
+_MSSQL_PS_SCRIPT = r'''
+$ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
+try {
+  $b = New-Object System.Data.SqlClient.SqlConnectionStringBuilder
+  $b['Data Source'] = $env:BBS_MSSQL_SERVER
+  $b['User ID'] = $env:BBS_MSSQL_USER
+  $b['Password'] = $env:BBS_MSSQL_PASS
+  $b['Initial Catalog'] = 'master'
+  $b['Connect Timeout'] = 15
+  $b['Application Name'] = 'BBS Agent'
+  $b['TrustServerCertificate'] = ($env:BBS_MSSQL_TRUST -eq '1')
+  $c = New-Object System.Data.SqlClient.SqlConnection($b.ConnectionString)
+  $c.Open()
+  $cmd = $c.CreateCommand()
+  $cmd.CommandText = $env:BBS_MSSQL_SQL
+  $cmd.CommandTimeout = 0
+  $r = $cmd.ExecuteReader()
+  do {
+    while ($r.Read()) {
+      $vals = @(for ($i = 0; $i -lt $r.FieldCount; $i++) { if ($r.IsDBNull($i)) { '' } else { [string]$r.GetValue($i) } })
+      [Console]::Out.WriteLine(($vals -join "`t"))
+    }
+  } while ($r.NextResult())
+  $r.Close()
+  $c.Close()
+} catch {
+  $ex = $_.Exception
+  while ($ex.InnerException) { $ex = $ex.InnerException }
+  if ($ex.Errors -and $ex.Errors.Count -gt 0) {
+    [Console]::Error.WriteLine((@($ex.Errors | ForEach-Object { $_.Message }) -join ' | '))
+  } else {
+    [Console]::Error.WriteLine($ex.Message)
+  }
+  exit 1
+}
+'''
+
+
+def _mssql_quote_name(name):
+    """[name] for use as a T-SQL identifier."""
+    return "[" + str(name).replace("]", "]]") + "]"
+
+
+def _mssql_quote_str(value):
+    """N'value' for use as a T-SQL string literal."""
+    return "N'" + str(value).replace("'", "''") + "'"
+
+
+def _mssql_checked_db_name(name):
+    name = str(name)
+    if not name or len(name) > 128 or re.search(r"[\x00-\x1f]", name):
+        raise Exception("Refusing unsafe database name {!r}".format(name))
+    return name
+
+
+def _mssql_dump_filename(database):
+    """File name of a database's backup. Must match
+    PluginManager::mssqlDumpFileName() on the server: restore extracts
+    exactly this name from the archive."""
+    return re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", str(database)) + ".bak"
+
+
+def _mssql_server_arg(config):
+    """host[,port] as SQL Server's clients spell it. A named instance
+    (host\\INSTANCE) is found by the SQL Browser, so it takes no port."""
+    host = str(config.get("host") or "localhost").strip()
+    if not re.match(r"^[A-Za-z0-9_.:\\\-\[\]]+$", host) or host.startswith("-"):
+        raise Exception("Invalid SQL Server host {!r}".format(host))
+    if "\\" in host:
+        return host
+    port = str(config.get("port") or "").strip()
+    if port in ("", "0"):
+        return host
+    if not port.isdigit() or not 0 < int(port) < 65536:
+        raise Exception("Invalid SQL Server port {!r}".format(port))
+    return "{},{}".format(host, port)
+
+
+def _mssql_credentials(config):
+    user = str(config.get("user") or "")
+    password = config.get("password")
+    if not user or not password:
+        raise Exception("SQL Server plugin requires user and password")
+    if user.startswith("-") or re.search(r"[\x00-\x1f]", user):
+        raise Exception("Invalid SQL Server user name")
+    return user, str(password)
+
+
+def _mssql_find_sqlcmd():
+    for candidate in (shutil.which("sqlcmd"),
+                      "/opt/mssql-tools18/bin/sqlcmd", "/opt/mssql-tools/bin/sqlcmd",
+                      "/usr/local/bin/sqlcmd"):
+        if candidate and os.path.isfile(candidate):
+            return candidate
+    return None
+
+
+def _mssql_find_powershell():
+    found = shutil.which("powershell")
+    if found:
+        return found
+    root = os.environ.get("SystemRoot", r"C:\Windows")
+    candidate = os.path.join(root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
+    return candidate if os.path.isfile(candidate) else None
+
+
+def _mssql_run(config, sql, timeout=120):
+    """Run T-SQL on the configured server. Returns the rows of every result
+    set as lists of strings; raises with SQL Server's own message on error."""
+    server = _mssql_server_arg(config)
+    user, password = _mssql_credentials(config)
+    trust = _truthy(config.get("trust_cert", True))
+    env = os.environ.copy()
+
+    if IS_WINDOWS:
+        ps = _mssql_find_powershell()
+        if not ps:
+            raise Exception("Windows PowerShell was not found; it is needed to talk to SQL Server")
+        env.update({"BBS_MSSQL_SERVER": server, "BBS_MSSQL_USER": user, "BBS_MSSQL_PASS": password,
+                    "BBS_MSSQL_TRUST": "1" if trust else "0", "BBS_MSSQL_SQL": sql})
+        encoded = base64.b64encode(_MSSQL_PS_SCRIPT.encode("utf-16-le")).decode("ascii")
+        cmd = [ps, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", encoded]
+    else:
+        sqlcmd = _mssql_find_sqlcmd()
+        if not sqlcmd:
+            raise Exception("sqlcmd was not found. Install mssql-tools18 (or go-sqlcmd) on this client.")
+        env["SQLCMDPASSWORD"] = password
+        cmd = [sqlcmd, "-S", server, "-U", user, "-d", "master", "-l", "15",
+               "-b", "-r0", "-h", "-1", "-W", "-s", "\t", "-w", "65535"]
+        if trust:
+            cmd.append("-C")
+        cmd += ["-Q", "SET NOCOUNT ON; " + sql]
+
+    r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, timeout=timeout)
+    out = r.stdout.decode("utf-8-sig", errors="replace")
+    err = r.stderr.decode("utf-8-sig", errors="replace").strip()
+    if r.returncode != 0:
+        # sqlcmd prints some failures (login, timeouts) on stdout
+        raise Exception((err or out.strip() or "sqlcmd exited with {}".format(r.returncode))[:2000])
+    rows = []
+    for line in out.splitlines():
+        if not line.strip() or re.match(r"^\(\d+ rows? affected\)$", line.strip()):
+            continue
+        rows.append(line.rstrip("\r").split("\t"))
+    return rows
+
+
+def _mssql_list_databases(config):
+    """Online, accessible, non-snapshot databases other than tempdb."""
+    rows = _mssql_run(config,
+        "SELECT name FROM sys.databases WHERE database_id <> 2 AND state = 0 "
+        "AND source_database_id IS NULL AND HAS_DBACCESS(name) = 1 ORDER BY name", timeout=60)
+    return [r[0] for r in rows if r and r[0]]
+
+
+def _mssql_resolve_databases(config):
+    """The databases this config backs up: '*' or a list, minus exclusions.
+    A named database that is not online is an error, not a silent skip."""
+    available = _mssql_list_databases(config)
+    wanted = config.get("databases", "*")
+    exclude = config.get("exclude_databases", ["tempdb"])
+    if isinstance(exclude, str):
+        exclude = [x.strip() for x in exclude.split(",") if x.strip()]
+    exclude_l = {x.lower() for x in exclude} | {"tempdb"}
+    if isinstance(wanted, str) and wanted.strip() == "*":
+        names = [d for d in available if d.lower() not in exclude_l]
+    else:
+        if isinstance(wanted, str):
+            wanted = [d.strip() for d in wanted.split(",") if d.strip()]
+        by_lower = {d.lower(): d for d in available}
+        names = []
+        for d in wanted:
+            canonical = by_lower.get(str(d).lower())
+            if canonical is None:
+                raise Exception("Database {!r} was not found, is not online, or the login cannot access it".format(d))
+            if canonical.lower() not in exclude_l and canonical not in names:
+                names.append(canonical)
+    # A name the agent cannot handle safely (control characters) is skipped and
+    # reported; it must not cost every other database its backup.
+    safe, skipped = [], []
+    for n in names:
+        try:
+            safe.append(_mssql_checked_db_name(n))
+        except Exception as e:
+            skipped.append(str(e))
+    if not safe:
+        raise Exception("No databases to back up (found on server: {}){}".format(
+            ", ".join(available) or "none", "; " + "; ".join(skipped) if skipped else ""))
+    return safe, skipped
+
+
+# Folders on a Windows machine that are never a dump directory. The agent
+# creates files here and, for a folder it creates itself, replaces its
+# permissions, so system and application folders are refused outright
+# (the Linux path does the same through _checked_dump_dir).
+_MSSQL_WIN_DENIED_TREES = ("windows", "program files", "program files (x86)", "inetpub",
+                           "system volume information", "$recycle.bin", "boot", "recovery")
+_MSSQL_WIN_DENIED_EXACT = ("programdata", "users", "documents and settings", "perflogs")
+
+
+def _mssql_check_windows_dir(path):
+    if not re.match(r"^[A-Za-z]:[\\/]", path):
+        raise Exception("Dump directory must be an absolute folder path such as C:\\ProgramData\\BBS\\mssql: {!r}".format(path))
+    _drive, rest = ntpath.splitdrive(ntpath.normpath(path))
+    parts = [c.lower() for c in rest.split("\\") if c]
+    if (not parts or parts[0] in _MSSQL_WIN_DENIED_TREES
+            or (len(parts) == 1 and parts[0] in _MSSQL_WIN_DENIED_EXACT)):
+        raise Exception("Dump directory {} is a system folder; use a dedicated folder such as "
+                        "C:\\ProgramData\\BBS\\mssql".format(path))
+    return path
+
+
+def _mssql_check_dump_dir(path):
+    path = str(path or "")
+    if IS_WINDOWS:
+        return _mssql_check_windows_dir(path)
+    return _checked_dump_dir(path)
+
+
+def _mssql_prepare_dump_dir(config, dump_dir):
+    """Create the dump directory and let the SQL Server service write to it.
+
+    Permissions are only ever set on a folder this call creates. A folder
+    that already exists belongs to the administrator and is left exactly as
+    it is, so pointing the setting at an existing folder cannot change its
+    ACL; the SQL Server service account must be able to write there.
+    Best effort: when access is missing BACKUP fails with SQL Server's own
+    'operating system error 5', which _mssql_backup_error explains."""
+    if os.path.isdir(dump_dir):
+        return
+    os.makedirs(dump_dir, exist_ok=True)
+    try:
+        if IS_WINDOWS:
+            rows = _mssql_run(config,
+                "SELECT service_account FROM sys.dm_server_services WHERE servicename LIKE 'SQL Server (%'", timeout=30)
+            account = rows[0][0].strip() if rows and rows[0] else ""
+            if not account:
+                return
+            if account.lower() == "localsystem":
+                account = "NT AUTHORITY\\SYSTEM"
+            # Dumps hold the databases' contents: only SYSTEM, Administrators
+            # and the SQL Server service account may read this folder.
+            subprocess.run(["icacls", dump_dir, "/inheritance:r",
+                            "/grant:r", "*S-1-5-18:(OI)(CI)F", "*S-1-5-32-544:(OI)(CI)F",
+                            "/grant", "{}:(OI)(CI)M".format(account)],
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
+        elif hasattr(os, "geteuid") and os.geteuid() == 0:
+            import pwd
+            try:
+                pw = pwd.getpwnam("mssql")
+            except KeyError:
+                return
+            os.chown(dump_dir, pw.pw_uid, pw.pw_gid)
+            os.chmod(dump_dir, 0o750)
+    except Exception as e:
+        logger.warning("SQL Server plugin: could not set permissions on {}: {}".format(dump_dir, e))
+
+
+def _mssql_backup_error(name, err):
+    msg = "BACKUP DATABASE failed for {}: {}".format(name, err)
+    if "operating system error 5" in err.lower() or "access is denied" in err.lower() or "permission denied" in err.lower():
+        msg += (" The SQL Server service account needs write access to the dump directory"
+                " (grant it yourself if the folder already existed; the agent must run on the SQL Server machine).")
+    return msg
+
+
+def _mssql_backup_sql(database, path, compress):
+    return ("BACKUP DATABASE {} TO DISK = {} WITH COPY_ONLY, INIT, FORMAT, CHECKSUM{}"
+            .format(_mssql_quote_name(database), _mssql_quote_str(path), ", COMPRESSION" if compress else ""))
+
+
+def execute_plugin_mssql_dump(config):
+    """Back up SQL Server databases (native COPY_ONLY .bak) before the borg run."""
+    dump_dir = _mssql_check_dump_dir(config.get("dump_dir", r"C:\ProgramData\BBS\mssql"))
+    compress = _truthy(config.get("compress", False))
+    databases, skipped = _mssql_resolve_databases(config)
+    _mssql_prepare_dump_dir(config, dump_dir)
+
+    dump_files, done, failed = [], list(), list(skipped)
+    for db in databases:
+        path = os.path.join(dump_dir, _mssql_dump_filename(db))
+        logger.info("Backing up SQL Server database {} to {}".format(db, path))
+        try:
+            _mssql_run(config, _mssql_backup_sql(db, path, compress), timeout=6 * 3600)
+        except Exception as e:
+            # One bad database must not cost the others their backup.
+            message = _mssql_backup_error(db, str(e))
+            logger.error(message)
+            failed.append(message)
+            continue
+        dump_files.append(path)
+        done.append(db)
+
+    if not done:
+        raise Exception("; ".join(failed))
+    logger.info("SQL Server backup complete: {} database(s) in {}".format(len(done), dump_dir))
+    result = {
+        "dump_files": dump_files,
+        "dump_dir": dump_dir,
+        "databases": done,
+        "per_database": True,
+        "compress": compress,
+    }
+    if failed:
+        result["partial_error"] = "{} of {} database(s) failed: {}".format(
+            len(failed), len(databases) + len(skipped), "; ".join(failed))
+    return result
+
+
+def cleanup_plugin_mssql_dump(config, plugin_result):
+    """Delete the .bak files this run wrote, when cleanup_after is on."""
+    if not _truthy(config.get("cleanup_after", True)):
+        return
+    for path in plugin_result.get("dump_files", []) or []:
+        try:
+            if os.path.isfile(path) and path.lower().endswith(".bak"):
+                os.remove(path)
+        except OSError as e:
+            logger.warning("Could not remove {}: {}".format(path, e))
+
+
+def test_plugin_mssql_dump(config):
+    """Test the connection and list databases, without backing anything up."""
+    _mssql_credentials(config)
+    rows = _mssql_run(config,
+        "SELECT CONVERT(nvarchar(128), SERVERPROPERTY('ProductVersion')), "
+        "CONVERT(nvarchar(128), SERVERPROPERTY('Edition')), IS_SRVROLEMEMBER('sysadmin')", timeout=30)
+    version, edition, sysadmin = (rows[0] + ["", "", ""])[:3] if rows else ("?", "?", "0")
+    dbs = _mssql_list_databases(config)
+    shown = ", ".join(dbs[:30]) + (" ..." if len(dbs) > 30 else "")
+    message = ("Connection successful. SQL Server {} ({}){}. Found {} database(s): {}"
+               .format(version, edition, ", login is sysadmin" if sysadmin == "1" else "", len(dbs), shown))
+    # The structured list feeds the "Detect databases" picker in the UI
+    return message, {"databases": dbs}
+
+
 
 
 def execute_plugin_interworx(config):
@@ -4440,6 +4829,257 @@ def execute_restore_mongo(config, task):
     report_status(config, status_data)
 
 
+def _mssql_default_dirs(config):
+    """(data directory, log directory) for databases restored under a new name."""
+    rows = _mssql_run(config,
+        "SELECT CONVERT(nvarchar(4000), SERVERPROPERTY('InstanceDefaultDataPath')), "
+        "CONVERT(nvarchar(4000), SERVERPROPERTY('InstanceDefaultLogPath')), "
+        "(SELECT physical_name FROM sys.master_files WHERE database_id = 1 AND file_id = 1), "
+        "(SELECT physical_name FROM sys.master_files WHERE database_id = 1 AND file_id = 2)", timeout=30)
+    cols = (rows[0] + ["", "", "", ""])[:4] if rows else ["", "", "", ""]
+
+    def parent(p):
+        mod = ntpath if "\\" in p else posixpath
+        return mod.dirname(p)
+    data = cols[0] or (parent(cols[2]) if cols[2] else "")
+    log = cols[1] or (parent(cols[3]) if cols[3] else "") or data
+    if not data:
+        raise Exception("Could not determine SQL Server's default data directory")
+    return data, log
+
+
+def _mssql_join(directory, name):
+    mod = ntpath if "\\" in directory else posixpath
+    return mod.join(directory, name)
+
+
+def _mssql_prune_safety_backups(safety_dir, keep_days, keep_file):
+    """Delete safety backups older than keep_days (0 keeps them all). Only
+    files named like the ones this agent writes are ever touched."""
+    try:
+        days = int(keep_days)
+    except (TypeError, ValueError):
+        days = 7
+    if days <= 0:
+        return
+    cutoff = time.time() - days * 86400
+    try:
+        for name in os.listdir(safety_dir):
+            path = os.path.join(safety_dir, name)
+            if (path != keep_file and re.search(r"_\d{8}_\d{6}\.bak$", name)
+                    and os.path.isfile(path) and os.path.getmtime(path) < cutoff):
+                try:
+                    os.remove(path)
+                    logger.info("Removed old SQL Server safety backup {}".format(path))
+                except OSError as e:
+                    logger.warning("Could not remove {}: {}".format(path, e))
+    except OSError:
+        pass
+
+
+def _mssql_restore_one(mssql, dump_dir, db_name, mode, target, safety_dir, job_id):
+    """Restore one database from its extracted .bak. Returns a one-line summary."""
+    bak = os.path.join(dump_dir, _mssql_dump_filename(db_name))
+    if not os.path.isfile(bak):
+        raise Exception("backup file not found at {}".format(bak))
+    if mode == "replace" and target.lower() in _MSSQL_SYSTEM_DBS:
+        raise Exception("system database {} cannot be replaced from here; restore it manually "
+                        "(or restore it under a new name)".format(target))
+
+    q_target = _mssql_quote_name(target)
+    # CASE, not a bare DB_ID: for a missing database DB_ID is NULL, which the
+    # PowerShell client prints as an empty line (no row at all after parsing)
+    rows = _mssql_run(mssql, "SELECT CASE WHEN DB_ID({}) IS NULL THEN 0 ELSE 1 END".format(_mssql_quote_str(target)), timeout=30)
+    exists = bool(rows) and rows[0][0].strip() == "1"
+
+    if mode == "rename" and exists:
+        raise Exception("a database named {} already exists on the server; pick another name".format(target))
+
+    # Safety copy of what is about to be overwritten, outside the dump
+    # directory so the next backup does not archive it.
+    note = ""
+    if exists and mode == "replace" and _truthy(mssql.get("safety_backup", True)):
+        # This copy is the only way back, so when it cannot be made the
+        # database is left alone (turn the option off to replace anyway).
+        try:
+            _mssql_check_dump_dir(safety_dir)
+            _mssql_prepare_dump_dir(mssql, safety_dir)
+            safety = os.path.join(safety_dir, "{}_{}.bak".format(
+                _mssql_dump_filename(target)[:-4], time.strftime("%Y%m%d_%H%M%S")))
+            _mssql_run(mssql, _mssql_backup_sql(target, safety, _truthy(mssql.get("compress"))), timeout=6 * 3600)
+        except Exception as e:
+            raise Exception("the safety backup of {} failed, so it was not replaced: {} "
+                            "(switch off 'Safety backup before Replace' in the plugin configuration "
+                            "to restore without it)".format(target, e))
+        note = " (previous version saved to {})".format(safety)
+        _mssql_prune_safety_backups(safety_dir, mssql.get("safety_keep_days", 7), safety)
+
+    move = ""
+    if mode == "rename" or not exists:
+        files = _mssql_run(mssql, "RESTORE FILELISTONLY FROM DISK = {}".format(_mssql_quote_str(bak)), timeout=300)
+        data_dir, log_dir = _mssql_default_dirs(mssql)
+        clauses = []
+        for row in files:
+            logical, physical, ftype = row[0], row[1], (row[2] if len(row) > 2 else "D")
+            base = ntpath.basename(physical) if "\\" in physical else posixpath.basename(physical)
+            if mode == "rename":
+                stem, ext = os.path.splitext(base)
+                base = "{}_{}{}".format(target, re.sub(r"[^A-Za-z0-9_]", "_", logical), ext)
+            clauses.append("MOVE {} TO {}".format(_mssql_quote_str(logical),
+                           _mssql_quote_str(_mssql_join(log_dir if ftype == "L" else data_dir, base))))
+        move = ", " + ", ".join(clauses)
+
+    single_user = exists and mode == "replace"
+    try:
+        sql = "RESTORE DATABASE {} FROM DISK = {} WITH {}RECOVERY{}".format(
+            q_target, _mssql_quote_str(bak), "REPLACE, " if exists else "", move)
+        if single_user:
+            # One batch on one connection: as separate calls another client
+            # (an app pool, SQL Agent) could take the single-user slot in
+            # between and the RESTORE would fail with "database in use".
+            # XACT_ABORT stops the batch if the ALTER fails.
+            sql = "SET XACT_ABORT ON; ALTER DATABASE {} SET SINGLE_USER WITH ROLLBACK IMMEDIATE; {}".format(q_target, sql)
+        _mssql_run(mssql, sql, timeout=6 * 3600)
+    finally:
+        if single_user:
+            try:
+                _mssql_run(mssql, "ALTER DATABASE {} SET MULTI_USER".format(q_target), timeout=300)
+            except Exception as e:
+                logger.error("Job #{}: could not set {} back to MULTI_USER: {}".format(job_id, target, e))
+    return "{} -> {}{}".format(db_name, target, note)
+
+
+def _mssql_restore_borg_env(env_vars):
+    """Environment for the borg extract of a SQL Server restore: what
+    execute_task builds for a file restore. On Windows the server's BORG_RSH
+    names Unix paths (/tmp/bbs-remote-ssh-key, /etc/bbs-agent/ssh_key) and
+    the system ssh; without translating them ssh cannot find its key and
+    the connection is closed."""
+    env = os.environ.copy()
+    env.update(env_vars)
+    if IS_WINDOWS and "BORG_RSH" in env:
+        env["BORG_RSH"] = _translate_borg_rsh_windows(env["BORG_RSH"])
+    if IS_DROPBEAR and "BORG_RSH" in env:
+        env["BORG_RSH"] = _rewrite_borg_rsh_for_dropbear(env["BORG_RSH"])
+    elif "BORG_RSH" in env:
+        env["BORG_RSH"] = env["BORG_RSH"].replace("LogLevel=ERROR", "LogLevel=INFO")
+    env["BORG_RELOCATED_REPO_ACCESS_IS_OK"] = "yes"
+    env["BORG_UNKNOWN_UNENCRYPTED_REPO_ACCESS_IS_OK"] = "yes"
+    if not IS_WINDOWS and ("LC_ALL" not in env or not env["LC_ALL"].endswith("UTF-8")):
+        env["LC_ALL"] = "C.UTF-8"
+        env["LANG"] = "C.UTF-8"
+    return env
+
+
+def execute_restore_mssql(config, task):
+    """Restore SQL Server databases from a borg archive."""
+    job_id = task.get("job_id")
+    command = task.get("command", [])
+    if command and command[0] == "borg" and BORG_PATH:
+        command[0] = BORG_PATH
+    if _refuse_unsafe_command(config, job_id, command):
+        return
+    env_vars = task.get("env", {})
+    cwd = task.get("cwd")
+    databases = task.get("databases", [])
+    mssql = task.get("mssql_config", {})
+    dump_dir = mssql.get("dump_dir", r"C:\ProgramData\BBS\mssql")
+
+    try:
+        _mssql_credentials(mssql)
+        dump_dir = _mssql_check_dump_dir(dump_dir)
+    except Exception as e:
+        report_status(config, {"job_id": job_id, "result": "failed", "error_log": str(e)})
+        return
+
+    remote_ssh_key = task.get("remote_ssh_key")
+    remote_key_path = REMOTE_KEY_PATH
+    if remote_ssh_key:
+        try:
+            normalized_key = remote_ssh_key.replace("\r\n", "\n").replace("\r", "\n").rstrip() + "\n"
+            if IS_WINDOWS:
+                _clear_stale_key_windows(remote_key_path)
+            with open(remote_key_path, "w", newline="\n") as kf:
+                kf.write(normalized_key)
+            if IS_WINDOWS:
+                _lockdown_key_windows(remote_key_path)
+            else:
+                os.chmod(remote_key_path, 0o600)
+        except Exception as e:
+            report_status(config, {"job_id": job_id, "result": "failed",
+                                   "error_log": "Failed to write remote SSH key: {}".format(e)})
+            return
+
+    # Created (and locked down) here, before borg can create it with
+    # default permissions; an existing folder is left as it is.
+    try:
+        _mssql_prepare_dump_dir(mssql, dump_dir)
+    except Exception as e:
+        logger.warning("Job #{}: could not prepare {}: {}".format(job_id, dump_dir, e))
+
+    api_request(config, "/api/agent/progress", method="POST", data={
+        "job_id": job_id, "output_log": "Extracting database backups from archive...",
+    })
+
+    # Step 1: extract the .bak files back to the dump directory
+    logger.info("Job #{}: Extracting SQL Server backups from archive".format(job_id))
+    if cwd:
+        os.makedirs(cwd, exist_ok=True)
+    env = _mssql_restore_borg_env(env_vars)
+    try:
+        proc = subprocess.run(command, env=env, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=6 * 3600)
+        if proc.returncode > 1:
+            report_status(config, {"job_id": job_id, "result": "failed",
+                                   "error_log": "borg extract failed: {}".format(proc.stderr.decode("utf-8", errors="replace")[:5000])})
+            return
+    except Exception as e:
+        report_status(config, {"job_id": job_id, "result": "failed", "error_log": "borg extract error: {}".format(e)})
+        return
+    finally:
+        if remote_ssh_key and os.path.exists(remote_key_path):
+            try:
+                os.unlink(remote_key_path)
+            except Exception:
+                pass
+
+    # Step 2: RESTORE DATABASE for each selected database
+    safety_dir = os.path.normpath(dump_dir).rstrip("\\/") + "_pre_restore"
+    imported, errors = [], []
+    total = len(databases)
+    for i, entry in enumerate(databases):
+        db_name = entry.get("database")
+        mode = entry.get("mode", "replace")
+        target = entry.get("target_name") or "{}_copy".format(db_name) if mode == "rename" else db_name
+        api_request(config, "/api/agent/progress", method="POST", data={
+            "job_id": job_id, "files_processed": i, "files_total": total,
+            "output_log": "Restoring {} as {}...".format(db_name, target),
+        })
+        try:
+            imported.append(_mssql_restore_one(mssql, dump_dir, _mssql_checked_db_name(db_name),
+                                               mode, _mssql_checked_db_name(target), safety_dir, job_id))
+        except Exception as e:
+            errors.append("{}: {}".format(db_name, e))
+
+    # The extracted copies are not needed any more
+    if _truthy(mssql.get("cleanup_after", True)):
+        for entry in databases:
+            try:
+                os.remove(os.path.join(dump_dir, _mssql_dump_filename(entry.get("database", ""))))
+            except OSError:
+                pass
+
+    if errors and not imported:
+        result, error_log = "failed", "; ".join(errors)
+    else:
+        result, error_log = "completed", "; ".join(errors) if errors else None
+    status_data = {"job_id": job_id, "result": result, "files_total": total, "files_processed": len(imported)}
+    if error_log:
+        status_data["error_log"] = error_log[:10000]
+    if imported:
+        status_data["output_log"] = "Restored: {}".format(", ".join(imported))
+    report_status(config, status_data)
+
+
 def _inhibit_sleep():
     """Prevent the OS from sleeping while a task is running.
     Returns state to pass to _allow_sleep() when done."""
@@ -5209,9 +5849,13 @@ def _execute_task_inner(config, task, job_id, task_type, command, env_vars,
         if test_func:
             try:
                 result_msg = test_func(cfg)
-                report_status(config, {
-                    "job_id": job_id, "result": "completed", "output_log": result_msg,
-                })
+                status = {"job_id": job_id, "result": "completed"}
+                if isinstance(result_msg, tuple):
+                    # (message, structured data) - e.g. the databases found
+                    result_msg, structured = result_msg
+                    status["task_result"] = json.dumps(structured)
+                status["output_log"] = result_msg
+                report_status(config, status)
             except Exception as e:
                 report_status(config, {
                     "job_id": job_id, "result": "failed", "error_log": str(e),
@@ -5261,6 +5905,11 @@ def _execute_task_inner(config, task, job_id, task_type, command, env_vars,
         execute_restore_mongo(config, task)
         return
 
+    # Handle SQL Server database restore
+    if task_type == "restore_mssql":
+        execute_restore_mssql(config, task)
+        return
+
     # Report running immediately so the UI shows activity
     api_request(config, "/api/agent/progress", method="POST", data={
         "job_id": job_id,
@@ -5300,6 +5949,10 @@ def _execute_task_inner(config, task, job_id, task_type, command, env_vars,
     # Plugins that failed without aborting: the backup goes ahead, but the job
     # is flagged so it doesn't read as a clean success.
     plugin_failures = [r for r in plugin_runs if r.get("error")]
+    # A plugin that finished but not completely (some databases failed)
+    # reports it in its result; the run stays usable, the job is flagged.
+    plugin_failures += [dict(r, error=r["result"]["partial_error"]) for r in plugin_runs
+                        if not r.get("error") and isinstance(r.get("result"), dict) and r["result"].get("partial_error")]
 
     # Work out a denominator for the progress bar.
     #
@@ -5340,22 +5993,8 @@ def _execute_task_inner(config, task, job_id, task_type, command, env_vars,
     env.update(env_vars)
 
     # On Windows, translate Unix SSH paths in BORG_RSH to local paths
-    # Use forward slashes - Windows SSH accepts them and backslashes get
-    # stripped as escape characters when passed through subprocess/shell
     if IS_WINDOWS and "BORG_RSH" in env:
-        # Note: "/dev/null" in UserKnownHostsFile is intentionally NOT rewritten
-        # to "NUL". The bundled MinGit/MSYS2 ssh maps "/dev/null" to the real
-        # null device but would create a literal, undeletable reserved-name file
-        # named NUL for "NUL" (#300).
-        env["BORG_RSH"] = env["BORG_RSH"].replace(
-            "/etc/bbs-agent/ssh_key", SSH_KEY_PATH.replace("\\", "/")
-        ).replace(
-            "/tmp/bbs-remote-ssh-key", REMOTE_KEY_PATH.replace("\\", "/")
-        )
-        # Replace bare "ssh" command with our bundled ssh.exe to avoid the
-        # Windows built-in OpenSSH stdin forwarding bug that hangs borg.
-        if SSH_CMD != "ssh" and env["BORG_RSH"].startswith("ssh "):
-            env["BORG_RSH"] = '"' + SSH_CMD + '"' + env["BORG_RSH"][3:]
+        env["BORG_RSH"] = _translate_borg_rsh_windows(env["BORG_RSH"])
 
     # Server-built BORG_RSH carries OpenSSH-only `-o` options. Dropbear logs
     # "Ignoring unknown configuration option" warnings for each one (#247).
@@ -6050,7 +6689,7 @@ def _execute_task_inner(config, task, job_id, task_type, command, env_vars,
     if result == "completed" and task_type == "backup":
         db_groups = []
         for run in plugin_runs:
-            if run.get("slug") not in ("mysql_dump", "pg_dump", "mongo_dump"):
+            if run.get("slug") not in ("mysql_dump", "pg_dump", "mongo_dump", "mssql_dump"):
                 continue
             if run.get("error"):
                 continue  # failed dump — nothing was written, don't claim a group
