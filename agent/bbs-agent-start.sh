@@ -19,7 +19,7 @@
 AGENT_DIR="${BBS_AGENT_DIR:-/opt/bbs-agent}"
 AGENT_PY="$AGENT_DIR/bbs-agent.py"
 AGENT_BAK="$AGENT_PY.bak"
-CONFIG="$AGENT_DIR/config.ini"
+CONFIG="${BBS_AGENT_CONFIG:-/etc/bbs-agent/config.ini}"
 PYTHON="${BBS_PYTHON:-python3}"
 LOG="${BBS_AGENT_LOG:-/var/log/bbs-agent.log}"
 
@@ -27,9 +27,11 @@ log() {
     echo "$(date '+%Y-%m-%d %H:%M:%S') [WRAPPER] $1" >> "$LOG" 2>/dev/null
 }
 
-# Check if the agent script is syntactically valid
+# Check if the agent script is syntactically valid. Read it as bytes: in text
+# mode Python 3.6 decodes with the locale, which is ASCII when the locale is
+# missing (C.UTF-8 on CentOS 7), and the first non-ASCII character fails.
 check_syntax() {
-    "$PYTHON" -c "import ast; ast.parse(open('$1').read())" 2>/dev/null
+    "$PYTHON" -c "import ast, sys; ast.parse(open(sys.argv[1], 'rb').read())" "$1" 2>/dev/null
     return $?
 }
 
@@ -114,4 +116,4 @@ fi
 
 # Hand off to the real agent
 exec "$PYTHON" "$AGENT_PY" "$@"
-# bbs-signature: v1 Dhx3hlB4m0RzseIrhh/8LoqBcz0WHlFHzdiwNXlbjqd23bm+IUvXZ++ZRz353zxt6lUklyPJgTQhYQUfeOWKDQ==
+# bbs-signature: v1 vTxHubeY1GWAwq2OX28EVShASXdPo1f2k2uaY1SAC0THE/zzP+gB6pj5i87jdMD+EtUSLV3dQYZjxhVlwIFFAw==

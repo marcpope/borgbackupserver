@@ -66,6 +66,11 @@ stop_spinner() {
 # this clears the spinner on any exit so at least the prompt is usable.
 trap stop_spinner EXIT
 
+# yum/dnf fail outright when any enabled repo is unreachable, which is common
+# on end-of-life systems (a CentOS 7 box with a removed MariaDB repo, say).
+# Skip repos that don't answer; the ones we need are checked by the result.
+RH_SKIP_DEAD="--setopt=*.skip_if_unavailable=1"
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # Output helpers
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -279,6 +284,10 @@ install_borg() {
     print_info "Borg not found, installing via package manager..."
     start_spinner "Installing borgbackup and python3..."
 
+    # A failed install must not end the script: `set -e` with the output
+    # suppressed used to exit mid-spinner with no message (#304). Fall through
+    # instead; the python3 check below says what is missing.
+    set +e
     case "$OS" in
         ubuntu|debian|pop|linuxmint)
             apt-get update -qq >/dev/null 2>&1
@@ -286,19 +295,19 @@ install_borg() {
             ;;
         centos|rhel|rocky|almalinux)
             if command -v dnf &>/dev/null; then
-                dnf install -y epel-release >/dev/null 2>&1 || true
+                dnf install -y "$RH_SKIP_DEAD" epel-release >/dev/null 2>&1 || true
                 dnf config-manager --set-enabled powertools >/dev/null 2>&1 || \
                     dnf config-manager --set-enabled crb >/dev/null 2>&1 || \
                     dnf config-manager --set-enabled PowerTools >/dev/null 2>&1 || true
-                dnf install -y python3-packaging >/dev/null 2>&1 || true
-                dnf install -y borgbackup python3 >/dev/null 2>&1 || {
-                    dnf install -y python3 >/dev/null 2>&1
+                dnf install -y "$RH_SKIP_DEAD" python3-packaging >/dev/null 2>&1 || true
+                dnf install -y "$RH_SKIP_DEAD" borgbackup python3 >/dev/null 2>&1 || {
+                    dnf install -y "$RH_SKIP_DEAD" python3 >/dev/null 2>&1
                 }
             else
-                yum install -y epel-release >/dev/null 2>&1 || true
-                yum install -y python3-packaging >/dev/null 2>&1 || true
-                yum install -y borgbackup python3 >/dev/null 2>&1 || {
-                    yum install -y python3 >/dev/null 2>&1
+                yum install -y "$RH_SKIP_DEAD" epel-release >/dev/null 2>&1 || true
+                yum install -y "$RH_SKIP_DEAD" python3-packaging >/dev/null 2>&1 || true
+                yum install -y "$RH_SKIP_DEAD" borgbackup python3 >/dev/null 2>&1 || {
+                    yum install -y "$RH_SKIP_DEAD" python3 >/dev/null 2>&1
                 }
             fi
             ;;
@@ -410,6 +419,7 @@ install_borg() {
             exit 1
             ;;
     esac
+    set -e
 
     stop_spinner
 
@@ -484,10 +494,10 @@ check_python3() {
             ;;
         centos|rhel|rocky|almalinux)
             if command -v dnf &>/dev/null; then
-                dnf install -y python3 >/dev/null 2>&1 || true
+                dnf install -y "$RH_SKIP_DEAD" python3 >/dev/null 2>&1 || true
             else
-                yum install -y epel-release >/dev/null 2>&1 || true
-                yum install -y python3 >/dev/null 2>&1 || true
+                yum install -y "$RH_SKIP_DEAD" epel-release >/dev/null 2>&1 || true
+                yum install -y "$RH_SKIP_DEAD" python3 >/dev/null 2>&1 || true
             fi
             ;;
         fedora)
@@ -507,6 +517,7 @@ check_python3() {
     else
         print_error "python3 >= 3.4 is required but could not be found."
         print_info "Install python3 manually, then re-run this installer."
+        print_info "If the package manager reports errors (a dead repo, for example), fix those first."
         exit 1
     fi
 }
@@ -803,6 +814,14 @@ RCEOF
         local bash_bin
         bash_bin=$(command -v bash 2>/dev/null || echo /bin/bash)
 
+        # C.UTF-8 doesn't exist on older systems (CentOS 7); use a UTF-8
+        # locale that does, as the init.d script below does
+        local utf8_locale=C.UTF-8
+        if ! locale -a 2>/dev/null | grep -qi '^c\.utf-\?8$' && \
+           locale -a 2>/dev/null | grep -qi '^en_us\.utf-\?8$'; then
+            utf8_locale=en_US.UTF-8
+        fi
+
         mkdir -p /etc/systemd/system
         cat > /etc/systemd/system/bbs-agent.service <<EOF
 [Unit]
@@ -813,7 +832,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=root
-Environment=LC_ALL=C.UTF-8 LANG=C.UTF-8 BBS_AGENT_DIR=$INSTALL_DIR BBS_PYTHON=$PYTHON3
+Environment=LC_ALL=$utf8_locale LANG=$utf8_locale BBS_AGENT_DIR=$INSTALL_DIR BBS_PYTHON=$PYTHON3
 ExecStart=$bash_bin $INSTALL_DIR/bbs-agent-start.sh
 Restart=always
 RestartSec=10
