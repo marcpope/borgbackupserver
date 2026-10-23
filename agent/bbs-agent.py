@@ -54,7 +54,7 @@ if not hasattr(subprocess, "run"):
     subprocess.run = _subprocess_run
     subprocess.CompletedProcess = _CompletedProcess
 
-AGENT_VERSION = "2.99.1"
+AGENT_VERSION = "2.99.4"
 
 # Ed25519 public keys, hex, that may sign an update to this script and to
 # the start wrapper. Kept in step with agent/signing-key.pub. An update the
@@ -4638,10 +4638,16 @@ class SnapshotSession(object):
     returns the rewritten borg argv and the cwd to run it from; cleanup()
     always follows, from a finally block."""
 
-    def __init__(self, config, job_id):
+    def __init__(self, config, job_id, plan_id=None):
         self.config = config
         self.job_id = job_id
-        self.root = "/run/bbs-agent/snap-{}".format(job_id)
+        # The tree lives at a per-plan path, not a per-job one. Borg's files
+        # cache keys every entry on its absolute path, so a root that changed
+        # with the job ID made every run miss the cache and re-read, re-chunk
+        # every file: incremental backups took as long as full ones (#557).
+        # Runs of one plan never overlap, so the path is free between them.
+        key = "plan-{}".format(int(plan_id)) if plan_id else str(job_id)
+        self.root = "/run/bbs-agent/snap-{}".format(key)
         self.tree = os.path.join(self.root, "tree")
         self.mounted = []      # mount points inside the tree, in mount order
         self.snapshots = []    # (method, identifier) to remove
@@ -4701,6 +4707,11 @@ class SnapshotSession(object):
                     wanted[sub["mount"]] = sub
         order = sorted(wanted.values(), key=lambda m: len(m["mount"]))
 
+        # A run that died mid-backup can leave its mounts under the same
+        # path; take them down before building the tree again.
+        if os.path.isdir(self.root):
+            self._log("removing a leftover snapshot tree at {}".format(self.root), "warning")
+            _teardown_snapshot_root(self.root)
         os.makedirs(self.tree, exist_ok=True)
         n = 0
         for m in order:
@@ -4800,6 +4811,19 @@ def _human_bytes(n):
         n /= 1024.0
 
 
+def _teardown_snapshot_root(root):
+    """Unmount everything under one snapshot tree, deepest first, and remove
+    the directory. Used for trees a crashed run left behind."""
+    umount = _snapshot_tool("umount") or "umount"
+    targets = []
+    for m in _read_mounts():
+        if m["mount"].startswith(root + "/"):
+            targets.append(m["mount"])
+    for t in sorted(targets, key=len, reverse=True):
+        _run_quiet([umount, "-l", t])
+    shutil.rmtree(root, ignore_errors=True)
+
+
 def cleanup_stale_snapshots():
     """Remove anything a crashed job left behind: mounts under our snapshot
     root, LVM snapshots named bbs-snap-*, btrfs and ZFS snapshots with the
@@ -4807,20 +4831,13 @@ def cleanup_stale_snapshots():
     if IS_WINDOWS or IS_MACOS or not hasattr(os, "geteuid") or os.geteuid() != 0:
         return
     base = "/run/bbs-agent"
-    umount = _snapshot_tool("umount") or "umount"
     try:
         stale = [d for d in os.listdir(base) if d.startswith("snap-")] if os.path.isdir(base) else []
     except OSError:
         stale = []
     for d in stale:
         root = os.path.join(base, d)
-        targets = []
-        for m in _read_mounts():
-            if m["mount"].startswith(root + "/"):
-                targets.append(m["mount"])
-        for t in sorted(targets, key=len, reverse=True):
-            _run_quiet([umount, "-l", t])
-        shutil.rmtree(root, ignore_errors=True)
+        _teardown_snapshot_root(root)
         logger.warning("Removed stale snapshot tree {}".format(root))
     lvs, lvremove = _snapshot_tool("lvs"), _snapshot_tool("lvremove")
     if lvs and lvremove:
@@ -5480,7 +5497,7 @@ def _execute_task_inner(config, task, job_id, task_type, command, env_vars,
     # tree and run borg from there with relative paths (see SnapshotSession).
     snapshot_session = None
     if task_type in ("backup", "backup_dry_run") and task.get("snapshot"):
-        snapshot_session = SnapshotSession(config, job_id)
+        snapshot_session = SnapshotSession(config, job_id, task.get("backup_plan_id"))
         try:
             command, cwd = snapshot_session.prepare(command, directories)
         except Exception as e:
@@ -6296,4 +6313,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-# bbs-signature: v1 Cm8u9BWOrLR4/U5/rwbslIP1TFV1b6aCfbQK1lTTJr3Xx9haoFmOLuw7IghG8rgfsbdyvuTqW5zw/sC9B5BSAw==
+# bbs-signature: v1 wttjhpOtWu8mbQcpWCSGKEGS3SMnDBWBDN/fBMCnn1QX6fRSHS9xHWJNd+nDytpwpJ8klwWnIKK1T/V20rt7Dg==

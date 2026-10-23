@@ -416,8 +416,11 @@ class QueueManager
                         $plugins
                     );
                 }
-                // The agent snapshots the volumes and backs up from them.
+                // The agent snapshots the volumes and backs up from them. It
+                // mounts them at a per-plan path so borg's files cache keeps
+                // matching between runs (#557).
                 $extra['snapshot'] = !empty($job['snapshot']);
+                $extra['backup_plan_id'] = !empty($job['backup_plan_id']) ? (int) $job['backup_plan_id'] : null;
                 // MySQL/PostgreSQL dumps go to borg through pipes (#540).
                 // Older agents ignore it and dump to disk as before.
                 $extra['stream_db_dumps'] = !empty($job['stream_db_dumps']);
@@ -690,8 +693,11 @@ class QueueManager
                         $plugins
                     );
                 }
-                // The agent snapshots the volumes and backs up from them.
+                // The agent snapshots the volumes and backs up from them. It
+                // mounts them at a per-plan path so borg's files cache keeps
+                // matching between runs (#557).
                 $extra['snapshot'] = !empty($job['snapshot']);
+                $extra['backup_plan_id'] = !empty($job['backup_plan_id']) ? (int) $job['backup_plan_id'] : null;
                 // MySQL/PostgreSQL dumps go to borg through pipes (#540).
                 // Older agents ignore it and dump to disk as before.
                 $extra['stream_db_dumps'] = !empty($job['stream_db_dumps']);
