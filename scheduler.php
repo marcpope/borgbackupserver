@@ -8,6 +8,13 @@ date_default_timezone_set('UTC');
 
 require_once __DIR__ . '/vendor/autoload.php';
 
+// The installer sets up this cron before the setup wizard has written
+// config/.env, so until the wizard finishes every minute logged a PHP fatal
+// from Dotenv (#560). Nothing to schedule before setup: leave quietly.
+if (!file_exists(__DIR__ . '/config/.env')) {
+    exit(0);
+}
+
 use BBS\Core\Config;
 use BBS\Services\SchedulerService;
 use BBS\Services\QueueManager;
