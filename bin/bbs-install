@@ -17,6 +17,40 @@ step() { echo -e "\n${CYAN}${BOLD}[$1] $2${NC}"; }
 die()  { fail "$*"; exit 1; }
 
 LOG_FILE="/var/log/bbs-install.log"
+
+# sudo-rs, the default sudo on Ubuntu 25.10 and later, runs a piped command
+# (curl … | sudo bash) inside a new pty but leaves it outside the terminal's
+# foreground process group. Classic sudo puts the command in the foreground.
+# In the background, the log tee below is stopped the moment it writes to the
+# terminal, and bash is stopped on the first prompt read; sudo-rs then leaves
+# the whole tree suspended, so the hostname prompt shows and nothing typed
+# arrives (#560). Move this process to the foreground before anything touches
+# the terminal, and if that is not possible, say how to run the installer
+# instead of hanging.
+if [[ ! -t 0 ]] && [[ -n "${SUDO_COMMAND:-}" ]] && (exec 3</dev/tty) 2>/dev/null \
+   && [[ "$(sudo --version 2>/dev/null | head -1)" == sudo-rs* ]]; then
+    if command -v python3 >/dev/null 2>&1; then
+        python3 - <<'PY' 2>/dev/null || true
+import os, signal
+signal.signal(signal.SIGTTOU, signal.SIG_IGN)
+fd = os.open("/dev/tty", os.O_RDWR)
+if os.tcgetpgrp(fd) != os.getpgrp():
+    os.tcsetpgrp(fd, os.getpgrp())
+PY
+    fi
+    TPGID=$(ps -o tpgid= -p $$ 2>/dev/null | tr -d ' ' || true)
+    PGID=$(ps -o pgid= -p $$ 2>/dev/null | tr -d ' ' || true)
+    if [[ -n "$TPGID" && -n "$PGID" && "$TPGID" != "$PGID" ]]; then
+        fail "This terminal cannot deliver keyboard input to a piped installer under sudo-rs."
+        echo "  Download the script and run it from a file instead:"
+        echo
+        echo "    curl -fsSL https://raw.githubusercontent.com/marcpope/borgbackupserver/main/bin/bbs-install -o bbs-install"
+        echo "    sudo bash bbs-install"
+        echo
+        exit 1
+    fi
+fi
+
 exec > >(stdbuf -oL tee -a "$LOG_FILE") 2>&1
 
 # Ensure interactive prompts work even when piped (curl | sudo bash)
@@ -228,9 +262,12 @@ if [[ "$NO_SSL" == false ]]; then
     if command -v getent &>/dev/null; then
         # getent covers A and AAAA, and honours the resolver the machine
         # actually uses rather than querying DNS directly.
-        RESOLVED=$(getent ahosts "$BBS_HOSTNAME" 2>/dev/null | awk '{print $1}' | sort -u | paste -sd' ' -)
+        # `|| true`: getent exits 2 for a name that does not resolve, and
+        # under set -e with pipefail that ended the installer silently right
+        # after "Hostname:" on every host whose DNS was not in place yet.
+        RESOLVED=$(getent ahosts "$BBS_HOSTNAME" 2>/dev/null | awk '{print $1}' | sort -u | paste -sd' ' - || true)
     elif command -v dig &>/dev/null; then
-        RESOLVED=$(dig +short "$BBS_HOSTNAME" | paste -sd' ' -)
+        RESOLVED=$(dig +short "$BBS_HOSTNAME" 2>/dev/null | paste -sd' ' - || true)
     fi
 
     if [[ -n "$RESOLVED" ]]; then
