@@ -633,8 +633,11 @@ else
     # Dry run first, against the same plugin the real request uses. Apache is
     # already serving port 80 here, so this needs no temporary install and
     # cannot collide with a running web server the way --standalone does.
+    # certonly: certbot only accepts --dry-run with certonly or renew. The
+    # bare "certbot --apache --dry-run" form was refused with a usage error,
+    # so the test always failed and every install fell back to HTTP (#560).
     info "Testing whether a certificate can be issued for $BBS_HOSTNAME..."
-    if certbot --apache -d "$BBS_HOSTNAME" --non-interactive --agree-tos "${CERTBOT_ACCOUNT[@]}" --dry-run >> "$LOG_FILE" 2>&1; then
+    if certbot certonly --apache -d "$BBS_HOSTNAME" --non-interactive --agree-tos "${CERTBOT_ACCOUNT[@]}" --dry-run >> "$LOG_FILE" 2>&1; then
         ok "Certificate request test passed"
     else
         fail "A certificate cannot be issued for $BBS_HOSTNAME yet. Common causes:"
