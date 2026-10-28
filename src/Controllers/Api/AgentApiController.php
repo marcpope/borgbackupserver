@@ -1130,6 +1130,7 @@ class AgentApiController extends Controller
 
         if (!empty($stalledJobs)) {
             $response['check_jobs'] = array_map(fn($j) => (int) $j['id'], $stalledJobs);
+            $response['stall_minutes'] = $stallMinutes;
         }
 
         // Also relay cancel signals for the currently running job

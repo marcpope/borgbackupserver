@@ -54,7 +54,7 @@ if not hasattr(subprocess, "run"):
     subprocess.run = _subprocess_run
     subprocess.CompletedProcess = _CompletedProcess
 
-AGENT_VERSION = "2.99.5"
+AGENT_VERSION = "2.99.8"
 
 # Ed25519 public keys, hex, that may sign an update to this script and to
 # the start wrapper. Kept in step with agent/signing-key.pub. An update the
@@ -2402,6 +2402,12 @@ def _special_files(directories, excludes, keep, one_file_system):
     """Paths under `directories` that borg --read-special would open and read:
     pipes, device files, and symlinks to either. /dev/null (or a link to it)
     is harmless, reads as empty, and is left alone, as are the paths in `keep`.
+    A /dev/null node that cannot be opened (snap images are mounted nodev)
+    is listed anyway: borg's open fails too, and the job carries a warning
+    for nothing. A symlink into /proc or /dev/fd is listed without looking
+    at its target, because the target is a different thing in every
+    process: dev/stderr -> fd/2 is a log socket here and borg's own stderr
+    pipe in borg, which then reads the pipe it writes to and never returns.
 
     Pruning the walk with the plan's excludes only saves time, so only
     patterns that certainly exclude a whole directory are used: plain paths
@@ -2423,11 +2429,26 @@ def _special_files(directories, excludes, keep, one_file_system):
     except OSError:
         null_rdev = None
 
-    def harmful(st):
+    def openable(path):
+        try:
+            fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_NOCTTY", 0))
+        except OSError:
+            return False
+        os.close(fd)
+        return True
+
+    def harmful(st, path):
         mode = st.st_mode
         if stat.S_ISCHR(mode) and st.st_rdev == null_rdev:
-            return False
+            return not openable(path)
         return stat.S_ISFIFO(mode) or stat.S_ISCHR(mode) or stat.S_ISBLK(mode)
+
+    def volatile_link(path):
+        try:
+            target = os.path.realpath(path)
+        except (OSError, ValueError):
+            return False
+        return any(target == d or target.startswith(d + "/") for d in ("/proc", "/dev/fd"))
 
     found = []
     for root in [d.strip() for d in (directories or "").splitlines() if d.strip()]:
@@ -2454,13 +2475,18 @@ def _special_files(directories, excludes, keep, one_file_system):
                                 continue
                             stack.append(path)
                         elif e.is_symlink():
+                            if path in keep:
+                                continue
+                            if volatile_link(path):
+                                found.append(path)
+                                continue
                             try:
-                                if harmful(os.stat(path)) and path not in keep:
+                                if harmful(os.stat(path), path):
                                     found.append(path)
                             except OSError:
                                 pass  # dangling link
                         elif not e.is_file(follow_symlinks=False):
-                            if harmful(e.stat(follow_symlinks=False)) and path not in keep:
+                            if path not in keep and harmful(e.stat(follow_symlinks=False), path):
                                 found.append(path)
                     except OSError:
                         continue
@@ -6166,7 +6192,8 @@ def heartbeat_thread(config):
                     # Handle stall check — server says these jobs have no progress
                     stalled_ids = resp.get("check_jobs", [])
                     if stalled_ids and current_job_id in stalled_ids and current_borg_proc is not None:
-                        logger.warning("Server reports job #{} stalled (no progress >10min) — killing borg".format(current_job_id))
+                        logger.warning("Server reports job #{} stalled (no progress for {} min) — killing borg".format(
+                            current_job_id, resp.get("stall_minutes", "too many")))
                         _kill_process_tree(current_borg_proc)
 
                     # Handle cancel signal relayed through heartbeat
@@ -6313,4 +6340,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-# bbs-signature: v1 dAqf4iYWgTUD7lyeTgeDZ8PJTy5Fd7T2l8XyzMVnwXl8R6r4XOfRO0SnEKdctafcPw4nXaVYTPwLYfFXT8yCBQ==
+# bbs-signature: v1 MBM9Z1GyD5TwMwIT1A3qzzn80PsYTJieZKs1g1BMTR0CBU90I/7+uUo/ysm40rwl5sDvupDbqQwdfH5vLBlIAw==
