@@ -537,6 +537,7 @@ $sizeDisplay = $totalSize > 0 ? \BBS\Services\ServerStats::formatBytes((int) $to
             'mysql_dump' => ['/images/mysql.png', 'MySQL'],
             'pg_dump'    => ['/images/postgresql.svg', 'PostgreSQL'],
             'mongo_dump' => ['/images/mongodb.svg', 'MongoDB'],
+            'mssql_dump' => ['/images/mssql.svg', 'SQL Server'],
             'interworx'  => ['/images/interworx-icon.png', 'InterWorx'],
         ];
         if (isset($logos[$slug])) {
@@ -1773,12 +1774,12 @@ $sizeDisplay = $totalSize > 0 ? \BBS\Services\ServerStats::formatBytes((int) $to
 
     $renderPluginCards = function (array $checkedIds) use ($planPluginConfigCards) {
         $typeLabels = [
-            'mysql_dump' => 'MySQL', 'pg_dump' => 'PostgreSQL', 'mongo_dump' => 'MongoDB',
+            'mysql_dump' => 'MySQL', 'pg_dump' => 'PostgreSQL', 'mongo_dump' => 'MongoDB', 'mssql_dump' => 'SQL Server',
             'interworx' => 'InterWorx', 'shell_hook' => 'Script',
         ];
         $logos = [
             'mysql_dump' => '/images/mysql.png', 'pg_dump' => '/images/postgresql.svg',
-            'mongo_dump' => '/images/mongodb.svg', 'interworx' => '/images/interworx-icon.png',
+            'mongo_dump' => '/images/mongodb.svg', 'mssql_dump' => '/images/mssql.svg', 'interworx' => '/images/interworx-icon.png',
         ];
         // Selected configs come first, in the order they run, so the sequence
         // is visible before anyone drags anything. Everything else follows.
@@ -3131,6 +3132,7 @@ $sizeDisplay = $totalSize > 0 ? \BBS\Services\ServerStats::formatBytes((int) $to
         'mysql_dump' => '/images/mysql.png',
         'pg_dump' => '/images/postgresql.svg',
         'mongo_dump' => '/images/mongodb.svg',
+        'mssql_dump' => '/images/mssql.svg',
         'interworx' => '/images/interworx-icon.png',
     ];
     $randomPass = substr(str_shuffle('abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789'), 0, 20);
@@ -3377,8 +3379,19 @@ $sizeDisplay = $totalSize > 0 ? \BBS\Services\ServerStats::formatBytes((int) $to
                                         <?php endforeach; ?>
                                     </select>
                                 <?php else: ?>
+                                    <?php if (!empty($def['picker'])): ?><div class="db-picker-wrap" data-agent-id="<?= (int) $agent['id'] ?>" data-config-id="<?= (int) $cfg['id'] ?>" data-csrf="<?= htmlspecialchars($this->csrfToken()) ?>"><?php endif; ?>
                                     <label class="form-label small fw-semibold mb-1"><?= htmlspecialchars($def['label']) ?></label>
                                     <input type="<?= $def['type'] === 'number' ? 'number' : 'text' ?>" class="form-control form-control-sm" name="plugin_config[<?= $field ?>]" value="<?= !empty($def['sensitive']) ? '' : htmlspecialchars($val) ?>" <?= !empty($def['sensitive']) ? 'placeholder="(unchanged if empty)"' : '' ?>>
+                                    <?php if (!empty($def['picker'])): ?>
+                                        <button type="button" class="btn btn-sm btn-outline-primary mt-2 db-picker-detect"><i class="bi bi-search me-1"></i>Detect databases</button>
+                                        <span class="text-muted small ms-1">uses the saved connection settings</span>
+                                        <div class="db-picker-status"></div>
+                                        <div class="db-picker-panel border rounded p-2 mt-2" hidden>
+                                            <div class="form-check border-bottom pb-1 mb-1"><input class="form-check-input db-picker-all" type="checkbox" id="dbpAll<?= (int) $cfg['id'] ?>"><label class="form-check-label small fw-semibold" for="dbpAll<?= (int) $cfg['id'] ?>">All databases <code>*</code> <span class="text-muted fw-normal">(including databases created later)</span></label></div>
+                                            <div class="db-picker-list" style="max-height:220px;overflow:auto;"></div>
+                                        </div>
+                                        </div>
+                                    <?php endif; ?>
                                 <?php endif; ?>
                                 <?php if (!empty($def['help'])): ?><div class="form-text small"><?= htmlspecialchars($def['help']) ?></div><?php endif; ?>
                             </div>
@@ -3553,6 +3566,7 @@ $sizeDisplay = $totalSize > 0 ? \BBS\Services\ServerStats::formatBytes((int) $to
                                         <?php else: ?>
                                             <label class="form-label small fw-semibold mb-1"><?= htmlspecialchars($def['label']) ?></label>
                                             <input type="<?= $def['type'] === 'number' ? 'number' : 'text' ?>" class="form-control form-control-sm" name="plugin_config[<?= $field ?>]" value="<?= htmlspecialchars($fieldVal) ?>">
+                                            <?php if (!empty($def['picker'])): ?><div class="form-text small text-info"><i class="bi bi-info-circle me-1"></i>Once created, edit the configuration and use <strong>Detect databases</strong> to pick them from the server.</div><?php endif; ?>
                                         <?php endif; ?>
                                         <?php if (!empty($def['help'])): ?><div class="form-text small"><?= htmlspecialchars($def['help']) ?></div><?php endif; ?>
                                     </div>
@@ -3732,28 +3746,37 @@ GRANT ALL PRIVILEGES ON DATABASE mydb TO <span id="pgUser2g">bbs_backup</span>;<
     })();
     </script>
 
+    <?php
+    if (!isset($scripts)) $scripts = [];
+    $scripts[] = '/js/plugin-db-picker.js?v=' . filemtime(__DIR__ . '/../../../public/js/plugin-db-picker.js');
+    ?>
+
 <?php elseif ($tab === 'restore'): ?>
     <?php
     $mysqlPluginEnabled = false;
     $pgPluginEnabled = false;
     $mongoPluginEnabled = false;
+    $mssqlPluginEnabled = false;
     $mysqlConfigs = [];
     $pgConfigs = [];
     $mongoConfigs = [];
+    $mssqlConfigs = [];
     foreach ($agentPlugins as $ap) {
         if ($ap['slug'] === 'mysql_dump' && $ap['agent_enabled']) $mysqlPluginEnabled = true;
         if ($ap['slug'] === 'pg_dump' && $ap['agent_enabled']) $pgPluginEnabled = true;
         if ($ap['slug'] === 'mongo_dump' && $ap['agent_enabled']) $mongoPluginEnabled = true;
+        if ($ap['slug'] === 'mssql_dump' && $ap['agent_enabled']) $mssqlPluginEnabled = true;
     }
     if (!empty($pluginConfigs)) {
         foreach ($pluginConfigs as $pc) {
             if ($pc['slug'] === 'mysql_dump' && $mysqlPluginEnabled) $mysqlConfigs[] = $pc;
             if ($pc['slug'] === 'pg_dump' && $pgPluginEnabled) $pgConfigs[] = $pc;
             if ($pc['slug'] === 'mongo_dump' && $mongoPluginEnabled) $mongoConfigs[] = $pc;
+            if ($pc['slug'] === 'mssql_dump' && $mssqlPluginEnabled) $mssqlConfigs[] = $pc;
         }
     }
-    $dbPluginEnabled = $mysqlPluginEnabled || $pgPluginEnabled || $mongoPluginEnabled;
-    $allDbConfigs = array_merge($mysqlConfigs, $pgConfigs, $mongoConfigs);
+    $dbPluginEnabled = $mysqlPluginEnabled || $pgPluginEnabled || $mongoPluginEnabled || $mssqlPluginEnabled;
+    $allDbConfigs = array_merge($mysqlConfigs, $pgConfigs, $mongoConfigs, $mssqlConfigs);
     $defaultDbUser = 'your_user';
     if (!empty($mysqlConfigs)) {
         $firstCfg = json_decode($mysqlConfigs[0]['config'] ?? '{}', true);
@@ -3864,6 +3887,13 @@ GRANT ALL PRIVILEGES ON DATABASE mydb TO <span id="pgUser2g">bbs_backup</span>;<
                                 <optgroup label="MongoDB">
                                 <?php foreach ($mongoConfigs as $mc): ?>
                                     <option value="mongo:<?= $mc['id'] ?>"><?= htmlspecialchars($mc['name']) ?></option>
+                                <?php endforeach; ?>
+                                </optgroup>
+                            <?php endif; ?>
+                            <?php if (!empty($mssqlConfigs)): ?>
+                                <optgroup label="SQL Server">
+                                <?php foreach ($mssqlConfigs as $sc): ?>
+                                    <option value="mssql:<?= $sc['id'] ?>"><?= htmlspecialchars($sc['name']) ?></option>
                                 <?php endforeach; ?>
                                 </optgroup>
                             <?php endif; ?>
@@ -4124,7 +4154,7 @@ GRANT ALL PRIVILEGES ON DATABASE mydb TO <span id="pgUser2g">bbs_backup</span>;<
             </div>
         </div>
 
-        <form id="db-restore-form" method="POST" action="/clients/<?= $agent['id'] ?>/restore-mysql" data-mysql-action="/clients/<?= $agent['id'] ?>/restore-mysql" data-pg-action="/clients/<?= $agent['id'] ?>/restore-pg" data-mongo-action="/clients/<?= $agent['id'] ?>/restore-mongo" style="display:none;">
+        <form id="db-restore-form" method="POST" action="/clients/<?= $agent['id'] ?>/restore-mysql" data-mysql-action="/clients/<?= $agent['id'] ?>/restore-mysql" data-pg-action="/clients/<?= $agent['id'] ?>/restore-pg" data-mongo-action="/clients/<?= $agent['id'] ?>/restore-mongo" data-mssql-action="/clients/<?= $agent['id'] ?>/restore-mssql" style="display:none;">
             <input type="hidden" name="csrf_token" value="<?= $this->csrfToken() ?>">
             <input type="hidden" name="archive_id" id="db-restore-archive-id">
             <input type="hidden" name="plugin_config_id" id="db-restore-config-id">
@@ -4155,6 +4185,10 @@ GRANT ALL PRIVILEGES ON DATABASE mydb TO <span id="pgUser2g">bbs_backup</span>;<
         array_combine(
             array_map(function($mongoc) { return 'mongo:' . $mongoc['id']; }, $mongoConfigs),
             array_map(function($mongoc) { $c = json_decode($mongoc['config'] ?? '{}', true); return $c['user'] ?? ''; }, $mongoConfigs)
+        ),
+        array_combine(
+            array_map(function($sc) { return 'mssql:' . $sc['id']; }, $mssqlConfigs),
+            array_map(function($sc) { $c = json_decode($sc['config'] ?? '{}', true); return $c['user'] ?? 'bbs_backup'; }, $mssqlConfigs)
         )
     )) ?>;</script>
     <script>

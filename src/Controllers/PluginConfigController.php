@@ -291,7 +291,7 @@ class PluginConfigController extends Controller
 
         // Get the latest plugin_test job for this config
         $job = $this->db->fetchOne("
-            SELECT id, status, error_log, completed_at
+            SELECT id, status, error_log, completed_at, task_result
             FROM backup_jobs
             WHERE agent_id = ? AND task_type = 'plugin_test' AND plugin_config_id = ?
             ORDER BY queued_at DESC LIMIT 1
@@ -315,6 +315,11 @@ class PluginConfigController extends Controller
             $response['message'] = $log
                 ? str_replace('Plugin test output: ', '', $log['message'])
                 : 'Test completed successfully.';
+            // Structured result of the test (SQL Server: databases found)
+            $structured = json_decode((string) ($job['task_result'] ?? ''), true);
+            if (is_array($structured) && isset($structured['databases']) && is_array($structured['databases'])) {
+                $response['databases'] = array_values(array_map('strval', $structured['databases']));
+            }
         }
 
         $this->json($response);

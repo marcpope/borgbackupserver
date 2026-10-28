@@ -501,7 +501,9 @@ class AgentApiController extends Controller
 
         // Dry runs return their would-backup/excluded summary as task_result
         // JSON for the job detail page (#257)
-        if ($job['task_type'] === 'backup_dry_run' && !empty($input['task_result'])) {
+        // Plugin tests may return structured data too (SQL Server: the
+        // databases found, for the Detect databases picker).
+        if (in_array($job['task_type'], ['backup_dry_run', 'plugin_test'], true) && !empty($input['task_result'])) {
             $data['task_result'] = substr((string) $input['task_result'], 0, 262144);
         }
 
