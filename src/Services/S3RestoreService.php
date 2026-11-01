@@ -67,6 +67,12 @@ class S3RestoreService
             if ($this->db->fetchOne("SELECT id FROM repositories WHERE agent_id = ? AND name = ?", [$agentId, $copyName])) {
                 return $this->fail(409, "Repository \"{$copyName}\" already exists. Choose a different name.");
             }
+            // The name is a label; the directory gets a filesystem-safe form of
+            // it, so a name like "../2/x" can't point outside this client's folder.
+            $copyDir = RepositoryImportService::sanitizeName($copyName);
+            if ($copyDir === '') {
+                return $this->fail(422, 'Repository names need at least one letter or number.');
+            }
 
             // Same storage location as the source repo, default otherwise.
             $copyLocId = $repo['storage_location_id'] ?? null;
@@ -87,7 +93,7 @@ class S3RestoreService
             $copyIsNonDefault = rtrim($copyStoragePath, '/') !== $sshHomePath2;
 
             if ($copyIsNonDefault) {
-                $localCopyPath = rtrim($copyStoragePath, '/') . '/' . $agentId . '/' . $copyName;
+                $localCopyPath = rtrim($copyStoragePath, '/') . '/' . $agentId . '/' . $copyDir;
                 if (!empty($repo['ssh_unix_user']) && !empty($host)) {
                     $sshHost2 = SshKeyManager::stripHostPort($host);
                     $copyPath = "ssh://{$repo['ssh_unix_user']}@{$sshHost2}//{$localCopyPath}";
@@ -96,10 +102,14 @@ class S3RestoreService
                 }
             } else {
                 if (!empty($repo['ssh_unix_user']) && !empty($host)) {
-                    $copyPath = SshKeyManager::buildSshRepoPath($repo['ssh_unix_user'], $host, $copyName);
+                    $copyPath = SshKeyManager::buildSshRepoPath($repo['ssh_unix_user'], $host, $copyDir);
                 } else {
-                    $copyPath = rtrim($copyStoragePath, '/') . '/' . $agentId . '/' . $copyName;
+                    $copyPath = rtrim($copyStoragePath, '/') . '/' . $agentId . '/' . $copyDir;
                 }
+            }
+            // Two names can clean up to the same directory ("a b", "a-b")
+            if ($this->db->fetchOne("SELECT id FROM repositories WHERE path = ?", [$copyPath])) {
+                return $this->fail(409, 'A repository already exists at that path. Choose a different name.');
             }
 
             $targetRepoId = $this->db->insert('repositories', [

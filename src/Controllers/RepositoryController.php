@@ -1346,7 +1346,12 @@ class RepositoryController extends Controller
         $repoName = trim($_POST['repo_name'] ?? '');
         $pluginConfigId = (int) ($_POST['plugin_config_id'] ?? 0);
 
-        if (empty($repoName) || $pluginConfigId === 0) {
+        // The name is the offsite folder's and becomes the last part of the
+        // repo path. Offsite folder names only ever contain [A-Za-z0-9_-], so
+        // anything else is refused rather than cleaned up: "../2/x" must not
+        // reach another client's directory.
+        if (empty($repoName) || $pluginConfigId === 0
+            || mb_strlen($repoName) > 100 || RepositoryImportService::sanitizeName($repoName) !== $repoName) {
             $this->flash('danger', 'Invalid restore request.');
             $this->redirect("/clients/{$id}?tab=repos");
         }
