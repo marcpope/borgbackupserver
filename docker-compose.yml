@@ -51,6 +51,9 @@ services:
       # replace the line above with a bind mount:
       # - /mnt/backups:/var/bbs
     restart: unless-stopped
+    # On stop the container shuts MariaDB and ClickHouse down in order
+    # (#440). Docker's default 10s is too short for a MariaDB flush.
+    stop_grace_period: 90s
     # Docker's default json-file log driver has no size limit, which means
     # container output (mostly ClickHouse's internal warnings) will grow
     # unbounded over time. Cap it at ~30 MB total — plenty for recent

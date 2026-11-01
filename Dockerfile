@@ -22,6 +22,7 @@ RUN apt-get update && apt-get upgrade -y && apt-get dist-upgrade -y && apt-get i
     unzip \
     cron \
     sudo \
+    tini \
     mariadb-server \
     mariadb-client \
     borgbackup \
@@ -135,4 +136,15 @@ ENV PGID=33
 
 EXPOSE 80 22
 
-ENTRYPOINT ["/entrypoint.sh"]
+# Apache, sshd and MariaDB must all answer; a container where one of them
+# is gone while the rest run is the case #440 is about. ClickHouse is left
+# out: the server runs without it (catalog features off), so its absence
+# isn't a reason to mark the whole container unhealthy.
+HEALTHCHECK --interval=60s --timeout=15s --start-period=5m --retries=3 \
+    CMD bash -c 'curl -fsS -o /dev/null http://127.0.0.1/login && mysqladmin ping -h localhost --silent && exec 3<>/dev/tcp/127.0.0.1/22'
+
+# tini is PID 1 (#440): it forwards SIGTERM to the entrypoint and reaps
+# orphans. The entrypoint then stops each service in order rather than
+# letting Docker kill MariaDB and ClickHouse mid-write.
+STOPSIGNAL SIGTERM
+ENTRYPOINT ["/usr/bin/tini", "--", "/entrypoint.sh"]

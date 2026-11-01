@@ -454,6 +454,7 @@ tmpdir = /var/bbs/tmp
 MYCNF
 
 mariadbd-safe --datadir="$MYSQL_DATADIR" &
+MYSQL_PID=$!
 sleep 3
 
 # Wait for MySQL to be ready
@@ -982,7 +983,10 @@ fi
 echo "Starting SSH server..."
 SSHD_LOG="/var/log/sshd.log"
 : > "$SSHD_LOG" && chmod 640 "$SSHD_LOG"
-/usr/sbin/sshd -E "$SSHD_LOG"
+# -D keeps sshd in the foreground so it is a child of this script and
+# the supervision loop below sees it die (#440).
+/usr/sbin/sshd -D -E "$SSHD_LOG" &
+SSHD_PID=$!
 tail -n 0 -F "$SSHD_LOG" 2>/dev/null | sed -u 's/^/[sshd] /' &
 
 # --- Cron ---
@@ -1008,8 +1012,8 @@ PATH=/usr/local/bin:/usr/bin:/bin
 * * * * * root flock -n /var/lock/bbs-scheduler.lock su -s /bin/sh www-data -c 'cd /var/www/bbs && TMPDIR=/var/bbs/tmp /usr/local/bin/php scheduler.php' >> /var/log/bbs-scheduler.log 2>&1
 # Save UIDs for any user home dirs that have .ssh/ but no .uid file yet
 */5 * * * * root for d in /var/bbs/home/*/; do [ -d "$d/.ssh" ] && [ ! -f "$d/.uid" ] && stat -c \%u "$d" > "$d/.uid" 2>/dev/null; done
-# Cap ClickHouse stderr/stdout at ~50MB. ClickHouse runs as --daemon and
-# inherits stderr/stdout to these files; a Poco logger rotation glitch can
+# Cap ClickHouse stderr/stdout at ~50MB. ClickHouse may still redirect its
+# stderr/stdout to these files; a Poco logger rotation glitch can
 # cause a tight loop of multi-line stack traces (#79, #252). Truncate
 # rather than rotate — ClickHouse holds the FD open and we don't want to
 # orphan it. We keep the file (so the next write goes to offset 0 cleanly)
@@ -1017,7 +1021,8 @@ PATH=/usr/local/bin:/usr/bin:/bin
 */5 * * * * root for f in /var/log/clickhouse-server/stderr.log /var/log/clickhouse-server/stdout.log; do [ -f "$f" ] && [ "$(stat -c\%s "$f" 2>/dev/null || echo 0)" -gt 52428800 ] && : > "$f"; done
 CRON
 chmod 644 /etc/cron.d/bbs-scheduler
-cron
+cron -f &
+CRON_PID=$!
 
 echo "=== BBS Container Ready ==="
 
@@ -1062,4 +1067,64 @@ else
     rm -f "$REMOTEIP_CONF"
 fi
 
-exec apache2-foreground
+# --- Run and supervise (#440) ---------------------------------------------
+# Apache used to be exec'd here and become PID 1, so `docker stop` reached
+# only Apache: MariaDB and ClickHouse were killed by Docker when the grace
+# period ran out, and an sshd or cron that died left a container that
+# looked fine while every backup failed. Now tini is PID 1, Apache is one
+# more child, and this script waits on all of them: a SIGTERM stops each
+# service in order, and a service that exits on its own takes the container
+# down with a non-zero status so the restart policy brings it back whole.
+# setsid: Apache's prefork shutdown sends SIGTERM to its whole process
+# group, which here would be every service at once. Its own group keeps
+# that to Apache, so MariaDB below gets an orderly shutdown instead.
+setsid apache2-foreground &
+APACHE_PID=$!
+
+shutdown_all() {
+    local code="$1"
+    trap '' TERM INT
+    echo "=== BBS Container Stopping ==="
+    kill -TERM "$APACHE_PID" "$SSHD_PID" "$CRON_PID" 2>/dev/null || true
+    # Blocks until mariadbd has flushed and exited; mariadbd-safe then
+    # sees a clean stop and exits too instead of restarting it.
+    if ! pgrep -x mariadbd >/dev/null 2>&1; then
+        echo "  MariaDB is not running"
+    elif err=$(mysqladmin -h localhost shutdown 2>&1); then
+        echo "  MariaDB stopped"
+    else
+        echo "  MariaDB did not answer the shutdown request: ${err}"
+    fi
+    [ -n "${CH_PID:-}" ] && kill -TERM "$CH_PID" 2>/dev/null || true
+    # Only the services: a bare `wait` would also sit on the sshd log
+    # tail, which never ends on its own.
+    wait "$APACHE_PID" "$SSHD_PID" "$CRON_PID" "$MYSQL_PID" ${CH_PID:+"$CH_PID"} 2>/dev/null
+    echo "  Apache, sshd, cron and ClickHouse stopped"
+    # What is left (the log tail) has nothing to flush. This shell ignores
+    # the TERM it sends itself.
+    kill -TERM 0 2>/dev/null
+    echo "=== BBS Container Stopped ==="
+    exit "$code"
+}
+trap 'shutdown_all 0' TERM INT
+
+# A service's exit status is not an error of this script; `wait -n`
+# returns it, and set -e would turn it into an abort before the shutdown.
+# ClickHouse is not in the list: the server runs without it (catalog off)
+# and a host where it can't start (#327) must not restart-loop. Its own
+# watchdog restarts it, as mariadbd-safe does for mariadbd.
+set +e
+SERVICES="APACHE SSHD CRON MYSQL"
+while true; do
+    wait -n "$APACHE_PID" "$SSHD_PID" "$CRON_PID" "$MYSQL_PID" 2>/dev/null
+    rc=$?
+    # >128 is the wait interrupted by a signal the trap has already handled
+    [ "$rc" -gt 128 ] && continue
+    for svc in $SERVICES; do
+        pidvar="${svc}_PID"
+        if ! kill -0 "${!pidvar}" 2>/dev/null; then
+            echo "!! $(echo "$svc" | tr '[:upper:]' '[:lower:]') exited (status $rc); stopping the container so it can be restarted"
+        fi
+    done
+    shutdown_all 1
+done
