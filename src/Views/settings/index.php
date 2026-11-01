@@ -3371,7 +3371,7 @@ sudo /var/www/bbs/bin/bbs-token revoke "ansible"</code></pre>
 // Agent version check
 $bundledAgentVersion = $updateSvc->getBundledAgentVersion();
 $allAgents = $bundledAgentVersion ? $this->db->fetchAll("SELECT id, name, agent_version FROM agents WHERE agent_version IS NOT NULL") : [];
-$outdatedAgents = $bundledAgentVersion ? array_filter($allAgents, fn($a) => $a['agent_version'] !== $bundledAgentVersion) : [];
+$outdatedAgents = $bundledAgentVersion ? $updateSvc->getOutdatedAgents() : [];
 $totalAgents = count($allAgents);
 $outdatedCount = count($outdatedAgents);
 ?>

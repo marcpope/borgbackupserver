@@ -154,7 +154,8 @@
                         </td>
                         <td>
                             <?= !empty($agent['agent_version']) ? 'v' . htmlspecialchars($agent['agent_version']) : '--' ?>
-                            <?php if ($latestVersion && !empty($agent['agent_version']) && $agent['agent_version'] !== $latestVersion
+                            <?php if ($latestVersion && !empty($agent['agent_version']) && !empty($agent['auto_update_enabled'])
+                                      && version_compare($agent['agent_version'], $latestVersion, '<')
                                       && (($_SESSION['user_role'] ?? '') === 'admin' || (int) ($agent['user_id'] ?? 0) === (int) ($_SESSION['user_id'] ?? 0))): ?>
                                 <form method="POST" action="/clients/<?= $agent['id'] ?>/update-agent" class="d-inline" onclick="event.stopPropagation()">
                                     <input type="hidden" name="csrf_token" value="<?= $this->csrfToken() ?>">
