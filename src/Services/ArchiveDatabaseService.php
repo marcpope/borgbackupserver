@@ -71,6 +71,9 @@ class ArchiveDatabaseService
             $dumpDir = rtrim($g['dump_dir'] ?? '', '/');
             $dbs = $g['databases'] ?? [];
             if ($dumpDir === '' || empty($dbs)) continue;
+            // SQL Server dumps are .bak files, often under a Windows path the
+            // catalog spells differently; the timestamp is optional.
+            if (($g['engine'] ?? null) === 'mssql_dump') continue;
             $compress = $g['compress'] ?? true;
             $patterns = [];
             foreach ($dbs as $db) {

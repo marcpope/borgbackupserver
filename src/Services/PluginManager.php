@@ -440,7 +440,21 @@ class PluginManager
                           '--character-sets-dir', '--load-data-local-dir'], 'rT#'],
         'pg_dump' => [['--file'], 'f'],
         'mongo_dump' => [['--out', '--archive', '--config'], 'o'],
+        // No pass-through options: BACKUP DATABASE is built by the agent. The
+        // entry gives mssql_dump the shared dump_dir checks.
+        'mssql_dump' => [[], '#'],
     ];
+
+    /**
+     * File name the agent gives a SQL Server database's backup: the database
+     * name with characters Windows refuses in file names replaced by "_",
+     * plus .bak. The agent (_mssql_dump_filename) must produce the same name,
+     * restore extracts exactly this file from the archive.
+     */
+    public static function mssqlDumpFileName(string $database): string
+    {
+        return preg_replace('/[<>:"\/\\\\|?*\x00-\x1f]/', '_', $database) . '.bak';
+    }
 
     /**
      * In hosted mode an Offsite Sync config copies to the platform's bucket
@@ -484,6 +498,9 @@ class PluginManager
                 }
             }
             return S3SyncService::pathPrefixProblem((string) ($config['path_prefix'] ?? ''), $type, true);
+        }
+        if ($slug === 'mssql_dump' && trim((string) ($config['databases'] ?? '')) === '') {
+            return 'Databases: select at least one database, or use * for all.';
         }
         if (isset(self::DUMP_BLOCKED_OPTIONS[$slug])) {
             [$long, $short] = self::DUMP_BLOCKED_OPTIONS[$slug];
@@ -671,6 +688,82 @@ class PluginManager
                     'type' => 'text',
                     'label' => 'Extra pg_dump Options',
                     'default' => '--no-owner --no-privileges',
+                ],
+            ],
+            'mssql_dump' => [
+                'host' => [
+                    'type' => 'text',
+                    'label' => 'SQL Server Host',
+                    'default' => 'localhost',
+                    'help' => 'The BACKUP command runs on the SQL Server and writes into the Dump Directory, so the agent should run on the SQL Server machine (localhost). For a named instance use host\\INSTANCE and leave the port empty.',
+                ],
+                'port' => [
+                    'type' => 'number',
+                    'label' => 'Port',
+                    'default' => 1433,
+                ],
+                'user' => [
+                    'type' => 'text',
+                    'label' => 'Username',
+                    'required' => true,
+                    'default' => 'bbs_backup',
+                    'help' => 'SQL Server login (SQL authentication).',
+                ],
+                'password' => [
+                    'type' => 'text',
+                    'label' => 'Password',
+                    'required' => true,
+                    'generate' => true,
+                    'sensitive' => true,
+                ],
+                'databases' => [
+                    'type' => 'text',
+                    'label' => 'Databases',
+                    'default' => '*',
+                    'picker' => true,
+                    'help' => 'Use * for all online databases, or a comma-separated list of specific names. After saving, edit the configuration and use Detect databases to pick them from the server.',
+                ],
+                'dump_dir' => [
+                    'type' => 'text',
+                    'label' => 'Dump Directory',
+                    'default' => 'C:\\ProgramData\\BBS\\mssql',
+                    'required' => true,
+                    'help' => 'Directory on the SQL Server machine where the .bak files are written. Automatically included in backup directories. On Linux use e.g. /var/opt/mssql/bbs-backup.',
+                ],
+                'compress' => [
+                    'type' => 'checkbox',
+                    'label' => 'Use SQL Server backup compression',
+                    'default' => false,
+                    'help' => 'Off (default): borg compresses the archive anyway and an uncompressed .bak deduplicates against last night\'s, so the repository grows by what changed. On: smaller on the client\'s disk while the backup runs, but deduplicates poorly. Not available on every edition.',
+                ],
+                'cleanup_after' => [
+                    'type' => 'checkbox',
+                    'label' => 'Delete .bak files after backup completes',
+                    'default' => true,
+                ],
+                'safety_backup' => [
+                    'type' => 'checkbox',
+                    'label' => 'Safety backup before Replace',
+                    'default' => true,
+                    'help' => 'When a restore replaces an existing database, back the current one up first (to <dump directory>_pre_restore). If that backup fails the database is left untouched. Switch off only if you accept having no way back.',
+                ],
+                'safety_keep_days' => [
+                    'type' => 'number',
+                    'label' => 'Keep safety backups (days)',
+                    'default' => 7,
+                    'help' => 'Safety backups older than this are deleted after the next one is made. 0 keeps them forever (they are never cleaned up otherwise, so mind the disk).',
+                ],
+                'trust_cert' => [
+                    'type' => 'checkbox',
+                    'label' => 'Trust server certificate',
+                    'default' => true,
+                    'help' => 'Accept the SQL Server\'s TLS certificate without validating it (needed for the default self-signed certificate).',
+                ],
+                'exclude_databases' => [
+                    'type' => 'tags',
+                    'label' => 'Exclude Databases',
+                    'default' => ['tempdb'],
+                    'help' => 'Comma-separated list of databases to skip when using * above. tempdb is never backed up. Add master, model, msdb here to skip system databases.',
                 ],
             ],
             'mongo_dump' => [
@@ -1030,6 +1123,23 @@ class PluginManager
                 . "])\n\n"
                 . "-- Note: Authentication is optional. Leave username/password\n"
                 . "-- empty if your MongoDB instance does not require auth.",
+            'mssql_dump' => "-- Simplest (backup + restore of every database): run as sysadmin in SSMS/sqlcmd\n"
+                . "CREATE LOGIN bbs_backup WITH PASSWORD = 'strong_password', CHECK_POLICY = OFF;\n"
+                . "ALTER SERVER ROLE [sysadmin] ADD MEMBER bbs_backup;\n\n"
+                . "-- Least privilege instead (backup only): per database to be backed up\n"
+                . "USE [MyDb];\n"
+                . "CREATE USER bbs_backup FOR LOGIN bbs_backup;\n"
+                . "ALTER ROLE db_backupoperator ADD MEMBER bbs_backup;\n"
+                . "-- plus, so that * can list databases and the service account is found:\n"
+                . "GRANT VIEW ANY DATABASE TO bbs_backup;\n"
+                . "GRANT VIEW SERVER STATE TO bbs_backup;\n"
+                . "-- Restore additionally needs: ALTER SERVER ROLE [dbcreator] ADD MEMBER bbs_backup;\n\n"
+                . "Requirements on the client:\n"
+                . "  Windows: nothing to install (the agent uses the built-in .NET SqlClient).\n"
+                . "  Linux:   sqlcmd from mssql-tools18 (or go-sqlcmd).\n"
+                . "The agent must run on the SQL Server machine, and the SQL Server service\n"
+                . "account needs write access to the Dump Directory (the agent tries to grant it).\n"
+                . "Backups use COPY_ONLY, so existing full/differential/log backup chains are untouched.",
             'interworx' => "InterWorx control panel backup plugin.\n\n"
                 . "Requires InterWorx to be installed at the default location\n"
                 . "(~iworx/bin/backup.pex must be accessible).\n\n"

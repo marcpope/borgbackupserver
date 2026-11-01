@@ -174,7 +174,7 @@ class QueueManager
         // tasks (prune/compact/catalog/etc.) run by the scheduler itself —
         // they don't care about the agent's connection state.
         $agentBoundTypes = [
-            'backup', 'backup_dry_run', 'restore', 'restore_mysql', 'restore_pg', 'restore_mongo',
+            'backup', 'backup_dry_run', 'restore', 'restore_mysql', 'restore_pg', 'restore_mongo', 'restore_mssql',
             'update_borg', 'update_agent', 'plugin_test', 'plugin_post', 'list_dir',
         ];
 
@@ -203,7 +203,7 @@ class QueueManager
         $busyAgents = $this->db->fetchAll(
             "SELECT DISTINCT agent_id FROM backup_jobs
              WHERE status IN ('sent', 'running')
-               AND task_type IN ('backup', 'restore', 'restore_mysql', 'restore_pg', 'restore_mongo')"
+               AND task_type IN ('backup', 'restore', 'restore_mysql', 'restore_pg', 'restore_mongo', 'restore_mssql')"
         );
         $busyAgentIds = array_column($busyAgents, 'agent_id');
 
@@ -468,6 +468,8 @@ class QueueManager
                 $taskPayload = $this->buildRestorePgPayload($job);
             } elseif ($job['task_type'] === 'restore_mongo') {
                 $taskPayload = $this->buildRestoreMongoPayload($job);
+            } elseif ($job['task_type'] === 'restore_mssql') {
+                $taskPayload = $this->buildRestoreMssqlPayload($job);
             } elseif ($job['task_type'] === 'update_borg') {
                 $taskPayload = $this->buildBorgUpdatePayload($job);
             } elseif ($job['task_type'] === 'update_agent') {
@@ -728,6 +730,11 @@ class QueueManager
                 }
             } elseif ($job['task_type'] === 'restore_mongo') {
                 $payload = $this->buildRestoreMongoPayload($job);
+                if ($payload) {
+                    $tasks[] = $payload;
+                }
+            } elseif ($job['task_type'] === 'restore_mssql') {
+                $payload = $this->buildRestoreMssqlPayload($job);
                 if ($payload) {
                     $tasks[] = $payload;
                 }
@@ -1212,6 +1219,131 @@ class QueueManager
                 'auth_db' => $mongoConfig['auth_db'] ?? 'admin',
                 'dump_dir' => $dumpDir,
                 'compress' => $compress,
+            ],
+        ];
+
+        // Include remote SSH key for agent
+        if ($remoteSshConfig && !empty($archive['remote_ssh_key_encrypted'])) {
+            try {
+                $payload['remote_ssh_key'] = Encryption::decrypt($archive['remote_ssh_key_encrypted']);
+            } catch (\Exception $e) {
+                $payload['remote_ssh_key'] = $archive['remote_ssh_key_encrypted'];
+            }
+        }
+
+        return $payload;
+    }
+
+    /**
+     * Build a restore_mssql task payload from a job record.
+     *
+     * The .bak files are extracted back to the Dump Directory they were
+     * written to, then the agent runs RESTORE DATABASE from there. For a
+     * Windows dump directory (C:\\ProgramData\\...) the archive holds the
+     * path as "C/ProgramData/...", so the drive letter is stripped and the
+     * extract runs with cwd C:\\ (same scheme as the file restore, #167).
+     */
+    private function buildRestoreMssqlPayload(array $job): ?array
+    {
+        $archiveId = $job['restore_archive_id'] ?? null;
+        if (!$archiveId) return null;
+
+        $archive = $this->db->fetchOne("
+            SELECT ar.archive_name, ar.databases_backed_up,
+                   r.path as repo_path, r.passphrase_encrypted,
+                   r.storage_type, r.remote_ssh_config_id,
+                   rsc.remote_port, rsc.ssh_private_key_encrypted as remote_ssh_key_encrypted,
+                   rsc.borg_remote_path
+            FROM archives ar
+            JOIN repositories r ON r.id = ar.repository_id
+            LEFT JOIN remote_ssh_configs rsc ON rsc.id = r.remote_ssh_config_id
+            WHERE ar.id = ?
+        ", [$archiveId]);
+
+        if (!$archive) return null;
+
+        $databases = json_decode($job['restore_databases'] ?? '[]', true) ?: [];
+
+        // Find mssql_dump plugin config: use specified config ID, or fall back to first available
+        $pluginManager = new PluginManager();
+        $mssqlConfig = null;
+
+        if (!empty($job['plugin_config_id'])) {
+            $payload = $pluginManager->buildTestPayload((int) $job['plugin_config_id']);
+            if ($payload && $payload['slug'] === 'mssql_dump') {
+                $mssqlConfig = $payload['config'];
+            }
+        }
+
+        if (!$mssqlConfig) {
+            foreach ($pluginManager->getPluginConfigs($job['agent_id']) as $c) {
+                if ($c['slug'] === 'mssql_dump') {
+                    $payload = $pluginManager->buildTestPayload((int) $c['id']);
+                    $mssqlConfig = $payload['config'] ?? null;
+                    break;
+                }
+            }
+        }
+
+        if (!$mssqlConfig) return null;
+
+        $dumpDir = $mssqlConfig['dump_dir'] ?? 'C:\\ProgramData\\BBS\\mssql';
+
+        // Work out the borg-side path of the dump directory.
+        $stripComponents = 0;
+        $cwd = '/';
+        if (preg_match('#^([A-Za-z]):[\\\\/]*(.*)$#', $dumpDir, $m)) {
+            $stripComponents = 1;
+            $cwd = strtoupper($m[1]) . ':\\';
+            $basePath = strtoupper($m[1]) . '/' . trim(str_replace('\\', '/', $m[2]), '/');
+        } else {
+            $basePath = ltrim($dumpDir, '/');
+        }
+        $basePath = rtrim($basePath, '/');
+
+        $extractPaths = [];
+        foreach ($databases as $db) {
+            $dbName = $db['database'] ?? '';
+            if ($dbName === '') continue;
+            $extractPaths[] = $basePath . '/' . PluginManager::mssqlDumpFileName($dbName);
+        }
+        if (empty($extractPaths)) {
+            $extractPaths[] = $basePath;
+        }
+
+        $repo = ['path' => $archive['repo_path'], 'passphrase_encrypted' => $archive['passphrase_encrypted']];
+        $cmd = BorgCommandBuilder::buildExtractCommand($repo, $archive['archive_name'], $extractPaths, $stripComponents);
+
+        // Handle remote SSH repos
+        $remoteSshConfig = null;
+        if (($archive['storage_type'] ?? 'local') === 'remote_ssh' && !empty($archive['remote_ssh_key_encrypted'])) {
+            $remoteSshConfig = [
+                'remote_port' => $archive['remote_port'] ?? 22,
+                'borg_remote_path' => $archive['borg_remote_path'] ?? null,
+            ];
+            $cmd = BorgCommandBuilder::appendRemotePath($cmd, $archive['borg_remote_path'] ?? null);
+        }
+
+        $env = BorgCommandBuilder::buildEnv($repo, true, $this->getSshPortForAgent($job['agent_id']), $remoteSshConfig);
+
+        $payload = [
+            'task' => 'restore_mssql',
+            'job_id' => $job['id'],
+            'command' => $cmd,
+            'env' => $env,
+            'cwd' => $cwd,
+            'databases' => $databases,
+            'mssql_config' => [
+                'host' => $mssqlConfig['host'] ?? 'localhost',
+                'port' => $mssqlConfig['port'] ?? 1433,
+                'user' => $mssqlConfig['user'] ?? '',
+                'password' => $mssqlConfig['password'] ?? '',
+                'trust_cert' => $mssqlConfig['trust_cert'] ?? true,
+                'dump_dir' => $dumpDir,
+                'compress' => $mssqlConfig['compress'] ?? false,
+                'cleanup_after' => $mssqlConfig['cleanup_after'] ?? true,
+                'safety_backup' => $mssqlConfig['safety_backup'] ?? true,
+                'safety_keep_days' => $mssqlConfig['safety_keep_days'] ?? 7,
             ],
         ];
 

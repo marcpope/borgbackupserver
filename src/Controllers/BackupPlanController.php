@@ -438,7 +438,7 @@ class BackupPlanController extends Controller
                 [$cid, $agentId]
             );
             if (!$pc) continue;
-            if (in_array($pc['slug'], ['mysql_dump', 'pg_dump', 'mongo_dump'], true)) {
+            if (in_array($pc['slug'], ['mysql_dump', 'pg_dump', 'mongo_dump', 'mssql_dump'], true)) {
                 $cfg = json_decode($pc['config'], true) ?: [];
                 $dir = rtrim($cfg['dump_dir'] ?? '', '/');
                 if ($dir !== '') {

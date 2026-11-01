@@ -508,6 +508,7 @@ class App
         $this->router->map('POST', '/clients/[i:id]/restore-mysql', 'ClientController@restoreMysqlSubmit');
         $this->router->map('POST', '/clients/[i:id]/restore-pg', 'ClientController@restorePgSubmit');
         $this->router->map('POST', '/clients/[i:id]/restore-mongo', 'ClientController@restoreMongoSubmit');
+        $this->router->map('POST', '/clients/[i:id]/restore-mssql', 'ClientController@restoreMssqlSubmit');
         $this->router->map('GET', '/clients/[i:id]/archive/[i:archive_id]/databases', 'ClientController@archiveDatabases');
         $this->router->map('POST', '/clients/[i:id]/download', 'ClientController@download');
         $this->router->map('POST', '/clients/[i:id]/download-databases', 'ClientController@downloadDatabases');

@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="SQL Server">
+  <title>SQL Server</title>
+  <defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#6b7a90"/><stop offset="1" stop-color="#3d4a5c"/></linearGradient></defs>
+  <path d="M10 14c0-5 10-8 22-8s22 3 22 8v36c0 5-10 8-22 8S10 55 10 50z" fill="url(#g)"/>
+  <ellipse cx="32" cy="14" rx="22" ry="8" fill="#8a9ab0"/>
+  <path d="M10 28c0 5 10 8 22 8s22-3 22-8M10 40c0 5 10 8 22 8s22-3 22-8" fill="none" stroke="#c5cfdc" stroke-width="2"/>
+  <text x="32" y="27" text-anchor="middle" font-family="Arial,Helvetica,sans-serif" font-weight="700" font-size="11" fill="#fff">SQL</text>
+</svg>

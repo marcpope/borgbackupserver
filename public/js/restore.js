@@ -696,7 +696,7 @@
         let dbBackedUpAt = '';
 
         // Render one row per database into the table body.
-        function renderDbRows(databases, mtimes, perDatabase) {
+        function renderDbRows(databases, mtimes, perDatabase, allowDownload) {
             dbTableBody.innerHTML = '';
             (databases || []).forEach(function(dbName) {
                 const tr = document.createElement('tr');
@@ -705,7 +705,7 @@
                     '<td>' +
                         '<select class="form-select form-select-sm db-mode-select" name="dbmode_' + escapedName + '" data-db="' + escapedName + '">' +
                             '<option value="none">None</option>' +
-                            '<option value="download">Download</option>' +
+                            (allowDownload === false ? '' : '<option value="download">Download</option>') +
                             '<option value="replace">Replace</option>' +
                             (perDatabase ? '<option value="rename">Copy</option>' : '') +
                         '</select>' +
@@ -749,7 +749,7 @@
             dbActiveGroup = group;
             dbPerDatabase = group.per_database !== false;
             dbAllDbNote.style.display = dbPerDatabase ? 'none' : '';
-            renderDbRows(group.databases || [], group.mtimes || {}, dbPerDatabase);
+            renderDbRows(group.databases || [], group.mtimes || {}, dbPerDatabase, sel.type !== 'mssql');
             dbTable.style.display = (group.databases && group.databases.length) ? '' : 'none';
             updateDbSelection();
         }
@@ -776,6 +776,8 @@
             if (grantCode) {
                 if (type === 'pg') {
                     grantCode.textContent = 'ALTER ROLE ' + user + ' CREATEDB; GRANT ALL PRIVILEGES ON DATABASE mydb TO ' + user + ';';
+                } else if (type === 'mssql') {
+                    grantCode.textContent = 'ALTER SERVER ROLE [dbcreator] ADD MEMBER [' + user + ']; -- or sysadmin. The login also needs db_backupoperator on the databases to back up.';
                 } else if (type === 'mongo') {
                     if (user) {
                         grantCode.textContent = "use admin; db.createUser({user: '" + user + "', pwd: '<password>', roles: [{role: 'root', db: 'admin'}]});";
@@ -792,6 +794,8 @@
                     form.action = form.dataset.pgAction || form.action;
                 } else if (type === 'mongo') {
                     form.action = form.dataset.mongoAction || form.action;
+                } else if (type === 'mssql') {
+                    form.action = form.dataset.mssqlAction || form.action;
                 } else {
                     form.action = form.dataset.mysqlAction || form.action;
                 }

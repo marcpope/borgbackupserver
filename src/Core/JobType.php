@@ -16,6 +16,7 @@ class JobType
         'restore_mysql' => 'MySQL restore',
         'restore_pg' => 'PostgreSQL restore',
         'restore_mongo' => 'MongoDB restore',
+        'restore_mssql' => 'SQL Server restore',
         'prune' => 'Prune',
         'compact' => 'Compact',
         's3_sync' => 'Offsite sync',
