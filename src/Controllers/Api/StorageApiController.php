@@ -4,6 +4,7 @@ namespace BBS\Controllers\Api;
 
 use BBS\Core\Controller;
 use BBS\Services\Encryption;
+use BBS\Services\QueueManager;
 use BBS\Services\RemoteSshService;
 use BBS\Controllers\StorageLocationController;
 
@@ -82,6 +83,10 @@ class StorageApiController extends Controller
             }
         }
 
+        if (array_key_exists('max_concurrent', $input)) {
+            $update['max_concurrent'] = $this->storageCapFromInput($input);
+        }
+
         $makeDefault = array_key_exists('is_default', $input)
             ? filter_var($input['is_default'], FILTER_VALIDATE_BOOLEAN)
             : null;
@@ -98,7 +103,7 @@ class StorageApiController extends Controller
         }
 
         if (empty($update)) {
-            $this->json(['error' => 'Nothing to update — send label, is_default and/or capacity_bytes'], 422);
+            $this->json(['error' => 'Nothing to update — send label, is_default, capacity_bytes and/or max_concurrent'], 422);
         }
 
         $this->db->update('storage_locations', $update, 'id = ?', [$id]);
@@ -228,6 +233,7 @@ class StorageApiController extends Controller
             'append_repo_name'          => array_key_exists('append_repo_name', $input)
                 ? (filter_var($input['append_repo_name'], FILTER_VALIDATE_BOOLEAN) ? 1 : 0)
                 : 1,
+            'max_concurrent'            => array_key_exists('max_concurrent', $input) ? $this->storageCapFromInput($input) : null,
         ];
 
         // BorgBase: API key, repository name and manual quota, with the web
@@ -298,6 +304,9 @@ class StorageApiController extends Controller
         }
         if (array_key_exists('append_repo_name', $input)) {
             $data['append_repo_name'] = filter_var($input['append_repo_name'], FILTER_VALIDATE_BOOLEAN) ? 1 : 0;
+        }
+        if (array_key_exists('max_concurrent', $input)) {
+            $data['max_concurrent'] = $this->storageCapFromInput($input);
         }
         // Checked on the values the host will have after this update
         $fieldErr = RemoteSshService::fieldError(
@@ -487,12 +496,30 @@ class StorageApiController extends Controller
     private function locationPayload(int $id): array
     {
         $row = $this->db->fetchOne(
-            "SELECT id, label AS name, path, capacity_bytes, is_default, created_at FROM storage_locations WHERE id = ?",
+            "SELECT id, label AS name, path, capacity_bytes, max_concurrent, is_default, created_at FROM storage_locations WHERE id = ?",
             [$id]
         );
         $row['is_default'] = (bool) $row['is_default'];
         $row['capacity_bytes'] = $row['capacity_bytes'] !== null ? (int) $row['capacity_bytes'] : null;
+        $row['max_concurrent'] = $row['max_concurrent'] !== null ? (int) $row['max_concurrent'] : null;
         return $row;
+    }
+
+    /**
+     * `max_concurrent` from a request body (#154): null or 0 clears it, a
+     * number above the global Max Concurrent Jobs is a 422.
+     */
+    private function storageCapFromInput(array $input): ?int
+    {
+        $raw = $input['max_concurrent'];
+        if ($raw !== null && $raw !== '' && !is_numeric($raw)) {
+            $this->json(['error' => 'max_concurrent must be a positive integer, or null'], 422);
+        }
+        $cap = QueueManager::parseStorageCap($raw === null ? '' : (string) $raw, $error);
+        if ($error !== null) {
+            $this->json(['error' => $error], 422);
+        }
+        return $cap;
     }
 
     /**
@@ -511,6 +538,7 @@ class StorageApiController extends Controller
             'remote_base_path'     => $r['remote_base_path'],
             'borg_remote_path'     => $r['borg_remote_path'],
             'append_repo_name'     => (bool) $r['append_repo_name'],
+            'max_concurrent'       => isset($r['max_concurrent']) ? (int) $r['max_concurrent'] : null,
             'ssh_private_key_set'  => !empty($r['ssh_private_key_encrypted']),
             'disk_total_bytes'     => $r['disk_total_bytes'] !== null ? (int) $r['disk_total_bytes'] : null,
             'disk_used_bytes'      => $r['disk_used_bytes'] !== null ? (int) $r['disk_used_bytes'] : null,

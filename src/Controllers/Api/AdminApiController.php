@@ -2955,6 +2955,18 @@ class AdminApiController extends Controller
         if ($label === '' || $path === '') {
             $this->json(['error' => 'label and path are required'], 400);
         }
+        // Per-storage job limit (#154): null or 0 means none of its own, and
+        // more than the global Max Concurrent Jobs is refused.
+        $maxConcurrent = null;
+        if (array_key_exists('max_concurrent', $input) && $input['max_concurrent'] !== null && $input['max_concurrent'] !== '') {
+            if (!is_numeric($input['max_concurrent'])) {
+                $this->json(['error' => 'max_concurrent must be a positive integer, or null'], 422);
+            }
+            $maxConcurrent = \BBS\Services\QueueManager::parseStorageCap((string) $input['max_concurrent'], $capError);
+            if ($capError !== null) {
+                $this->json(['error' => $capError], 422);
+            }
+        }
         if ($path[0] !== '/') {
             $this->json(['error' => 'path must be absolute'], 400);
         }
@@ -2979,6 +2991,7 @@ class AdminApiController extends Controller
         $newId = $this->db->insert('storage_locations', [
             'label' => $label,
             'path' => $path,
+            'max_concurrent' => $maxConcurrent,
             'is_default' => $isDefault ? 1 : 0,
         ]);
 
@@ -2986,8 +2999,9 @@ class AdminApiController extends Controller
         // repo operations under the new path.
         (new StorageLocationController())->updateAllowedPaths();
 
-        $row = $this->db->fetchOne("SELECT id, label, path, is_default FROM storage_locations WHERE id = ?", [$newId]);
+        $row = $this->db->fetchOne("SELECT id, label, path, max_concurrent, is_default FROM storage_locations WHERE id = ?", [$newId]);
         $row['is_default'] = (bool) $row['is_default'];
+        $row['max_concurrent'] = $row['max_concurrent'] !== null ? (int) $row['max_concurrent'] : null;
         $this->json($row, 201);
     }
 
