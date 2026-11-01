@@ -493,6 +493,14 @@ class AdminApiController extends Controller
             $this->json(['error' => 'location must be 100 characters or fewer'], 422);
         }
 
+        // Same as the web form: the default profile unless one is named (#563)
+        $profileService = new \BBS\Services\ClientProfileService();
+        $profileId = isset($input['client_profile_id']) ? (int) $input['client_profile_id'] : null;
+        if ($profileId !== null && !$profileService->find($profileId)) {
+            $this->json(['error' => 'client_profile_id does not exist'], 422);
+        }
+        $profileId = $profileId ?? $profileService->defaultProfileId();
+
         $apiKey = bin2hex(random_bytes(32));
 
         $id = $this->db->insert('agents', [
@@ -502,6 +510,7 @@ class AdminApiController extends Controller
             'api_key_encrypted' => \BBS\Services\Encryption::encrypt($apiKey),
             'status' => 'setup',
             'user_id' => null,
+            'client_profile_id' => $profileId,
         ]);
 
         // Determine SSH home path
@@ -549,6 +558,7 @@ class AdminApiController extends Controller
             'id' => (int) $id,
             'name' => $name,
             'location' => $location,
+            'client_profile_id' => $profileId,
             'api_key' => $apiKey,
             'status' => 'setup',
             'install_command' => $host ? "curl -s https://{$host}/get-agent | sudo bash -s -- --server https://{$host} --key {$apiKey}" : null,
@@ -999,6 +1009,25 @@ class AdminApiController extends Controller
                     $input[$field] = $template[$field];
                 }
             }
+        }
+
+        // Whatever is still missing comes from the client's profile, as the web
+        // form prefills it: the profile's template (unless one was named above),
+        // its schedule and its retention (#563).
+        $profileDefaults = (new \BBS\Services\ClientProfileService())->planDefaults($id);
+        $profileFields = ['frequency', 'times', 'day_of_month',
+            'prune_minutes', 'prune_hours', 'prune_days', 'prune_weeks', 'prune_months', 'prune_years'];
+        if ($templateId === null) {
+            array_push($profileFields, 'directories', 'excludes', 'advanced_options');
+        }
+        foreach ($profileFields as $field) {
+            if (!array_key_exists($field, $input) && ($profileDefaults[$field] ?? '') !== '') {
+                $input[$field] = $profileDefaults[$field];
+            }
+        }
+        if (!array_key_exists('days_of_week', $input) && !array_key_exists('day_of_week', $input)
+            && ($profileDefaults['day_of_week'] ?? null) !== null) {
+            $input['day_of_week'] = $profileDefaults['day_of_week'];
         }
 
         $name = trim($input['name'] ?? '');
