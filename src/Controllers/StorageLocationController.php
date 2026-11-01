@@ -105,6 +105,7 @@ class StorageLocationController extends Controller
             'localRepoCount' => $localRepoCount,
             'settings' => $settings,
             's3Destinations' => $s3Destinations,
+            'maxQueue' => \BBS\Services\QueueManager::maxQueueSetting(),
         ]);
     }
 
@@ -118,6 +119,7 @@ class StorageLocationController extends Controller
         $path = rtrim(trim($_POST['path'] ?? ''), '/');
         $isDefault = !empty($_POST['is_default']) ? 1 : 0;
         $capacityBytes = $this->capacityFromPost();
+        $maxConcurrent = $this->maxConcurrentFromPost();
 
         if (empty($label) || empty($path)) {
             $this->flash('danger', 'Label and path are required.');
@@ -138,6 +140,7 @@ class StorageLocationController extends Controller
             'label' => $label,
             'path' => $path,
             'capacity_bytes' => $capacityBytes,
+            'max_concurrent' => $maxConcurrent,
             'is_default' => $isDefault,
         ]);
 
@@ -190,6 +193,7 @@ class StorageLocationController extends Controller
             'label' => $label,
             'path' => $path,
             'capacity_bytes' => $this->capacityFromPost(),
+            'max_concurrent' => $this->maxConcurrentFromPost(),
             'is_default' => $isDefault,
         ], 'id = ?', [$id]);
 
@@ -481,6 +485,20 @@ class StorageLocationController extends Controller
             return null;
         }
         return (int) round((float) $raw * 1073741824);
+    }
+
+    /**
+     * Per-storage job limit from the form (#154): blank or 0 means none of
+     * its own. Above the global Max Concurrent Jobs is refused, not clamped.
+     */
+    private function maxConcurrentFromPost(): ?int
+    {
+        $cap = \BBS\Services\QueueManager::parseStorageCap($_POST['max_concurrent'] ?? null, $error);
+        if ($error !== null) {
+            $this->flash('danger', $error);
+            $this->redirect('/storage-locations');
+        }
+        return $cap;
     }
 
     public function updateAllowedPaths(): void

@@ -155,6 +155,9 @@ CREATE TABLE storage_locations (
     -- Stated capacity for mounts whose real size df cannot see (#415), e.g.
     -- WebDAV. NULL means measure it, which is right for any ordinary path.
     capacity_bytes BIGINT DEFAULT NULL,
+    -- Jobs that may touch this disk at once (#154). NULL means no limit of
+    -- its own; the global max_queue setting always caps it.
+    max_concurrent TINYINT UNSIGNED DEFAULT NULL,
     is_default TINYINT(1) NOT NULL DEFAULT 0,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB;
@@ -193,6 +196,7 @@ CREATE TABLE remote_ssh_configs (
     ssh_private_key_encrypted TEXT NOT NULL,
     borg_remote_path VARCHAR(255) DEFAULT NULL,
     append_repo_name TINYINT(1) NOT NULL DEFAULT 1,
+    max_concurrent TINYINT UNSIGNED DEFAULT NULL,
     disk_total_bytes BIGINT DEFAULT NULL,
     disk_used_bytes BIGINT DEFAULT NULL,
     disk_free_bytes BIGINT DEFAULT NULL,

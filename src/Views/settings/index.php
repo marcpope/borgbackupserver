@@ -294,7 +294,7 @@ $sslEnabled = str_starts_with(\BBS\Core\Config::get('APP_URL', 'https://'), 'htt
     <div class="settings-row">
         <div>
             <div class="settings-row-label">Max Concurrent Jobs</div>
-            <p class="settings-row-help">How many backups may run at once across all clients.</p>
+            <p class="settings-row-help">How many backups may run at once across all clients. A disk or host on the Storage page can set a lower limit of its own.</p>
         </div>
         <div class="settings-row-control">
             <input type="number" class="form-control form-control-narrow" name="max_queue"

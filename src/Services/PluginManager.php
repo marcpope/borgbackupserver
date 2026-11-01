@@ -979,6 +979,13 @@ class PluginManager
                     'default' => '',
                     'help' => 'e.g. 50M for 50 MB/s. Leave empty for unlimited. Overrides global setting.',
                 ],
+                'max_concurrent' => [
+                    'type' => 'number',
+                    'label' => 'Max Concurrent Jobs',
+                    'default' => 0,
+                    'help' => 'Syncs and restores that may run against this destination at once (#154). 0 means only the global Max Concurrent Offsite Syncs setting applies. Never more than Max Concurrent Jobs in Settings. SSH and local-disk destinations use the limit set on the Storage page instead.',
+                    'show_when' => ['target_type' => 's3'],
+                ],
                 'storage_class' => [
                     'type' => 'select',
                     'label' => 'Storage Class',

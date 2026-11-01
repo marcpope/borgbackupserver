@@ -1523,6 +1523,12 @@ function applyRemotePreset(select, form) {
                             </div>
                             <div class="form-text">Blank measures the filesystem. Set this only for mounts that can't report their own size, such as WebDAV — BBS then counts what it has written here.</div>
                         </div>
+                        <div class="mb-2">
+                            <label class="form-label small fw-semibold mb-1">Max concurrent jobs</label>
+                            <input type="number" class="form-control form-control-sm" name="max_concurrent" min="0" max="<?= $maxQueue ?>"
+                                   placeholder="global limit" value="<?= !empty($loc['max_concurrent']) ? (int) $loc['max_concurrent'] : '' ?>">
+                            <div class="form-text">Jobs that may touch this disk at once: backups, restores, prunes, checks, catalog rebuilds and offsite syncs of the repositories stored here. Blank uses the global limit (<?= $maxQueue ?>). 1 keeps a spinning disk sequential. Can't go above Max Concurrent Jobs in Settings.</div>
+                        </div>
                         <div class="form-check mb-2">
                             <input class="form-check-input" type="checkbox" name="is_default" id="defLoc<?= $loc['id'] ?>"
                                    <?= $loc['is_default'] ? 'checked' : '' ?>>
@@ -1565,6 +1571,9 @@ function applyRemotePreset(select, form) {
                 <!-- Stats -->
                 <div class="d-flex gap-3 small text-muted">
                     <span><i class="bi bi-archive me-1"></i><?= $loc['repo_count'] ?> repo<?= $loc['repo_count'] !== 1 ? 's' : '' ?></span>
+                    <?php if (!empty($loc['max_concurrent'])): ?>
+                    <span title="At most this many jobs touch this disk at once"><i class="bi bi-speedometer2 me-1"></i><?= (int) $loc['max_concurrent'] ?> at a time</span>
+                    <?php endif; ?>
                     <span><i class="bi bi-database me-1"></i><?= formatStorageBytes($loc['total_size']) ?></span>
                 </div>
             </div>
@@ -1682,6 +1691,9 @@ function applyRemotePreset(select, form) {
                 </div>
                 <div class="d-flex gap-3 small text-muted">
                     <span><i class="bi bi-archive me-1"></i><?= $rsc['repo_count'] ?> repo<?= $rsc['repo_count'] !== 1 ? 's' : '' ?></span>
+                    <?php if (!empty($rsc['max_concurrent'])): ?>
+                    <span title="At most this many jobs touch this host at once"><i class="bi bi-speedometer2 me-1"></i><?= (int) $rsc['max_concurrent'] ?> at a time</span>
+                    <?php endif; ?>
                     <span class="badge bg-success"><i class="bi bi-check-circle me-1"></i>Active</span>
                 </div>
                 <?php
@@ -1782,6 +1794,12 @@ function applyRemotePreset(select, form) {
                             <input class="form-check-input" type="checkbox" name="append_repo_name" value="1" id="editAppendRepoName<?= $rsc['id'] ?>" <?= ($rsc['append_repo_name'] ?? 1) ? 'checked' : '' ?>>
                             <label class="form-check-label" for="editAppendRepoName<?= $rsc['id'] ?>">Append repository name to base path</label>
                             <div class="form-text">Uncheck for providers like BorgBase where each SSH user maps to a single fixed repo path.</div>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label fw-semibold">Max Concurrent Jobs <span class="text-muted fw-normal">(optional)</span></label>
+                            <input type="number" class="form-control" name="max_concurrent" min="0" max="<?= $maxQueue ?>"
+                                   placeholder="global limit" value="<?= !empty($rsc['max_concurrent']) ? (int) $rsc['max_concurrent'] : '' ?>">
+                            <div class="form-text">Jobs that may touch this host at once: backups, restores, prunes, checks, catalog rebuilds and offsite syncs of the repositories stored here. Blank uses the global limit (<?= $maxQueue ?>). 1 keeps a spinning disk sequential. Can't go above Max Concurrent Jobs in Settings.</div>
                         </div>
                         <?php if ($isBorgBase): ?>
                         <hr>
@@ -1904,6 +1922,7 @@ $s3SyncServerBackups = ($settings['s3_sync_server_backups'] ?? '0') === '1';
                 <th>Client</th>
                 <th>Destination</th>
                 <th class="text-end">Repositories Syncing</th>
+                <th class="text-end" title="Syncs and restores that may run against this destination at once; set on the client's Plugins tab">Max Jobs</th>
                 <th></th>
             </tr>
         </thead>
@@ -1923,6 +1942,7 @@ $s3SyncServerBackups = ($settings['s3_sync_server_backups'] ?? '0') === '1';
                     <?php endif; ?>
                 </td>
                 <td class="text-end"><?= (int) $dest['repo_count'] ?></td>
+                <td class="text-end"><?= (int) ($destCfg['max_concurrent'] ?? 0) > 0 ? (int) $destCfg['max_concurrent'] : '<span class="text-muted">global</span>' ?></td>
                 <td class="text-end">
                     <a class="btn btn-sm btn-outline-secondary" href="/clients/<?= $dest['agent_id'] ?>?tab=plugins" title="Edit on the client's Plugins tab">
                         <i class="bi bi-gear"></i>

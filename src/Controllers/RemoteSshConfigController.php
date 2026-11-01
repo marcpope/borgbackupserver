@@ -60,6 +60,7 @@ class RemoteSshConfigController extends Controller
             'ssh_private_key_encrypted' => Encryption::encrypt($sshPrivateKey),
             'borg_remote_path' => $borgRemotePath,
             'append_repo_name' => $appendRepoName,
+            'max_concurrent' => $this->maxConcurrentFromPost(),
         ];
         $data = array_merge($data, $borgBaseFields);
 
@@ -142,6 +143,7 @@ class RemoteSshConfigController extends Controller
             'remote_base_path' => $remoteBasePath,
             'borg_remote_path' => $borgRemotePath,
             'append_repo_name' => $appendRepoName,
+            'max_concurrent' => $this->maxConcurrentFromPost(),
         ];
         if ($isBorgBase) {
             $data['provider'] = 'borgbase';
@@ -231,6 +233,20 @@ class RemoteSshConfigController extends Controller
     /**
      * Delete a remote SSH config (blocked if repos reference it).
      */
+    /**
+     * Per-storage job limit from the form (#154): blank or 0 means none of
+     * its own. Above the global Max Concurrent Jobs is refused, not clamped.
+     */
+    private function maxConcurrentFromPost(): ?int
+    {
+        $cap = \BBS\Services\QueueManager::parseStorageCap($_POST['max_concurrent'] ?? null, $error);
+        if ($error !== null) {
+            $this->flash('danger', $error);
+            $this->redirect('/storage-locations');
+        }
+        return $cap;
+    }
+
     public function delete(int $id): void
     {
         $this->denyIfHosted();

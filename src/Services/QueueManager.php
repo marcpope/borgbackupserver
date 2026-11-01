@@ -10,6 +10,19 @@ class QueueManager
     /** Task types that write to a repository; refused on read-only copies (#523). */
     public const WRITE_TASKS = ['backup', 'prune', 'compact', 'repo_repair', 'archive_delete', 'archive_lock', 's3_sync'];
 
+    /**
+     * Task types that need the agent online to run. Server-side tasks
+     * (prune, compact, catalog, offsite sync) run on the scheduler and don't
+     * care about the agent's connection state.
+     */
+    public const AGENT_BOUND_TASKS = [
+        'backup', 'backup_dry_run', 'restore', 'restore_mysql', 'restore_pg', 'restore_mongo', 'restore_mssql',
+        'update_borg', 'update_agent', 'plugin_test', 'plugin_post', 'list_dir',
+    ];
+
+    /** Task types that never touch the repository's storage. */
+    private const STORAGE_FREE_TASKS = ['update_borg', 'update_agent', 'plugin_test', 'plugin_post', 'list_dir', 'break_lock'];
+
     /** Task types the scheduler runs on the server; agents never run or report them. */
     /**
      * Why a job may not be queued on a repository, or null. A read-only
@@ -31,12 +44,42 @@ class QueueManager
     private Database $db;
     private int $maxQueue;
     private ?int $sshPort = null;
+    private ?int $defaultLocationId = null;
+    /** Offsite sync destinations (plugin config id => decoded config). */
+    private ?array $offsiteTargets = null;
 
     public function __construct()
     {
         $this->db = Database::getInstance();
-        $setting = $this->db->fetchOne("SELECT `value` FROM settings WHERE `key` = 'max_queue'");
-        $this->maxQueue = (int) ($setting['value'] ?? 4);
+        $this->maxQueue = self::maxQueueSetting();
+    }
+
+    /** The global Max Concurrent Jobs setting. */
+    public static function maxQueueSetting(): int
+    {
+        $setting = Database::getInstance()->fetchOne("SELECT `value` FROM settings WHERE `key` = 'max_queue'");
+        return max(1, (int) ($setting['value'] ?? 4));
+    }
+
+    /**
+     * A per-storage job limit as posted from a form (#154): null for blank
+     * or 0 (no limit of its own), else the number. A storage can never run
+     * more than the server, so a value above max_queue is refused with a
+     * message in $error rather than clamped: raise the global limit first.
+     */
+    public static function parseStorageCap(?string $raw, ?string &$error = null): ?int
+    {
+        $error = null;
+        $value = (int) trim((string) $raw);
+        if ($value <= 0) {
+            return null;
+        }
+        $max = self::maxQueueSetting();
+        if ($value > $max) {
+            $error = "Max concurrent jobs can't be more than the global Max Concurrent Jobs setting ({$max}). Raise that in Settings first.";
+            return null;
+        }
+        return $value;
     }
 
     /**
@@ -150,7 +193,7 @@ class QueueManager
                    bp.prune_minutes, bp.prune_hours, bp.prune_days,
                    bp.prune_weeks, bp.prune_months, bp.prune_years,
                    r.path as repo_path, r.encryption, r.passphrase_encrypted, r.name as repo_name,
-                   r.agent_id as repo_agent_id, r.storage_type, r.remote_ssh_config_id, r.read_only as repo_read_only,
+                   r.agent_id as repo_agent_id, r.storage_type, r.storage_location_id, r.remote_ssh_config_id, r.read_only as repo_read_only,
                    rsc.remote_host, rsc.remote_port, rsc.remote_user, rsc.remote_base_path,
                    rsc.ssh_private_key_encrypted as remote_ssh_key_encrypted,
                    rsc.borg_remote_path,
@@ -170,13 +213,7 @@ class QueueManager
                 bj.queued_at ASC
         ");
 
-        // Task types that require the agent to be online to run. Server-side
-        // tasks (prune/compact/catalog/etc.) run by the scheduler itself —
-        // they don't care about the agent's connection state.
-        $agentBoundTypes = [
-            'backup', 'backup_dry_run', 'restore', 'restore_mysql', 'restore_pg', 'restore_mongo', 'restore_mssql',
-            'update_borg', 'update_agent', 'plugin_test', 'plugin_post', 'list_dir',
-        ];
+        $agentBoundTypes = self::AGENT_BOUND_TASKS;
 
         $promoted = [];
         $promotedCount = 0;
@@ -206,6 +243,13 @@ class QueueManager
                AND task_type IN ('backup', 'restore', 'restore_mysql', 'restore_pg', 'restore_mongo', 'restore_mssql')"
         );
         $busyAgentIds = array_column($busyAgents, 'agent_id');
+
+        // Per-storage limits (#154): a disk, SSH host or offsite destination
+        // can cap how many jobs touch it at once, so a spinning disk runs its
+        // backups one after another while an SSD beside it runs four. Most
+        // installs set none, and then this costs three small queries.
+        $storageCaps = $this->storageCaps();
+        $storageActive = $storageCaps ? $this->storageActiveCounts() : [];
 
         foreach ($queuedJobs as $job) {
             // A read-only copy (#523) shares its key with the original it was
@@ -277,6 +321,15 @@ class QueueManager
             // Different plans wait their turn; same-plan duplicates were already skipped above
             if ($job['repository_id'] && in_array($job['repository_id'], $busyRepoIds)) {
                 continue;
+            }
+            // Hold if any storage it would touch is at its own limit (#154).
+            // `continue`, not `break`: a full disk must not stop a job for
+            // another disk behind it in the queue.
+            $jobStorage = $storageCaps ? $this->storageKeys($job) : [];
+            foreach ($jobStorage as $key) {
+                if (isset($storageCaps[$key]) && ($storageActive[$key] ?? 0) >= $storageCaps[$key]) {
+                    continue 2;
+                }
             }
             // Atomic claim before any payload work (#458): between the
             // queued-jobs SELECT above and here, another caller may have
@@ -536,6 +589,9 @@ class QueueManager
                 if ($job['backup_plan_id'] && $job['task_type'] === 'backup') {
                     $busyPlanIds[] = $job['backup_plan_id'];
                 }
+                foreach ($jobStorage as $key) {
+                    $storageActive[$key] = ($storageActive[$key] ?? 0) + 1;
+                }
             } else {
                 // Claimed but no payload could be built — release the job so
                 // it isn't stuck in 'sent' with nothing behind it.
@@ -549,6 +605,123 @@ class QueueManager
         }
 
         return $promoted;
+    }
+
+    /**
+     * Per-storage job limits (#154), keyed like storageKeys(): loc:ID for a
+     * local storage location, ssh:ID for a remote SSH host, s3:ID for an
+     * offsite sync destination. A storage without one is absent. Each is
+     * clamped to max_queue, in case that was lowered after the limit was set.
+     */
+    private function storageCaps(): array
+    {
+        $caps = [];
+        foreach ($this->db->fetchAll("SELECT id, max_concurrent FROM storage_locations WHERE max_concurrent > 0") as $row) {
+            $caps['loc:' . $row['id']] = min((int) $row['max_concurrent'], $this->maxQueue);
+        }
+        foreach ($this->db->fetchAll("SELECT id, max_concurrent FROM remote_ssh_configs WHERE max_concurrent > 0") as $row) {
+            $caps['ssh:' . $row['id']] = min((int) $row['max_concurrent'], $this->maxQueue);
+        }
+        // SFTP and local-disk destinations are covered by the host's or the
+        // location's own limit; only an S3 destination has one of its own.
+        foreach ($this->offsiteTargets() as $id => $cfg) {
+            if (($cfg['target_type'] ?? S3SyncService::TYPE_S3) === S3SyncService::TYPE_S3
+                && (int) ($cfg['max_concurrent'] ?? 0) > 0) {
+                $caps['s3:' . $id] = min((int) $cfg['max_concurrent'], $this->maxQueue);
+            }
+        }
+        return $caps;
+    }
+
+    /**
+     * Jobs now touching each storage, keyed like storageKeys(). A job for an
+     * offline agent is not using the storage, it is waiting for the offline
+     * sweep, so it is left out, as the global count leaves it out.
+     */
+    private function storageActiveCounts(): array
+    {
+        $rows = $this->db->fetchAll("
+            SELECT bj.task_type, bj.repository_id, bj.plugin_config_id,
+                   r.storage_type, r.storage_location_id, r.remote_ssh_config_id,
+                   a.status AS agent_status
+            FROM backup_jobs bj
+            JOIN repositories r ON r.id = bj.repository_id
+            LEFT JOIN agents a ON a.id = bj.agent_id
+            WHERE bj.status IN ('sent', 'running')
+        ");
+        $counts = [];
+        foreach ($rows as $row) {
+            if (in_array($row['task_type'], self::AGENT_BOUND_TASKS, true) && ($row['agent_status'] ?? 'online') !== 'online') {
+                continue;
+            }
+            foreach ($this->storageKeys($row) as $key) {
+                $counts[$key] = ($counts[$key] ?? 0) + 1;
+            }
+        }
+        return $counts;
+    }
+
+    /**
+     * The storage a job touches: where its repository lives, plus, for an
+     * offsite sync or restore, the destination it copies to or from. Needs
+     * the job row joined to the repository's storage_type,
+     * storage_location_id and remote_ssh_config_id.
+     */
+    private function storageKeys(array $job): array
+    {
+        if (empty($job['repository_id']) || in_array($job['task_type'], self::STORAGE_FREE_TASKS, true)) {
+            return [];
+        }
+        $keys = [];
+        if (($job['storage_type'] ?? 'local') === 'remote_ssh') {
+            if (!empty($job['remote_ssh_config_id'])) {
+                $keys[] = 'ssh:' . (int) $job['remote_ssh_config_id'];
+            }
+        } else {
+            // Repositories from before storage locations existed have none
+            // set; they live on the default one.
+            $locId = (int) ($job['storage_location_id'] ?? 0) ?: $this->defaultLocationId();
+            if ($locId) {
+                $keys[] = 'loc:' . $locId;
+            }
+        }
+        if (in_array($job['task_type'], ['s3_sync', 's3_restore'], true) && !empty($job['plugin_config_id'])) {
+            $cfg = $this->offsiteTargets()[(int) $job['plugin_config_id']] ?? null;
+            if ($cfg !== null) {
+                $type = $cfg['target_type'] ?? S3SyncService::TYPE_S3;
+                if ($type === S3SyncService::TYPE_LOCAL && !empty($cfg['storage_location_id'])) {
+                    $keys[] = 'loc:' . (int) $cfg['storage_location_id'];
+                } elseif ($type === S3SyncService::TYPE_SFTP && !empty($cfg['remote_ssh_config_id'])) {
+                    $keys[] = 'ssh:' . (int) $cfg['remote_ssh_config_id'];
+                } else {
+                    $keys[] = 's3:' . (int) $job['plugin_config_id'];
+                }
+            }
+        }
+        return array_values(array_unique($keys));
+    }
+
+    private function offsiteTargets(): array
+    {
+        if ($this->offsiteTargets === null) {
+            $this->offsiteTargets = [];
+            $rows = $this->db->fetchAll(
+                "SELECT pc.id, pc.config FROM plugin_configs pc JOIN plugins p ON p.id = pc.plugin_id WHERE p.slug = 's3_sync'"
+            );
+            foreach ($rows as $row) {
+                $this->offsiteTargets[(int) $row['id']] = json_decode($row['config'] ?? '{}', true) ?: [];
+            }
+        }
+        return $this->offsiteTargets;
+    }
+
+    private function defaultLocationId(): int
+    {
+        if ($this->defaultLocationId === null) {
+            $row = $this->db->fetchOne("SELECT id FROM storage_locations WHERE is_default = 1");
+            $this->defaultLocationId = (int) ($row['id'] ?? 0);
+        }
+        return $this->defaultLocationId;
     }
 
     /**
