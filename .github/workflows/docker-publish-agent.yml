@@ -1,12 +1,13 @@
 name: Build and Push Agent Docker Image
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'agent/bbs-agent.py'
-      - 'docker/agent/**'
-      - '.github/workflows/docker-publish-agent.yml'
+  # Publish with a release, not on every push to main: an agent image ahead of
+  # the released server shows as outdated and gets offered a downgrade (#562).
+  # A release that leaves AGENT_VERSION alone skips the build (tag check below).
+  release:
+    types: [published]
+  # Manual run: dispatch on the release tag, gh workflow run
+  # docker-publish-agent.yml --ref vX.Y.Z
   workflow_dispatch:
 
 env:
@@ -15,6 +16,9 @@ env:
 
 jobs:
   build-and-push:
+    # Prereleases don't publish: the version tag would exist before the
+    # stable release, which would then skip the build and never move :latest.
+    if: github.event_name == 'workflow_dispatch' || !github.event.release.prerelease
     runs-on: ubuntu-latest
     permissions:
       contents: read
