@@ -719,12 +719,16 @@ class SettingsController extends Controller
         }
 
         $allAgents = $this->db->fetchAll("SELECT id, name, agent_version FROM agents WHERE agent_version IS NOT NULL");
-        $outdated = (new \BBS\Services\UpdateService())->getOutdatedAgents();
+        $svc = new \BBS\Services\UpdateService();
+        // `behind` is everyone on an older agent; `outdated` is the subset
+        // "Update All" can act on (#566).
+        $behind = $svc->getAgentsBehind();
 
         $this->json([
             'bundled_version' => $bundledAgentVersion,
             'total' => count($allAgents),
-            'outdated' => $outdated
+            'behind' => $behind,
+            'outdated' => array_values(array_filter($behind, fn($a) => !empty($a['auto_update_enabled']))),
         ]);
     }
 

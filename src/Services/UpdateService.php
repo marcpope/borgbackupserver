@@ -94,15 +94,35 @@ class UpdateService
      * their own updates (containers, where the image carries the agent) are
      * excluded: updating them in place is undone by the next restart.
      */
+    /**
+     * Agents behind the bundled version that accept server-driven updates:
+     * the set "Update All" and the scheduler may queue an update for.
+     * Agents that manage their own version (containers, #387) are left
+     * out; getAgentsBehind() has them.
+     */
     public function getOutdatedAgents(bool $onlineOnly = false): array
+    {
+        return array_values(array_filter(
+            $this->getAgentsBehind($onlineOnly),
+            fn($a) => !empty($a['auto_update_enabled'])
+        ));
+    }
+
+    /**
+     * Every agent behind the bundled version, whether or not the server
+     * may update it, with auto_update_enabled so a page can say which is
+     * which. The Updates tab used to show only the updatable ones and
+     * then claimed every client ran the bundled version (#566).
+     */
+    public function getAgentsBehind(bool $onlineOnly = false): array
     {
         $bundled = $this->getBundledAgentVersion();
         if (!$bundled) {
             return [];
         }
 
-        $sql = "SELECT id, name, agent_version, status FROM agents
-                WHERE agent_version IS NOT NULL AND auto_update_enabled = 1";
+        $sql = "SELECT id, name, agent_version, status, auto_update_enabled FROM agents
+                WHERE agent_version IS NOT NULL";
         if ($onlineOnly) {
             $sql .= " AND status = 'online'";
         }

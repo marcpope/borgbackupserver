@@ -3371,9 +3371,12 @@ sudo /var/www/bbs/bin/bbs-token revoke "ansible"</code></pre>
 // Agent version check
 $bundledAgentVersion = $updateSvc->getBundledAgentVersion();
 $allAgents = $bundledAgentVersion ? $this->db->fetchAll("SELECT id, name, agent_version FROM agents WHERE agent_version IS NOT NULL") : [];
-$outdatedAgents = $bundledAgentVersion ? $updateSvc->getOutdatedAgents() : [];
+// Everyone on an older agent is listed (#566); only those that accept
+// server-driven updates count toward "Update All".
+$agentsBehind = $bundledAgentVersion ? $updateSvc->getAgentsBehind() : [];
 $totalAgents = count($allAgents);
-$outdatedCount = count($outdatedAgents);
+$behindCount = count($agentsBehind);
+$updatableCount = count(array_filter($agentsBehind, fn($a) => !empty($a['auto_update_enabled'])));
 ?>
 <div class="row g-4" id="updates-row">
     <div class="col-lg-6" id="updates-left-col">
@@ -3460,7 +3463,7 @@ docker compose up -d</pre>
                 <p class="text-muted small mb-3">The BBS Agents receive commands from this server to start backups, run restores, and update their own software and Borg.</p>
                 <?php if ($totalAgents === 0): ?>
                     <p class="text-muted small mb-0">No clients connected yet.</p>
-                <?php elseif ($outdatedCount === 0): ?>
+                <?php elseif ($behindCount === 0): ?>
                     <div class="d-flex align-items-center small">
                         <span class="badge rounded-pill me-2" style="background-color: #e8f5e9; color: #2e7d32;"><i class="bi bi-check-circle me-1"></i>Up to date</span>
                         All <?= $totalAgents ?> client(s) running v<?= htmlspecialchars($bundledAgentVersion) ?>
@@ -3468,20 +3471,22 @@ docker compose up -d</pre>
                 <?php else: ?>
                     <div class="d-flex align-items-center justify-content-between mb-3">
                         <div class="small">
-                            <span class="badge rounded-pill text-dark me-1" style="background-color: #fff3cd;"><?= $outdatedCount ?> outdated</span>
+                            <span class="badge rounded-pill text-dark me-1" style="background-color: #fff3cd;"><?= $behindCount ?> outdated</span>
                             of <?= $totalAgents ?> client(s)
                         </div>
-                        <form method="POST" action="/settings/upgrade-agents" data-confirm="Queue agent updates for <?= $outdatedCount ?> client(s)?">
+                        <?php if ($updatableCount > 0): ?>
+                        <form method="POST" action="/settings/upgrade-agents" data-confirm="Queue agent updates for <?= $updatableCount ?> client(s)?">
                             <input type="hidden" name="csrf_token" value="<?= $this->csrfToken() ?>">
                             <button type="submit" class="btn btn-sm btn-primary">
                                 <i class="bi bi-arrow-up-circle me-1"></i> Update All
                             </button>
                         </form>
+                        <?php endif; ?>
                     </div>
-                    <?php foreach ($outdatedAgents as $oa): ?>
+                    <?php foreach ($agentsBehind as $oa): ?>
                     <div class="d-flex justify-content-between align-items-center small py-1">
                         <span><i class="bi bi-pc-display me-1 text-muted"></i><?= htmlspecialchars($oa['name']) ?></span>
-                        <span class="text-muted">v<?= htmlspecialchars($oa['agent_version']) ?></span>
+                        <span class="text-muted">v<?= htmlspecialchars($oa['agent_version']) ?><?php if (empty($oa['auto_update_enabled'])): ?> <span class="badge bg-secondary ms-1" title="This client manages its own updates, so the server won't update it. Container agents update by pulling a newer image.">updates itself</span><?php endif; ?></span>
                     </div>
                     <?php endforeach; ?>
                 <?php endif; ?>
@@ -3699,22 +3704,27 @@ document.getElementById('btnTestSmtp')?.addEventListener('click', function() {
                 var descHtml = '<p class="text-muted small mb-3">The BBS Agents receive commands from this server to start backups, run restores, and update their own software and Borg.</p>';
                 if (data.total === 0) {
                     html = descHtml + '<p class="text-muted small mb-0">No clients connected yet.</p>';
-                } else if (data.outdated.length === 0) {
+                } else if (data.behind.length === 0) {
                     html = descHtml + '<div class="d-flex align-items-center small">'
                          + '<span class="badge rounded-pill me-2" style="background-color: #e8f5e9; color: #2e7d32;"><i class="bi bi-check-circle me-1"></i>Up to date</span>'
                          + 'All ' + data.total + ' client(s) running v' + data.bundled_version
                          + '</div>';
                 } else {
                     html = descHtml + '<div class="d-flex align-items-center justify-content-between mb-3">'
-                         + '<div class="small"><span class="badge rounded-pill text-dark me-1" style="background-color: #fff3cd;">' + data.outdated.length + ' outdated</span> of ' + data.total + ' client(s)</div>'
-                         + '<form method="POST" action="/settings/upgrade-agents" data-confirm="Queue agent updates for ' + data.outdated.length + ' client(s)?">'
-                         + '<input type="hidden" name="csrf_token" value="' + csrfToken + '">'
-                         + '<button type="submit" class="btn btn-sm btn-primary"><i class="bi bi-arrow-up-circle me-1"></i> Update All</button>'
-                         + '</form></div>';
-                    data.outdated.forEach(function(a) {
+                         + '<div class="small"><span class="badge rounded-pill text-dark me-1" style="background-color: #fff3cd;">' + data.behind.length + ' outdated</span> of ' + data.total + ' client(s)</div>';
+                    if (data.outdated.length > 0) {
+                        html += '<form method="POST" action="/settings/upgrade-agents" data-confirm="Queue agent updates for ' + data.outdated.length + ' client(s)?">'
+                              + '<input type="hidden" name="csrf_token" value="' + csrfToken + '">'
+                              + '<button type="submit" class="btn btn-sm btn-primary"><i class="bi bi-arrow-up-circle me-1"></i> Update All</button>'
+                              + '</form>';
+                    }
+                    html += '</div>';
+                    data.behind.forEach(function(a) {
                         html += '<div class="d-flex justify-content-between align-items-center small py-1">'
                               + '<span><i class="bi bi-pc-display me-1 text-muted"></i>' + a.name.replace(/</g, '&lt;') + '</span>'
-                              + '<span class="text-muted">v' + a.agent_version.replace(/</g, '&lt;') + '</span></div>';
+                              + '<span class="text-muted">v' + a.agent_version.replace(/</g, '&lt;')
+                              + (a.auto_update_enabled == 1 ? '' : ' <span class="badge bg-secondary ms-1" title="This client manages its own updates, so the server won\'t update it. Container agents update by pulling a newer image.">updates itself</span>')
+                              + '</span></div>';
                     });
                 }
                 container.innerHTML = html;
