@@ -1918,6 +1918,7 @@ document.addEventListener('change', function (e) {
                                     <div class="col-md-3">
                                         <label class="form-label small text-muted mb-0">Patterns</label>
                                         <textarea class="form-control form-control-sm" name="patterns" rows="3" placeholder="+ /etc/**&#10;- **/*.iso"><?= htmlspecialchars($tpl['patterns'] ?? '') ?></textarea>
+                                        <div class="invalid-feedback tpl-patterns-error"></div>
                                     </div>
                                 </div>
                                 <div class="row g-2 mb-2">
@@ -1998,6 +1999,7 @@ document.addEventListener('change', function (e) {
                 <div class="col-md-3">
                     <label class="form-label fw-semibold">Patterns</label>
                     <textarea class="form-control" name="patterns" rows="3" placeholder="+ /etc/**&#10;- **/*.iso"></textarea>
+                    <div class="invalid-feedback tpl-patterns-error"></div>
                 </div>
             </div>
             <div class="row g-3">
@@ -2072,11 +2074,50 @@ document.addEventListener('change', function (e) {
         });
         advField.value = [opts.join(' '), custom].filter(Boolean).join(' ');
     }
+    // Client-side mirror of BorgCommandBuilder::validatePatterns().
+    // The server stays authoritative; this only saves a round trip.
+    // Returns '' when fine.
+    function bbsValidatePatterns(text) {
+        if (text.trim() === '') return '';
+        if (new TextEncoder().encode(text).length > 65535) {
+            return 'Patterns file is too large (max 65535 bytes).';
+        }
+        const lines = text.split(/\r\n|\r|\n/);
+        for (const raw of lines) {
+            const line = raw.trim();
+            if (line === '' || line[0] === '#') continue;
+            if (line.length < 3 || 'RP+-!'.indexOf(line[0]) === -1 || line[1] !== ' ') {
+                return 'Patterns line "' + line + '" is not valid: each rule starts with R, P, +, - or ! followed by a space.';
+            }
+            if (line[0] === 'R' && line.slice(2).charAt(0) === '/') {
+                return 'Patterns line "' + line + '" is not valid: absolute R roots duplicate every file (remove the R line).';
+            }
+        }
+        return '';
+    }
+
+    function bbsCheckPatternsField(field, feedback) {
+        const err = bbsValidatePatterns(field.value);
+        field.classList.toggle('is-invalid', err !== '');
+        if (feedback) feedback.textContent = err;
+        return err === '';
+    }
     document.querySelectorAll('.tpl-form').forEach(form => {
+        const patField = form.querySelector('textarea[name="patterns"]');
+        if (patField) {
+            patField.addEventListener('input', function() {
+                bbsCheckPatternsField(patField, form.querySelector('.tpl-patterns-error'));
+            });
+        }
+        form.addEventListener('submit', function(e) {
+            syncTplForm(form);
+            if (patField && !bbsCheckPatternsField(patField, form.querySelector('.tpl-patterns-error'))) {
+                e.preventDefault();
+            }
+        });
         form.querySelectorAll('.tpl-borg-opt').forEach(cb => cb.addEventListener('change', () => syncTplForm(form)));
         const compType = form.querySelector('.tpl-comp-type');
         if (compType) compType.addEventListener('input', () => syncTplForm(form));
-        form.addEventListener('submit', () => syncTplForm(form));
         syncTplForm(form);
     });
 })();

@@ -2289,6 +2289,7 @@ $sizeDisplay = $totalSize > 0 ? \BBS\Services\ServerStats::formatBytes((int) $to
                         <label class="col-md-3 col-form-label fw-semibold">Patterns File</label>
                         <div class="col-md-6">
                             <textarea class="form-control edit-patterns" name="patterns" rows="4" placeholder="+ /etc/**&#10;- **/*.iso"><?= htmlspecialchars($plan['patterns'] ?? '') ?></textarea>
+                            <div class="invalid-feedback edit-patterns-error"></div>
                         </div>
                         <div class="col-md-3 form-text pt-2">
                             Full borg patterns file (<code>R</code>/<code>P</code>/<code>+</code>/<code>-</code>/<code>!</code>). Needs client agent <?= htmlspecialchars(\BBS\Services\BorgCommandBuilder::MIN_AGENT_PATTERNS_VERSION) ?>+.
@@ -2665,6 +2666,7 @@ $sizeDisplay = $totalSize > 0 ? \BBS\Services\ServerStats::formatBytes((int) $to
                     <label class="col-md-3 col-form-label fw-semibold">Patterns File</label>
                     <div class="col-md-6">
                         <textarea class="form-control" name="patterns" id="patternsInput" rows="4" placeholder="+ /etc/**&#10;- **/*.iso&#10;- /home/*/.cache"><?= htmlspecialchars($profileDefaults['patterns'] ?? '') ?></textarea>
+                        <div class="invalid-feedback" id="patternsCreateError"></div>
                     </div>
                     <div class="col-md-3 form-text pt-2">
                         Full borg patterns file: <code>R</code>, <code>P</code>, <code>+</code>, <code>-</code>, <code>!</code> rules, one per line. Unlike excludes above, <code>+</code> includes work here. Rules match the paths borg walks (relative under snapshot plans, e.g. <code>home/user/...</code>); absolute <code>R</code> roots are rejected. Verify with Dry Run. Needs client agent <?= htmlspecialchars(\BBS\Services\BorgCommandBuilder::MIN_AGENT_PATTERNS_VERSION) ?>+.
@@ -3003,7 +3005,16 @@ $sizeDisplay = $totalSize > 0 ? \BBS\Services\ServerStats::formatBytes((int) $to
         // Initialize on load
         syncCreateField();
 
-        createForm.addEventListener('submit', syncCreateField);
+        createForm.addEventListener('submit', function(e) {
+            syncCreateField();
+            const patField = document.getElementById('patternsInput');
+            if (patField && !bbsCheckPatternsField(patField, document.getElementById('patternsCreateError'))) {
+                e.preventDefault();
+            }
+        });
+        document.getElementById('patternsInput').addEventListener('input', function() {
+            bbsCheckPatternsField(this, document.getElementById('patternsCreateError'));
+        });
 
         // Template selector (create form)
         const tplSelect = document.getElementById('templateSelect');
@@ -3021,6 +3032,35 @@ $sizeDisplay = $totalSize > 0 ? \BBS\Services\ServerStats::formatBytes((int) $to
                     });
             });
         }
+    }
+
+    // Client-side mirror of BorgCommandBuilder::validatePatterns().
+    // The server stays authoritative (API callers never run this); this
+    // only saves a round trip on the web forms. Returns '' when fine.
+    function bbsValidatePatterns(text) {
+        if (text.trim() === '') return '';
+        if (new TextEncoder().encode(text).length > 65535) {
+            return 'Patterns file is too large (max 65535 bytes).';
+        }
+        const lines = text.split(/\r\n|\r|\n/);
+        for (const raw of lines) {
+            const line = raw.trim();
+            if (line === '' || line[0] === '#') continue;
+            if (line.length < 3 || 'RP+-!'.indexOf(line[0]) === -1 || line[1] !== ' ') {
+                return 'Patterns line "' + line + '" is not valid: each rule starts with R, P, +, - or ! followed by a space.';
+            }
+            if (line[0] === 'R' && line.slice(2).charAt(0) === '/') {
+                return 'Patterns line "' + line + '" is not valid: absolute R roots duplicate every file (remove the R line — plan Directories already define the roots).';
+            }
+        }
+        return '';
+    }
+
+    function bbsCheckPatternsField(field, feedback) {
+        const err = bbsValidatePatterns(field.value);
+        field.classList.toggle('is-invalid', err !== '');
+        if (feedback) feedback.textContent = err;
+        return err === '';
     }
 
     // Apply template options to checkboxes and compression field
@@ -3075,7 +3115,19 @@ $sizeDisplay = $totalSize > 0 ? \BBS\Services\ServerStats::formatBytes((int) $to
         // Initialize on load
         syncEditField();
 
-        form.addEventListener('submit', syncEditField);
+        const editPatField = panel.querySelector('.edit-patterns');
+        if (editPatField) {
+            editPatField.addEventListener('input', function() {
+                bbsCheckPatternsField(editPatField, panel.querySelector('.edit-patterns-error'));
+            });
+        }
+
+        form.addEventListener('submit', function(e) {
+            syncEditField();
+            if (editPatField && !bbsCheckPatternsField(editPatField, panel.querySelector('.edit-patterns-error'))) {
+                e.preventDefault();
+            }
+        });
     });
 
     // Edit form template selectors
