@@ -1917,7 +1917,7 @@ document.addEventListener('change', function (e) {
                                     </div>
                                     <div class="col-md-3">
                                         <label class="form-label small text-muted mb-0">Patterns</label>
-                                        <textarea class="form-control form-control-sm" name="patterns" rows="3" placeholder="R /&#10;+ etc/**&#10;- **/*.iso"><?= htmlspecialchars($tpl['patterns'] ?? '') ?></textarea>
+                                        <textarea class="form-control form-control-sm" name="patterns" rows="3" placeholder="+ /etc/**&#10;- **/*.iso"><?= htmlspecialchars($tpl['patterns'] ?? '') ?></textarea>
                                     </div>
                                 </div>
                                 <div class="row g-2 mb-2">
@@ -1997,7 +1997,7 @@ document.addEventListener('change', function (e) {
                 </div>
                 <div class="col-md-3">
                     <label class="form-label fw-semibold">Patterns</label>
-                    <textarea class="form-control" name="patterns" rows="3" placeholder="R /&#10;+ /etc/**&#10;- **/*.iso"></textarea>
+                    <textarea class="form-control" name="patterns" rows="3" placeholder="+ /etc/**&#10;- **/*.iso"></textarea>
                 </div>
             </div>
             <div class="row g-3">

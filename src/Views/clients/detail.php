@@ -2288,7 +2288,7 @@ $sizeDisplay = $totalSize > 0 ? \BBS\Services\ServerStats::formatBytes((int) $to
                     <div class="row mb-3">
                         <label class="col-md-3 col-form-label fw-semibold">Patterns File</label>
                         <div class="col-md-6">
-                            <textarea class="form-control edit-patterns" name="patterns" rows="4" placeholder="R /&#10;+ /etc/**&#10;- **/*.iso"><?= htmlspecialchars($plan['patterns'] ?? '') ?></textarea>
+                            <textarea class="form-control edit-patterns" name="patterns" rows="4" placeholder="+ /etc/**&#10;- **/*.iso"><?= htmlspecialchars($plan['patterns'] ?? '') ?></textarea>
                         </div>
                         <div class="col-md-3 form-text pt-2">
                             Full borg patterns file (<code>R</code>/<code>P</code>/<code>+</code>/<code>-</code>/<code>!</code>). Needs client agent <?= htmlspecialchars(\BBS\Services\BorgCommandBuilder::MIN_AGENT_PATTERNS_VERSION) ?>+.
@@ -2664,10 +2664,10 @@ $sizeDisplay = $totalSize > 0 ? \BBS\Services\ServerStats::formatBytes((int) $to
                 <div class="row mb-3">
                     <label class="col-md-3 col-form-label fw-semibold">Patterns File</label>
                     <div class="col-md-6">
-                        <textarea class="form-control" name="patterns" id="patternsInput" rows="4" placeholder="R /&#10;+ /etc/**&#10;- **/*.iso&#10;- /home/*/.cache"><?= htmlspecialchars($profileDefaults['patterns'] ?? '') ?></textarea>
+                        <textarea class="form-control" name="patterns" id="patternsInput" rows="4" placeholder="+ /etc/**&#10;- **/*.iso&#10;- /home/*/.cache"><?= htmlspecialchars($profileDefaults['patterns'] ?? '') ?></textarea>
                     </div>
                     <div class="col-md-3 form-text pt-2">
-                        Full borg patterns file: <code>R</code>, <code>P</code>, <code>+</code>, <code>-</code>, <code>!</code> rules, one per line. Unlike excludes above, <code>+</code> includes work here. Rules match full paths — use absolute paths or <code>**</code> globs. Verify with Dry Run. Needs client agent <?= htmlspecialchars(\BBS\Services\BorgCommandBuilder::MIN_AGENT_PATTERNS_VERSION) ?>+.
+                        Full borg patterns file: <code>R</code>, <code>P</code>, <code>+</code>, <code>-</code>, <code>!</code> rules, one per line. Unlike excludes above, <code>+</code> includes work here. Rules match the paths borg walks (relative under snapshot plans, e.g. <code>home/user/...</code>); absolute <code>R</code> roots are rejected. Verify with Dry Run. Needs client agent <?= htmlspecialchars(\BBS\Services\BorgCommandBuilder::MIN_AGENT_PATTERNS_VERSION) ?>+.
                     </div>
                 </div>
 

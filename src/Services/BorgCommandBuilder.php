@@ -171,7 +171,16 @@ class BorgCommandBuilder
                 continue;
             }
             if (strlen($line) < 3 || strpos('RP+-!', $line[0]) === false || $line[1] !== ' ') {
-                return "Patterns line \"{$line}\" is not valid: each rule starts with R, P, +, - or ! followed by a space (e.g. \"- **/*.iso\", \"+ etc/**\", \"R /\"). Bare excludes go in Exclude Patterns instead.";
+                return "Patterns line \"{$line}\" is not valid: each rule starts with R, P, +, - or ! followed by a space (e.g. \"- **/*.iso\", \"+ home/user/**\"). Bare excludes go in Exclude Patterns instead.";
+            }
+            // An absolute R root walks the live path a second time next to
+            // the plan Directories (which the agent rewrites relative under
+            // snapshots): every file lands in the archive twice, once
+            // outside the snapshot and mostly unfiltered. Directories are
+            // the only supported way to add roots; R, if used, must be
+            // relative.
+            if ($line[0] === 'R' && str_starts_with(substr($line, 2), '/')) {
+                return "Patterns line \"{$line}\" is not valid: absolute R roots duplicate every file (remove the R line — plan Directories already define the roots).";
             }
         }
         return null;
