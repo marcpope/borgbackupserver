@@ -118,13 +118,63 @@ class BorgCommandBuilder
      * Validate the user-editable plan fields together. Returns an error
      * message, or null when the fields are acceptable.
      */
-    public static function validatePlanFields(?string $advancedOptions, ?string $directories): ?string
+    public static function validatePlanFields(?string $advancedOptions, ?string $directories, ?string $patterns = null): ?string
     {
         $opts = self::validateAdvancedOptions($advancedOptions);
         if (!$opts['ok']) {
             return $opts['error'];
         }
-        return self::validateDirectories($directories);
+        $dirError = self::validateDirectories($directories);
+        if ($dirError !== null) {
+            return $dirError;
+        }
+        return self::validatePatterns($patterns);
+    }
+
+    /**
+     * Oldest agent that materializes a plan's Patterns file (2.102.0).
+     * Older agents ignore the unknown payload key, which would run a backup
+     * that silently drops every R/+/-/! rule — so the queue refuses to send
+     * patterns to them instead (fail fast, fail loud).
+     */
+    public const MIN_AGENT_PATTERNS_VERSION = '2.102.0';
+
+    public static function agentSupportsPatterns(?string $agentVersion): bool
+    {
+        if ($agentVersion === null || $agentVersion === '') {
+            return false;
+        }
+        return version_compare(trim($agentVersion), self::MIN_AGENT_PATTERNS_VERSION, '>=');
+    }
+
+    /** Largest Patterns file accepted, in bytes (borg reads it whole). */
+    public const PATTERNS_MAX_BYTES = 65535;
+
+    /**
+     * Validate a borg patterns file: one rule per line, each starting with
+     * R (root), P (path prefix), + (include), - (exclude) or ! (no-recurse
+     * exclude). Blank lines and #-comments are ignored. Returns an error
+     * message, or null when the content is acceptable.
+     */
+    public static function validatePatterns(?string $raw): ?string
+    {
+        $raw = (string) ($raw ?? '');
+        if (trim($raw) === '') {
+            return null;
+        }
+        if (strlen($raw) > self::PATTERNS_MAX_BYTES) {
+            return 'Patterns file is too large (max ' . self::PATTERNS_MAX_BYTES . ' bytes).';
+        }
+        foreach (preg_split('/[\n\r]+/', $raw) as $line) {
+            $line = trim($line);
+            if ($line === '' || $line[0] === '#') {
+                continue;
+            }
+            if (strlen($line) < 3 || strpos('RP+-!', $line[0]) === false || $line[1] !== ' ') {
+                return "Patterns line \"{$line}\" is not valid: each rule starts with R, P, +, - or ! followed by a space (e.g. \"- **/*.iso\", \"+ etc/**\", \"R /\"). Bare excludes go in Exclude Patterns instead.";
+            }
+        }
+        return null;
     }
 
     /**

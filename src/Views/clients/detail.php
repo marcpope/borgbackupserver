@@ -2248,7 +2248,7 @@ $sizeDisplay = $totalSize > 0 ? \BBS\Services\ServerStats::formatBytes((int) $to
                                 <?php endforeach; ?>
                             </select>
                         </div>
-                        <div class="col-md-3 form-text pt-2">Overwrites directories and excludes</div>
+                        <div class="col-md-3 form-text pt-2">Overwrites directories, excludes and patterns</div>
                     </div>
                     <?php endif; ?>
 
@@ -2282,6 +2282,16 @@ $sizeDisplay = $totalSize > 0 ? \BBS\Services\ServerStats::formatBytes((int) $to
                             <a href="https://borgbackup.readthedocs.io/en/stable/usage/help.html#borg-patterns" target="_blank" rel="noopener" class="text-decoration-none">
                                 <i class="bi bi-box-arrow-up-right me-1"></i>Borg pattern syntax
                             </a>
+                        </div>
+                    </div>
+
+                    <div class="row mb-3">
+                        <label class="col-md-3 col-form-label fw-semibold">Patterns File</label>
+                        <div class="col-md-6">
+                            <textarea class="form-control edit-patterns" name="patterns" rows="4" placeholder="R /&#10;+ /etc/**&#10;- **/*.iso"><?= htmlspecialchars($plan['patterns'] ?? '') ?></textarea>
+                        </div>
+                        <div class="col-md-3 form-text pt-2">
+                            Full borg patterns file (<code>R</code>/<code>P</code>/<code>+</code>/<code>-</code>/<code>!</code>). Needs client agent <?= htmlspecialchars(\BBS\Services\BorgCommandBuilder::MIN_AGENT_PATTERNS_VERSION) ?>+.
                         </div>
                     </div>
 
@@ -2585,7 +2595,7 @@ $sizeDisplay = $totalSize > 0 ? \BBS\Services\ServerStats::formatBytes((int) $to
                             <?php endforeach; ?>
                         </select>
                     </div>
-                    <div class="col-md-3 form-text pt-2">Pre-fills directories and excludes</div>
+                    <div class="col-md-3 form-text pt-2">Pre-fills directories, excludes and patterns</div>
                 </div>
                 <?php endif; ?>
 
@@ -2648,6 +2658,16 @@ $sizeDisplay = $totalSize > 0 ? \BBS\Services\ServerStats::formatBytes((int) $to
                         <a href="https://borgbackup.readthedocs.io/en/stable/usage/help.html#borg-patterns" target="_blank" rel="noopener" class="text-decoration-none">
                             <i class="bi bi-box-arrow-up-right me-1"></i>Borg pattern syntax
                         </a>
+                    </div>
+                </div>
+
+                <div class="row mb-3">
+                    <label class="col-md-3 col-form-label fw-semibold">Patterns File</label>
+                    <div class="col-md-6">
+                        <textarea class="form-control" name="patterns" id="patternsInput" rows="4" placeholder="R /&#10;+ /etc/**&#10;- **/*.iso&#10;- /home/*/.cache"><?= htmlspecialchars($profileDefaults['patterns'] ?? '') ?></textarea>
+                    </div>
+                    <div class="col-md-3 form-text pt-2">
+                        Full borg patterns file: <code>R</code>, <code>P</code>, <code>+</code>, <code>-</code>, <code>!</code> rules, one per line. Unlike excludes above, <code>+</code> includes work here. Rules match full paths — use absolute paths or <code>**</code> globs. Verify with Dry Run. Needs client agent <?= htmlspecialchars(\BBS\Services\BorgCommandBuilder::MIN_AGENT_PATTERNS_VERSION) ?>+.
                     </div>
                 </div>
 
@@ -2995,6 +3015,7 @@ $sizeDisplay = $totalSize > 0 ? \BBS\Services\ServerStats::formatBytes((int) $to
                     .then(tpl => {
                         document.getElementById('directoriesInput').value = (tpl.directories || '').replace(/\\n/g, '\n');
                         document.getElementById('excludesInput').value = (tpl.excludes || '').replace(/\\n/g, '\n');
+                        document.getElementById('patternsInput').value = (tpl.patterns || '').replace(/\\n/g, '\n');
                         applyTemplateOptions(tpl.advanced_options || '', createForm, document.getElementById('compressionType'), advField);
                         syncCreateField();
                     });
@@ -3067,6 +3088,7 @@ $sizeDisplay = $totalSize > 0 ? \BBS\Services\ServerStats::formatBytes((int) $to
                 .then(tpl => {
                     panel.querySelector('.edit-directories').value = (tpl.directories || '').replace(/\\n/g, '\n');
                     panel.querySelector('.edit-excludes').value = (tpl.excludes || '').replace(/\\n/g, '\n');
+                    panel.querySelector('.edit-patterns').value = (tpl.patterns || '').replace(/\\n/g, '\n');
                     const opts = tpl.advanced_options || '';
                     const checks = panel.querySelectorAll('.edit-borg-opt');
                     const compMatch = opts.match(/--compression\s+(\S+)/);

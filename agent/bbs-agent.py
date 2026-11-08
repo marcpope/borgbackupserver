@@ -56,7 +56,7 @@ if not hasattr(subprocess, "run"):
     subprocess.run = _subprocess_run
     subprocess.CompletedProcess = _CompletedProcess
 
-AGENT_VERSION = "2.100.0"
+AGENT_VERSION = "2.102.0"
 
 # Ed25519 public keys, hex, that may sign an update to this script and to
 # the start wrapper. Kept in step with agent/signing-key.pub. An update the
@@ -5603,6 +5603,46 @@ def execute_task(config, task):
     if _refuse_unsafe_command(config, job_id, command):
         return
 
+    # A plan's Patterns file arrives as text: materialize it to a temp file
+    # and run borg with --patterns-from pointing at it. The flag is injected
+    # here, after the safety check, so the temp path itself never goes
+    # through the untrusted-argv filter — and a tampered payload can't smuggle
+    # one in either, since only this key (never the command array) carries it.
+    # Note: the streaming/special-file checks inside only read --exclude=
+    # flags, so a patterns rule that prunes pipes won't silence them; an
+    # exotic setup like that reports "exclude them to stream" and needs the
+    # same rule as a --exclude= too.
+    patterns_file = None
+    patterns = task.get("patterns", "")
+    if not isinstance(patterns, str):
+        patterns = ""
+    patterns = patterns.strip()
+    if patterns and task_type in ("backup", "backup_dry_run"):
+        try:
+            fd, patterns_file = tempfile.mkstemp(prefix="bbs-patterns-", suffix=".lst")
+            try:
+                # mkstemp already creates the file mode 0600; fdopen keeps it.
+                f = os.fdopen(fd, "w")
+                try:
+                    f.write(patterns)
+                    if not patterns.endswith("\n"):
+                        f.write("\n")
+                finally:
+                    f.close()
+            except Exception:
+                try:
+                    os.remove(patterns_file)
+                except OSError:
+                    pass
+                patterns_file = None
+                raise
+            command = _with_patterns_file(command, patterns_file)
+        except Exception as e:
+            logger.error("Job #{}: could not write patterns file: {}".format(job_id, e))
+            report_status(config, {"job_id": job_id, "result": "failed",
+                                   "error_log": "Could not write patterns file: {}".format(e)})
+            return
+
     logger.info("Executing {} job #{}: {}".format(task_type, job_id, ' '.join(command)))
 
     # Prevent the OS from sleeping during the task
@@ -5612,6 +5652,31 @@ def execute_task(config, task):
                            archive_name, directories, plugins, cwd)
     finally:
         _allow_sleep(sleep_state)
+        if patterns_file:
+            try:
+                os.remove(patterns_file)
+            except OSError:
+                pass
+
+
+def _with_patterns_file(command, path):
+    """Return command with --patterns-from=path inserted before the archive.
+
+    borg create argv looks like [borg, create, opts..., repo::archive, --,
+    dirs...]: the flag must land with the opts, ahead of the archive token.
+    Pure list surgery — no validation, the content was already validated at
+    plan save time and this path is agent-generated.
+    """
+    flag = "--patterns-from=" + path
+    out = list(command)
+    for i, tok in enumerate(out[1:], 1):
+        if not isinstance(tok, str):
+            continue
+        if tok == "--" or "::" in tok:
+            out.insert(i, flag)
+            return out
+    out.append(flag)
+    return out
 
 
 # Pseudo-filesystems we hide from the BBS file browser by default. Borg
