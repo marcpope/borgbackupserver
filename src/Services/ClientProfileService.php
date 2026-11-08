@@ -180,6 +180,7 @@ class ClientProfileService
             'profile_name' => $profile['name'],
             'directories'  => $template['directories'] ?? '',
             'excludes'     => $template['excludes'] ?? '',
+            'patterns'     => $template['patterns'] ?? '',
             'advanced_options' => $template['advanced_options'] ?? '',
             'template_name' => $template['name'] ?? null,
             'frequency'    => $profile['frequency'],
@@ -242,6 +243,7 @@ class ClientProfileService
         if ($template) {
             $planUpdate['directories'] = $template['directories'];
             $planUpdate['excludes'] = $template['excludes'];
+            $planUpdate['patterns'] = $template['patterns'] ?? null;
             $planUpdate['advanced_options'] = $template['advanced_options'];
         }
 

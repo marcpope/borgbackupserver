@@ -189,7 +189,7 @@ class QueueManager
         // Get queued jobs ordered by queued_at (FIFO)
         // No LIMIT — we may skip busy-repo jobs and need to see more candidates
         $queuedJobs = $this->db->fetchAll("
-            SELECT bj.*, bj.plugin_config_id, bp.name as plan_name, bp.directories, bp.excludes, bp.advanced_options, bp.snapshot, bp.stream_db_dumps, bp.priority,
+            SELECT bj.*, bj.plugin_config_id, bp.name as plan_name, bp.directories, bp.excludes, bp.patterns, bp.advanced_options, bp.snapshot, bp.stream_db_dumps, bp.priority,
                    bp.prune_minutes, bp.prune_hours, bp.prune_days,
                    bp.prune_weeks, bp.prune_months, bp.prune_years,
                    r.path as repo_path, r.encryption, r.passphrase_encrypted, r.name as repo_name,
@@ -198,6 +198,7 @@ class QueueManager
                    rsc.ssh_private_key_encrypted as remote_ssh_key_encrypted,
                    rsc.borg_remote_path,
                    a.name as agent_name,
+                   a.agent_version,
                    a.status as agent_status
             FROM backup_jobs bj
             LEFT JOIN backup_plans bp ON bp.id = bj.backup_plan_id
@@ -360,6 +361,7 @@ class QueueManager
             $plan = [
                 'directories' => $job['directories'] ?? '',
                 'excludes' => $job['excludes'] ?? '',
+                'patterns' => $job['patterns'] ?? '',
                 'advanced_options' => $job['advanced_options'] ?? '',
                 'prune_minutes' => $job['prune_minutes'] ?? 0,
                 'prune_hours' => $job['prune_hours'] ?? 0,
@@ -372,6 +374,24 @@ class QueueManager
             $taskPayload = null;
 
             if ($job['task_type'] === 'backup' || $job['task_type'] === 'backup_dry_run') {
+                // A Patterns file needs an agent that materializes it. Older
+                // agents ignore the unknown payload key and would run a
+                // backup that silently drops every rule — fail here instead.
+                if (trim($plan['patterns']) !== '' && !BorgCommandBuilder::agentSupportsPatterns($job['agent_version'] ?? null)) {
+                    $this->db->update('backup_jobs', [
+                        'status' => 'failed',
+                        'completed_at' => date('Y-m-d H:i:s'),
+                        'error_log' => 'Plan uses a Patterns file but client agent version ' . ($job['agent_version'] ?: 'unknown')
+                            . ' predates Patterns support (needs ' . BorgCommandBuilder::MIN_AGENT_PATTERNS_VERSION . '). Update the client agent and re-run.',
+                    ], 'id = ?', [$job['id']]);
+                    $this->db->insert('server_log', [
+                        'agent_id' => $job['agent_id'],
+                        'backup_job_id' => $job['id'],
+                        'level' => 'error',
+                        'message' => "Backup job #{$job['id']} failed — plan \"{$job['plan_name']}\" uses Patterns but the client agent is too old.",
+                    ]);
+                    continue;
+                }
                 $isDryRun = $job['task_type'] === 'backup_dry_run';
                 $prefix = $job['backup_plan_id'] ? 'plan' . $job['backup_plan_id'] : ($job['repo_name'] ?? 'backup');
                 $archiveName = BorgCommandBuilder::generateArchiveName($isDryRun ? 'dry-run' : $prefix);
@@ -462,6 +482,13 @@ class QueueManager
                     'plan_name' => $job['plan_name'] ?? '',
                     'client_name' => $job['agent_name'] ?? '',
                 ];
+                // Patterns-file content for the agent: it materializes this
+                // to a temp file and runs borg with --patterns-from. Gated on
+                // agent version above, so this key only reaches agents that
+                // understand it.
+                if (trim($plan['patterns'] ?? '') !== '') {
+                    $extra['patterns'] = $plan['patterns'];
+                }
                 if (!empty($plugins)) {
                     // An empty config must reach the agent as {}, not [] (#535)
                     $extra['plugins'] = array_map(
@@ -499,6 +526,27 @@ class QueueManager
                     'level' => 'info',
                     'message' => "Backup command: {$cmdStr}",
                 ]);
+
+                // The --patterns-from flag itself is injected agent-side
+                // (the temp path only exists there), so the command above
+                // never shows it. Say so explicitly, or the next reader
+                // assumes patterns were dropped like this one almost was.
+                $patternsLog = trim($plan['patterns'] ?? '');
+                if ($patternsLog !== '') {
+                    $ruleCount = 0;
+                    foreach (preg_split('/[\n\r]+/', $patternsLog) as $patternLine) {
+                        $patternLine = trim($patternLine);
+                        if ($patternLine !== '' && $patternLine[0] !== '#') {
+                            $ruleCount++;
+                        }
+                    }
+                    $this->db->insert('server_log', [
+                        'agent_id' => $job['agent_id'],
+                        'backup_job_id' => $job['id'],
+                        'level' => 'info',
+                        'message' => "Patterns file ({$ruleCount} rules) sent to agent; borg runs with --patterns-from.",
+                    ]);
+                }
 
                 // Log plugin info for debugging
                 if (!empty($plugins)) {
@@ -732,14 +780,15 @@ class QueueManager
     public function getTasksForAgent(int $agentId): array
     {
         $jobs = $this->db->fetchAll("
-            SELECT bj.*, bj.plugin_config_id, bp.name as plan_name, bp.directories, bp.excludes, bp.advanced_options, bp.snapshot, bp.stream_db_dumps, bp.priority,
+            SELECT bj.*, bj.plugin_config_id, bp.name as plan_name, bp.directories, bp.excludes, bp.patterns, bp.advanced_options, bp.snapshot, bp.stream_db_dumps, bp.priority,
                    bp.prune_minutes, bp.prune_hours, bp.prune_days,
                    bp.prune_weeks, bp.prune_months, bp.prune_years,
                    r.path as repo_path, r.encryption, r.passphrase_encrypted, r.name as repo_name,
                    r.storage_type, r.remote_ssh_config_id,
                    rsc.remote_port, rsc.ssh_private_key_encrypted as remote_ssh_key_encrypted,
                    rsc.borg_remote_path,
-                   a.name as agent_name
+                   a.name as agent_name,
+                   a.agent_version
             FROM backup_jobs bj
             LEFT JOIN backup_plans bp ON bp.id = bj.backup_plan_id
             LEFT JOIN repositories r ON r.id = bj.repository_id
@@ -762,6 +811,7 @@ class QueueManager
             $plan = [
                 'directories' => $job['directories'] ?? '',
                 'excludes' => $job['excludes'] ?? '',
+                'patterns' => $job['patterns'] ?? '',
                 'advanced_options' => $job['advanced_options'] ?? '',
                 'prune_minutes' => $job['prune_minutes'] ?? 0,
                 'prune_hours' => $job['prune_hours'] ?? 0,
@@ -772,6 +822,24 @@ class QueueManager
             ];
 
             if ($job['task_type'] === 'backup' || $job['task_type'] === 'backup_dry_run') {
+                // Defense in depth for the promote-time gate above: a job
+                // sent before the upgrade (or by another path) must not run
+                // patterns on an agent that would silently ignore them.
+                if (trim($plan['patterns']) !== '' && !BorgCommandBuilder::agentSupportsPatterns($job['agent_version'] ?? null)) {
+                    $this->db->update('backup_jobs', [
+                        'status' => 'failed',
+                        'completed_at' => date('Y-m-d H:i:s'),
+                        'error_log' => 'Plan uses a Patterns file but client agent version ' . ($job['agent_version'] ?: 'unknown')
+                            . ' predates Patterns support (needs ' . BorgCommandBuilder::MIN_AGENT_PATTERNS_VERSION . '). Update the client agent and re-run.',
+                    ], 'id = ?', [$job['id']]);
+                    $this->db->insert('server_log', [
+                        'agent_id' => $job['agent_id'],
+                        'backup_job_id' => $job['id'],
+                        'level' => 'error',
+                        'message' => "Backup job #{$job['id']} failed — plan \"{$job['plan_name']}\" uses Patterns but the client agent is too old.",
+                    ]);
+                    continue;
+                }
                 $isDryRun = $job['task_type'] === 'backup_dry_run';
                 $prefix = $job['backup_plan_id'] ? 'plan' . $job['backup_plan_id'] : ($job['repo_name'] ?? 'backup');
                 $archiveName = BorgCommandBuilder::generateArchiveName($isDryRun ? 'dry-run' : $prefix);
@@ -861,6 +929,13 @@ class QueueManager
                     'plan_name' => $job['plan_name'] ?? '',
                     'client_name' => $job['agent_name'] ?? '',
                 ];
+                // Patterns-file content for the agent: it materializes this
+                // to a temp file and runs borg with --patterns-from. Gated on
+                // agent version above, so this key only reaches agents that
+                // understand it.
+                if (trim($plan['patterns'] ?? '') !== '') {
+                    $extra['patterns'] = $plan['patterns'];
+                }
                 if (!empty($plugins)) {
                     // An empty config must reach the agent as {}, not [] (#535)
                     $extra['plugins'] = array_map(

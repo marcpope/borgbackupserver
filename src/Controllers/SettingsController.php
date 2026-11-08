@@ -363,13 +363,14 @@ class SettingsController extends Controller
         $description = trim($_POST['description'] ?? '');
         $directories = trim($_POST['directories'] ?? '');
         $excludes = trim($_POST['excludes'] ?? '');
+        $patterns = trim($_POST['patterns'] ?? '');
         $advancedOptions = trim($_POST['advanced_options'] ?? '');
 
         if (empty($name) || empty($directories)) {
             $this->flash('danger', 'Template name and directories are required.');
             $this->redirect('/settings?tab=templates');
         }
-        if (($fieldError = \BBS\Services\BorgCommandBuilder::validatePlanFields($advancedOptions, $directories)) !== null) {
+        if (($fieldError = \BBS\Services\BorgCommandBuilder::validatePlanFields($advancedOptions, $directories, $patterns)) !== null) {
             $this->flash('danger', $fieldError);
             $this->redirect('/settings?tab=templates');
         }
@@ -379,6 +380,7 @@ class SettingsController extends Controller
             'description' => $description,
             'directories' => $directories,
             'excludes' => $excludes ?: null,
+            'patterns' => $patterns ?: null,
             'advanced_options' => $advancedOptions ?: null,
         ]);
 
@@ -414,6 +416,7 @@ class SettingsController extends Controller
             'description' => $tpl['description'],
             'directories' => $tpl['directories'],
             'excludes' => $tpl['excludes'],
+            'patterns' => $tpl['patterns'] ?? null,
             'advanced_options' => $tpl['advanced_options'],
         ]);
 
@@ -430,13 +433,14 @@ class SettingsController extends Controller
         $description = trim($_POST['description'] ?? '');
         $directories = trim($_POST['directories'] ?? '');
         $excludes = trim($_POST['excludes'] ?? '');
+        $patterns = trim($_POST['patterns'] ?? '');
         $advancedOptions = trim($_POST['advanced_options'] ?? '');
 
         if (empty($name) || empty($directories)) {
             $this->flash('danger', 'Template name and directories are required.');
             $this->redirect('/settings?tab=templates');
         }
-        if (($fieldError = \BBS\Services\BorgCommandBuilder::validatePlanFields($advancedOptions, $directories)) !== null) {
+        if (($fieldError = \BBS\Services\BorgCommandBuilder::validatePlanFields($advancedOptions, $directories, $patterns)) !== null) {
             $this->flash('danger', $fieldError);
             $this->redirect('/settings?tab=templates');
         }
@@ -446,6 +450,7 @@ class SettingsController extends Controller
             'description' => $description,
             'directories' => $directories,
             'excludes' => $excludes ?: null,
+            'patterns' => $patterns ?: null,
             'advanced_options' => $advancedOptions ?: null,
         ], 'id = ?', [$id]);
 
