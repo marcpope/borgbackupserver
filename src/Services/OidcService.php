@@ -90,7 +90,7 @@ class OidcService
         // out of our output.
         error_reporting(error_reporting() & ~E_DEPRECATED);
 
-        $oidc = new OpenIDConnectClient($providerUrl, $clientId, $clientSecret);
+        $oidc = new Es256OpenIdConnectClient($providerUrl, $clientId, $clientSecret);
         $oidc->setRedirectURL($redirectUri);
 
         // Set scopes (jumbojett library expects an array)
