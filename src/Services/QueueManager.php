@@ -527,6 +527,27 @@ class QueueManager
                     'message' => "Backup command: {$cmdStr}",
                 ]);
 
+                // The --patterns-from flag itself is injected agent-side
+                // (the temp path only exists there), so the command above
+                // never shows it. Say so explicitly, or the next reader
+                // assumes patterns were dropped like this one almost was.
+                $patternsLog = trim($plan['patterns'] ?? '');
+                if ($patternsLog !== '') {
+                    $ruleCount = 0;
+                    foreach (preg_split('/[\n\r]+/', $patternsLog) as $patternLine) {
+                        $patternLine = trim($patternLine);
+                        if ($patternLine !== '' && $patternLine[0] !== '#') {
+                            $ruleCount++;
+                        }
+                    }
+                    $this->db->insert('server_log', [
+                        'agent_id' => $job['agent_id'],
+                        'backup_job_id' => $job['id'],
+                        'level' => 'info',
+                        'message' => "Patterns file ({$ruleCount} rules) sent to agent; borg runs with --patterns-from.",
+                    ]);
+                }
+
                 // Log plugin info for debugging
                 if (!empty($plugins)) {
                     $pluginSlugs = array_map(fn($p) => $p['slug'] ?? '?', $plugins);
