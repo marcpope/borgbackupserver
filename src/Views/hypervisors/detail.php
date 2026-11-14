@@ -54,10 +54,39 @@ $showHost = count($hosts) > 1; // a single-node hypervisor needs no host column
     <li class="nav-item">
         <a class="nav-link <?= $tab === 'install' ? 'active' : '' ?>" href="/hypervisors/<?= (int) $hypervisor['id'] ?>?tab=install"><i class="bi bi-download me-1"></i>Install agent</a>
     </li>
+    <li class="nav-item">
+        <a class="nav-link <?= $tab === 'settings' ? 'active' : '' ?>" href="/hypervisors/<?= (int) $hypervisor['id'] ?>?tab=settings"><i class="bi bi-sliders me-1"></i>Settings</a>
+    </li>
     <?php endif; ?>
 </ul>
 
-<?php if ($tab === 'install'): ?>
+<?php if ($tab === 'settings'): ?>
+<div class="card border-0 shadow-sm" style="max-width: 40rem;">
+    <div class="card-body">
+        <form method="POST" action="/hypervisors/<?= (int) $hypervisor['id'] ?>/settings">
+            <input type="hidden" name="csrf_token" value="<?= $this->csrfToken() ?>">
+            <div class="mb-3">
+                <label class="form-label fw-semibold" for="hvName">Name</label>
+                <input type="text" class="form-control" id="hvName" name="name" required maxlength="100"
+                       value="<?= htmlspecialchars($hypervisor['name']) ?>">
+            </div>
+            <div class="mb-3">
+                <label class="form-label fw-semibold" for="hvInterval">VM inventory interval</label>
+                <div class="input-group" style="max-width: 14rem;">
+                    <input type="number" class="form-control" id="hvInterval" name="inventory_interval_minutes"
+                           min="1" max="60" required value="<?= (int) $hypervisor['inventory_interval_minutes'] ?>">
+                    <span class="input-group-text">minutes</span>
+                </div>
+                <div class="form-text">
+                    How often the agent reports the virtual machines (1 to 60 minutes). The inventory keeps
+                    updating while backups run; Refresh asks for one within 30 seconds.
+                </div>
+            </div>
+            <button type="submit" class="btn btn-primary"><i class="bi bi-check-lg me-1"></i>Save</button>
+        </form>
+    </div>
+</div>
+<?php elseif ($tab === 'install'): ?>
 <div class="card border-0 shadow-sm">
     <div class="card-body">
         <?php if ($installCmd): ?>

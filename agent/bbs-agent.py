@@ -714,13 +714,17 @@ def get_system_info(config=None):
 # set up by `install.sh --hypervisor`. A client agent has neither, so the
 # hypervisor code (connectors for Proxmox, later VMware) is never on it.
 #
-# The server lists, in each task poll answer, the hypervisors this agent
-# serves and their connector type; the agent reports each one's inventory
-# every few minutes or when the server asks (Refresh).
+# Inventory runs in its own thread, apart from the task loop, so the VM list
+# stays current while a long task (a VM backup) runs. Every
+# HYPERVISOR_ASSIGNMENT_POLL seconds the thread asks the server which
+# hypervisors this agent serves, with which connector, how often to report
+# and whether a refresh was requested; it then reports what is due.
 # ---------------------------------------------------------------------------
 
 HYPERVISOR_MODULE_FILE = "bbs-hypervisor.py"
-HYPERVISOR_INVENTORY_INTERVAL = 300
+HYPERVISOR_ASSIGNMENT_POLL = 30
+HYPERVISOR_DEFAULT_INTERVAL = 300
+_hypervisor_warned = set()  # problems already logged, so the 30 s poll does not repeat them
 
 
 def _hypervisor_module_path():
@@ -766,14 +770,54 @@ def sync_hypervisor_connectors(module, assigned, current):
             continue
         cls = module.CONNECTORS.get(slug)
         if cls is None:
-            logger.warning("Hypervisor #{}: connector '{}' is not in this agent's hypervisor module".format(hid, slug))
+            _warn_once((hid, slug, "connector"),
+                       "Hypervisor #{}: connector '{}' is not in this agent's hypervisor module".format(hid, slug))
             continue
         if cls.deployment == getattr(module, "DEPLOY_AGENT_ON_HOST", "agent_on_host") and not cls.detect():
-            logger.warning("Hypervisor #{} is a {} host, but this machine is not one".format(hid, slug))
+            _warn_once((hid, slug, "detect"),
+                       "Hypervisor #{} is a {} host, but this machine is not one".format(hid, slug))
             continue
         connectors[hid] = cls(item.get("settings") or {})
         logger.info("Serving hypervisor #{} ({})".format(hid, slug))
     return connectors
+
+
+def _warn_once(key, message):
+    if key not in _hypervisor_warned:
+        _hypervisor_warned.add(key)
+        logger.warning(message)
+
+
+def hypervisor_inventory_thread(config, module):
+    """Report the inventory of each assigned hypervisor when it is due or
+    when the server asks for a refresh. Independent of the task loop."""
+    connectors = {}
+    last_report = {}  # hypervisor id -> time of its last report
+    while running:
+        try:
+            resp = api_request(config, "/api/agent/hypervisor/assignments")
+            if isinstance(resp, dict) and isinstance(resp.get("hypervisors"), list):
+                assigned = resp["hypervisors"]
+                connectors = sync_hypervisor_connectors(module, assigned, connectors)
+                for item in assigned:
+                    try:
+                        hid = int(item.get("id"))
+                        interval = max(60, int(item.get("inventory_interval") or HYPERVISOR_DEFAULT_INTERVAL))
+                    except (TypeError, ValueError, AttributeError):
+                        continue
+                    connector = connectors.get(hid)
+                    if connector is None:
+                        continue
+                    if item.get("refresh") or time.time() - last_report.get(hid, 0) >= interval:
+                        report_hypervisor_inventory(config, hid, connector)
+                        last_report[hid] = time.time()
+        except Exception as e:
+            logger.debug("Hypervisor assignment poll failed: {}".format(e))
+
+        for _ in range(HYPERVISOR_ASSIGNMENT_POLL):
+            if not running:
+                break
+            time.sleep(1)
 
 
 def report_hypervisor_inventory(config, hypervisor_id, connector):
@@ -7013,12 +7057,12 @@ def main():
     last_info_report = time.time()
     info_report_interval = 3600
 
-    # Hypervisor agent: report the VM inventory of each hypervisor the server
-    # assigns, at start and every few minutes, so the Hypervisors page shows
-    # what runs now.
+    # Hypervisor agent: VM inventory in its own thread (see
+    # hypervisor_inventory_thread), so it keeps reporting during tasks.
     hypervisor_module = load_hypervisor_module(config)
-    hypervisor_connectors = {}
-    last_inventory_report = 0
+    if hypervisor_module is not None:
+        threading.Thread(target=hypervisor_inventory_thread, args=(config, hypervisor_module),
+                         name="hypervisor-inventory", daemon=True).start()
 
     # Burst-poll window. When the UI's file-browser modal queues list_dir
     # tasks, we want the agent to feel near-real-time — but at 30s default
@@ -7043,17 +7087,6 @@ def main():
                     logger.debug("Periodic info report failed: {}".format(e))
                 last_info_report = time.time()
 
-            if hypervisor_module is not None and isinstance(result, dict) and "hypervisors" in result:
-                before = set(hypervisor_connectors)
-                hypervisor_connectors = sync_hypervisor_connectors(
-                    hypervisor_module, result["hypervisors"], hypervisor_connectors)
-                if set(hypervisor_connectors) - before:
-                    last_inventory_report = 0  # a newly assigned hypervisor reports at once
-            if hypervisor_connectors and (time.time() - last_inventory_report >= HYPERVISOR_INVENTORY_INTERVAL
-                                          or (isinstance(result, dict) and result.get("refresh_inventory"))):
-                for hid, hc in hypervisor_connectors.items():
-                    report_hypervisor_inventory(config, hid, hc)
-                last_inventory_report = time.time()
 
             # Update poll interval if server sends one
             if result and "poll_interval" in result:

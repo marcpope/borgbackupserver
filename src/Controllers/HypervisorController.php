@@ -118,9 +118,9 @@ class HypervisorController extends Controller
             $this->redirect('/hypervisors');
         }
 
-        $tab = in_array($_GET['tab'] ?? '', ['vms', 'install'], true) ? $_GET['tab'] : 'vms';
-        $isOwnerOrAdmin = $this->isAdmin() || (int) ($hypervisor['agent_user_id'] ?? 0) === (int) ($_SESSION['user_id'] ?? 0);
-        if ($tab === 'install' && !$isOwnerOrAdmin) {
+        $tab = in_array($_GET['tab'] ?? '', ['vms', 'install', 'settings'], true) ? $_GET['tab'] : 'vms';
+        $isOwnerOrAdmin = $this->isOwnerOrAdmin($hypervisor);
+        if ($tab !== 'vms' && !$isOwnerOrAdmin) {
             $tab = 'vms';
         }
 
@@ -150,7 +150,7 @@ class HypervisorController extends Controller
         ]);
     }
 
-    /** Ask the agent for a fresh inventory at its next task poll. */
+    /** Ask the agent for a fresh inventory at its next assignment poll (30 s). */
     public function refresh(int $id): void
     {
         $this->requireAuth();
@@ -163,8 +163,45 @@ class HypervisorController extends Controller
         }
 
         $this->db->update('hypervisors', ['refresh_requested' => 1], 'id = ?', [$id]);
-        $this->flash('success', 'Inventory refresh requested. The list updates at the agent\'s next poll.');
+        $this->flash('success', 'Inventory refresh requested. The list updates within about 30 seconds.');
         $this->redirect('/hypervisors/' . $id);
+    }
+
+    /** Name and inventory interval. */
+    public function updateSettings(int $id): void
+    {
+        $this->requireAuth();
+        $this->verifyCsrf();
+
+        $hypervisor = $this->getHypervisor($id);
+        if (!$hypervisor || !$this->isOwnerOrAdmin($hypervisor)) {
+            $this->flash('danger', 'Hypervisor not found.');
+            $this->redirect('/hypervisors');
+        }
+
+        $name = mb_substr(trim($_POST['name'] ?? ''), 0, 100);
+        if ($name === '') {
+            $this->flash('danger', 'Hypervisor name is required.');
+            $this->redirect("/hypervisors/{$id}?tab=settings");
+        }
+        $interval = (int) ($_POST['inventory_interval_minutes'] ?? 5);
+        if ($interval < 1 || $interval > 60) {
+            $this->flash('danger', 'The inventory interval must be between 1 and 60 minutes.');
+            $this->redirect("/hypervisors/{$id}?tab=settings");
+        }
+
+        $this->db->update('hypervisors', [
+            'name' => $name,
+            'inventory_interval_minutes' => $interval,
+        ], 'id = ?', [$id]);
+
+        $this->flash('success', 'Settings saved.');
+        $this->redirect("/hypervisors/{$id}?tab=settings");
+    }
+
+    private function isOwnerOrAdmin(array $hypervisor): bool
+    {
+        return $this->isAdmin() || (int) ($hypervisor['agent_user_id'] ?? 0) === (int) ($_SESSION['user_id'] ?? 0);
     }
 
     private function requireCreate(): void

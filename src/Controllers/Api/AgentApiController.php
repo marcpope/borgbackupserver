@@ -235,29 +235,39 @@ class AgentApiController extends Controller
             $response['check_jobs'] = array_map(fn($j) => (int) $j['id'], $stalledJobs);
         }
 
-        // A hypervisor agent learns here which hypervisors it serves and
-        // with which connector. Refresh on the Hypervisors page flags one;
-        // the agent then reports at once instead of at its next interval.
-        if (($agent['agent_type'] ?? 'client') === 'hypervisor') {
-            $assigned = $this->db->fetchAll(
-                "SELECT id, type, refresh_requested FROM hypervisors WHERE agent_id = ? ORDER BY id",
-                [$agent['id']]
-            );
-            $response['hypervisors'] = array_map(fn($h) => [
-                'id' => (int) $h['id'],
-                'type' => $h['type'],
-                // Connection settings for proxy connectors go here (decrypted
-                // from config_encrypted) once one exists.
-            ], $assigned);
-            foreach ($assigned as $h) {
-                if (!empty($h['refresh_requested'])) {
-                    $response['refresh_inventory'] = true;
-                    break;
-                }
-            }
+        $this->json($response);
+    }
+
+    /**
+     * GET /api/agent/hypervisor/assignments
+     * Polled every 30 s by a hypervisor agent's inventory thread (apart from
+     * the task loop, so it keeps working during a backup): which hypervisors
+     * it serves, with which connector, how often to report the inventory, and
+     * whether Refresh was pressed.
+     */
+    public function hypervisorAssignments(): void
+    {
+        $agent = $this->authenticateAgent();
+        if (($agent['agent_type'] ?? 'client') !== 'hypervisor') {
+            $this->json(['error' => 'Not a hypervisor agent'], 403);
         }
 
-        $this->json($response);
+        $assigned = $this->db->fetchAll(
+            "SELECT id, type, inventory_interval_minutes, refresh_requested FROM hypervisors WHERE agent_id = ? ORDER BY id",
+            [$agent['id']]
+        );
+
+        $this->json([
+            'status' => 'ok',
+            'hypervisors' => array_map(fn($h) => [
+                'id' => (int) $h['id'],
+                'type' => $h['type'],
+                'inventory_interval' => max(1, min(60, (int) $h['inventory_interval_minutes'])) * 60,
+                'refresh' => !empty($h['refresh_requested']),
+                // Connection settings for proxy connectors go here (decrypted
+                // from config_encrypted) once one exists.
+            ], $assigned),
+        ]);
     }
 
     /**

@@ -158,6 +158,8 @@ CREATE TABLE hypervisors (
     config_encrypted TEXT DEFAULT NULL,
     info JSON DEFAULT NULL,
     inventory_at DATETIME DEFAULT NULL,
+    -- How often the agent reports the VM inventory, in minutes (1-60)
+    inventory_interval_minutes TINYINT UNSIGNED NOT NULL DEFAULT 5,
     refresh_requested TINYINT(1) NOT NULL DEFAULT 0,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     INDEX idx_hypervisor_agent (agent_id),
