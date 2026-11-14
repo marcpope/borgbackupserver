@@ -374,6 +374,13 @@ class QueueManager
             if ($job['task_type'] === 'backup' || $job['task_type'] === 'backup_dry_run') {
                 $isDryRun = $job['task_type'] === 'backup_dry_run';
                 $prefix = $job['backup_plan_id'] ? 'plan' . $job['backup_plan_id'] : ($job['repo_name'] ?? 'backup');
+                // VM backup (hypervisor plan): one archive per VM, named so the
+                // prune can be scoped to that VM; the agent supplies the paths.
+                $vmContext = $isDryRun ? null : (new \BBS\Services\Hypervisors\HypervisorBackupService())->taskContext($job);
+                if ($vmContext) {
+                    $prefix = $vmContext['prefix'];
+                    $plan['directories'] = '';
+                }
                 $archiveName = BorgCommandBuilder::generateArchiveName($isDryRun ? 'dry-run' : $prefix);
 
                 // Build plugin payload and auto-include plugin directories (e.g. mysql dump_dir).
@@ -479,6 +486,10 @@ class QueueManager
                 $extra['stream_db_dumps'] = !empty($job['stream_db_dumps']);
                 // CPU/IO priority for borg on the client (#403).
                 $extra['priority'] = $job['priority'] ?? 'normal';
+                if ($vmContext) {
+                    $extra['hypervisor_vm'] = $vmContext['vm'];
+                    $extra['snapshot'] = false;
+                }
 
                 // Include decrypted SSH key for remote repos
                 if ($remoteSshConfig && !empty($job['remote_ssh_key_encrypted'])) {
@@ -774,6 +785,13 @@ class QueueManager
             if ($job['task_type'] === 'backup' || $job['task_type'] === 'backup_dry_run') {
                 $isDryRun = $job['task_type'] === 'backup_dry_run';
                 $prefix = $job['backup_plan_id'] ? 'plan' . $job['backup_plan_id'] : ($job['repo_name'] ?? 'backup');
+                // VM backup (hypervisor plan): one archive per VM, named so the
+                // prune can be scoped to that VM; the agent supplies the paths.
+                $vmContext = $isDryRun ? null : (new \BBS\Services\Hypervisors\HypervisorBackupService())->taskContext($job);
+                if ($vmContext) {
+                    $prefix = $vmContext['prefix'];
+                    $plan['directories'] = '';
+                }
                 $archiveName = BorgCommandBuilder::generateArchiveName($isDryRun ? 'dry-run' : $prefix);
 
                 // Build plugin payload and auto-include plugin directories (e.g. mysql dump_dir).
@@ -878,6 +896,10 @@ class QueueManager
                 $extra['stream_db_dumps'] = !empty($job['stream_db_dumps']);
                 // CPU/IO priority for borg on the client (#403).
                 $extra['priority'] = $job['priority'] ?? 'normal';
+                if ($vmContext) {
+                    $extra['hypervisor_vm'] = $vmContext['vm'];
+                    $extra['snapshot'] = false;
+                }
                 if ($remoteSshConfig && !empty($job['remote_ssh_key_encrypted'])) {
                     try {
                         $extra['remote_ssh_key'] = Encryption::decrypt($job['remote_ssh_key_encrypted']);

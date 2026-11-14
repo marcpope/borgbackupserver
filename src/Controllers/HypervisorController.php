@@ -3,6 +3,7 @@
 namespace BBS\Controllers;
 
 use BBS\Core\Controller;
+use BBS\Services\Hypervisors\HypervisorBackupService;
 use BBS\Services\Hypervisors\HypervisorConnector;
 use BBS\Services\Hypervisors\HypervisorRegistry;
 use BBS\Services\PermissionService;
@@ -119,9 +120,9 @@ class HypervisorController extends Controller
             $this->redirect('/hypervisors');
         }
 
-        $tab = in_array($_GET['tab'] ?? '', ['vms', 'install', 'settings'], true) ? $_GET['tab'] : 'vms';
+        $tab = in_array($_GET['tab'] ?? '', ['vms', 'backups', 'install', 'settings'], true) ? $_GET['tab'] : 'vms';
         $isOwnerOrAdmin = $this->isOwnerOrAdmin($hypervisor);
-        if ($tab !== 'vms' && !$isOwnerOrAdmin) {
+        if (in_array($tab, ['install', 'settings'], true) && !$isOwnerOrAdmin) {
             $tab = 'vms';
         }
 
@@ -139,6 +140,8 @@ class HypervisorController extends Controller
             $installCmd = $this->installCommand($hypervisor);
         }
 
+        $backups = $tab === 'backups' ? $this->backupsTabData($hypervisor, $vms) : [];
+
         $this->view('hypervisors/detail', [
             'pageTitle' => 'Hypervisors',
             'hypervisor' => $hypervisor,
@@ -148,7 +151,180 @@ class HypervisorController extends Controller
             'tab' => $tab,
             'isOwnerOrAdmin' => $isOwnerOrAdmin,
             'installCmd' => $installCmd,
+            'backups' => $backups,
         ]);
+    }
+
+    /** Plans, repositories and recent jobs for the Backups tab. */
+    private function backupsTabData(array $hypervisor, array $vms): array
+    {
+        $agentId = (int) $hypervisor['agent_id'];
+        $plans = $this->db->fetchAll("
+            SELECT bp.*, r.name as repo_name, s.frequency, s.times, s.day_of_week, s.next_run, s.enabled as schedule_enabled
+            FROM backup_plans bp
+            JOIN repositories r ON r.id = bp.repository_id
+            LEFT JOIN schedules s ON s.backup_plan_id = bp.id
+            WHERE bp.hypervisor_id = ?
+            ORDER BY bp.id
+        ", [(int) $hypervisor['id']]);
+
+        $service = new HypervisorBackupService();
+        foreach ($plans as &$p) {
+            $p['vms'] = $service->planVms($p);
+            $p['vm_rows'] = [];
+            foreach ($this->db->fetchAll("SELECT * FROM backup_plan_vms WHERE backup_plan_id = ?", [$p['id']]) as $r) {
+                $r['exclude_disks'] = json_decode($r['exclude_disks'] ?? '[]', true) ?: [];
+                $p['vm_rows'][$r['vm_ref']] = $r;
+            }
+        }
+        unset($p);
+
+        $jobs = $this->db->fetchAll("
+            SELECT bj.id, bj.vm_ref, bj.task_type, bj.status, bj.status_message, bj.queued_at, bj.completed_at,
+                   bj.duration_seconds, SUBSTRING(bj.error_log, 1, 300) as error_log, bp.name as plan_name,
+                   ar.original_size, ar.deduplicated_size, ar.archive_name
+            FROM backup_jobs bj
+            JOIN backup_plans bp ON bp.id = bj.backup_plan_id AND bp.hypervisor_id = ?
+            LEFT JOIN archives ar ON ar.backup_job_id = bj.id
+            WHERE bj.task_type IN ('backup', 'prune')
+            ORDER BY bj.id DESC LIMIT 25
+        ", [(int) $hypervisor['id']]);
+
+        return [
+            'plans' => $plans,
+            'repositories' => $this->db->fetchAll(
+                "SELECT id, name FROM repositories WHERE agent_id = ? AND read_only = 0 ORDER BY name",
+                [$agentId]
+            ),
+            'jobs' => $jobs,
+            'vmNames' => array_column($vms, 'name', 'vm_ref'),
+            'canManage' => $this->hasPermission(PermissionService::MANAGE_PLANS, $agentId),
+            'canTrigger' => $this->hasPermission(PermissionService::TRIGGER_BACKUP, $agentId),
+        ];
+    }
+
+    /**
+     * Create a VM backup plan: repository, VMs (selected, or all but the
+     * unticked ones), disks per VM, schedule and retention. It runs through
+     * the ordinary backup pipeline as one job per VM (HypervisorBackupService).
+     */
+    public function storePlan(int $id): void
+    {
+        $this->requireAuth();
+        $this->verifyCsrf();
+
+        $hypervisor = $this->getHypervisor($id);
+        if (!$hypervisor) {
+            $this->flash('danger', 'Hypervisor not found.');
+            $this->redirect('/hypervisors');
+        }
+        $agentId = (int) $hypervisor['agent_id'];
+        $back = "/hypervisors/{$id}?tab=backups";
+        if (!$this->hasPermission(PermissionService::MANAGE_PLANS, $agentId)) {
+            $this->flash('danger', 'You do not have permission to manage backup plans.');
+            $this->redirect($back);
+        }
+        $connector = HypervisorRegistry::get($hypervisor['type']);
+        if (!$connector || !$connector->can('backup')) {
+            $this->flash('danger', 'This hypervisor type cannot back up VMs yet.');
+            $this->redirect($back);
+        }
+
+        $name = mb_substr(trim($_POST['name'] ?? ''), 0, 100);
+        $repoId = (int) ($_POST['repository_id'] ?? 0);
+        $repo = $this->db->fetchOne(
+            "SELECT id FROM repositories WHERE id = ? AND agent_id = ? AND read_only = 0",
+            [$repoId, $agentId]
+        );
+        if ($name === '' || !$repo) {
+            $this->flash('danger', 'A plan needs a name and one of this hypervisor\'s repositories.');
+            $this->redirect($back);
+        }
+
+        $selection = ($_POST['vm_selection'] ?? 'selected') === 'all' ? 'all' : 'selected';
+        $inventory = $this->db->fetchAll(
+            "SELECT vm_ref, disks FROM hypervisor_vms WHERE hypervisor_id = ? AND is_template = 0",
+            [$id]
+        );
+        $picked = array_map('strval', array_keys((array) ($_POST['vms'] ?? [])));
+        $postedDisks = (array) ($_POST['disks'] ?? []);
+
+        $rows = [];
+        foreach ($inventory as $vm) {
+            $ref = (string) $vm['vm_ref'];
+            $included = in_array($ref, $picked, true);
+            // Disks that could be backed up but were unticked are excluded
+            $keep = array_map('strval', (array) ($postedDisks[$ref] ?? []));
+            $exclude = [];
+            foreach (json_decode($vm['disks'] ?? '[]', true) ?: [] as $d) {
+                if (!empty($d['supported']) && !in_array((string) $d['key'], $keep, true)) {
+                    $exclude[] = (string) $d['key'];
+                }
+            }
+            if ($selection === 'selected' && !$included) {
+                continue;
+            }
+            $rows[] = ['vm_ref' => $ref, 'exclude_vm' => $included ? 0 : 1, 'exclude_disks' => $exclude];
+        }
+        if ($selection === 'selected' && empty($rows)) {
+            $this->flash('danger', 'Select at least one VM.');
+            $this->redirect($back);
+        }
+
+        $frequency = in_array($_POST['frequency'] ?? '', ['manual', 'hourly', 'daily', 'weekly'], true) ? $_POST['frequency'] : 'daily';
+        $time = preg_match('/^([01]\d|2[0-3]):[0-5]\d$/', $_POST['time'] ?? '') ? $_POST['time'] : '01:00';
+        $dayOfWeek = $frequency === 'weekly' ? (string) max(0, min(6, (int) ($_POST['day_of_week'] ?? 0))) : null;
+        $keep = fn($k, $d) => max(0, min(1000, (int) ($_POST[$k] ?? $d)));
+
+        $pdo = $this->db->getPdo();
+        $pdo->beginTransaction();
+        try {
+            $planId = $this->db->insert('backup_plans', [
+                'agent_id' => $agentId,
+                'repository_id' => $repoId,
+                'hypervisor_id' => $id,
+                'vm_selection' => $selection,
+                'name' => $name,
+                'directories' => '',
+                'prune_minutes' => 0,
+                'prune_hours' => 0,
+                'prune_days' => $keep('prune_days', 7),
+                'prune_weeks' => $keep('prune_weeks', 4),
+                'prune_months' => $keep('prune_months', 6),
+                'prune_years' => 0,
+            ]);
+            foreach ($rows as $r) {
+                $this->db->insert('backup_plan_vms', [
+                    'backup_plan_id' => $planId,
+                    'vm_ref' => $r['vm_ref'],
+                    'exclude_vm' => $r['exclude_vm'],
+                    'exclude_disks' => json_encode($r['exclude_disks']),
+                ]);
+            }
+
+            $tz = (new \BBS\Services\ClientProfileService())->planTimezoneFor($agentId, $_SESSION['timezone'] ?? null);
+            $schedule = [
+                'frequency' => $frequency,
+                'times' => in_array($frequency, ['daily', 'weekly'], true) ? $time : null,
+                'day_of_week' => $dayOfWeek,
+                'day_of_month' => null,
+                'timezone' => $tz,
+            ];
+            $this->db->insert('schedules', $schedule + [
+                'backup_plan_id' => $planId,
+                'enabled' => $frequency === 'manual' ? 0 : 1,
+                'next_run' => $frequency === 'manual' ? null : (new \BBS\Services\SchedulerService())->calculateNextRun($schedule),
+            ]);
+            $pdo->commit();
+        } catch (\Throwable $e) {
+            $pdo->rollBack();
+            error_log('VM backup plan creation failed: ' . $e->getMessage());
+            $this->flash('danger', 'The plan could not be saved.');
+            $this->redirect($back);
+        }
+
+        $this->flash('success', "Backup plan \"{$name}\" created.");
+        $this->redirect($back);
     }
 
     /** Ask the agent for a fresh inventory at its next assignment poll (30 s). */

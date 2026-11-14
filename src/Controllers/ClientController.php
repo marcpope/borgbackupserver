@@ -303,7 +303,7 @@ class ClientController extends Controller
             FROM backup_plans bp
             LEFT JOIN repositories r ON r.id = bp.repository_id
             LEFT JOIN schedules s ON s.backup_plan_id = bp.id
-            WHERE bp.agent_id = ?
+            WHERE bp.agent_id = ? AND bp.hypervisor_id IS NULL -- VM plans live on the hypervisor page
             ORDER BY bp.id DESC
         ", [$id]);
 

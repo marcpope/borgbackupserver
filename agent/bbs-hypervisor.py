@@ -28,11 +28,13 @@ import json
 import logging
 import os
 import re
+import shutil
 import socket
 import subprocess
 import sys
+import time
 
-MODULE_VERSION = "1.0.0"
+MODULE_VERSION = "1.1.0"
 
 IS_WINDOWS = sys.platform == "win32"
 IS_MACOS = sys.platform == "darwin"
@@ -117,19 +119,37 @@ class ProxmoxConnector(HypervisorConnector):
         mult = {"": 1, "K": 1024, "M": 1024 ** 2, "G": 1024 ** 3, "T": 1024 ** 4}[m.group(2).upper()]
         return int(float(m.group(1)) * mult)
 
-    def storage_types(self):
-        """Map storage id -> type from storage.cfg ("lvmthin: local-lvm")."""
-        types = {}
+    def storage_config(self):
+        """storage id -> {"type": ..., <option>: <value>} from storage.cfg:
+
+            lvmthin: local-lvm
+                    thinpool data
+                    vgname pve
+        """
+        storages = {}
+        current = None
         try:
             with open(self.STORAGE_CFG) as f:
                 for line in f:
-                    if line[:1].isspace() or ":" not in line or line.startswith("#"):
+                    if not line.strip() or line.startswith("#"):
                         continue
-                    stype, sid = line.split(":", 1)
-                    types[sid.strip()] = stype.strip()
+                    if not line[:1].isspace() and ":" in line:
+                        stype, sid = line.split(":", 1)
+                        current = storages[sid.strip()] = {"type": stype.strip()}
+                    elif current is not None:
+                        parts = line.strip().split(None, 1)
+                        current[parts[0]] = parts[1] if len(parts) > 1 else ""
         except OSError:
             pass
-        return types
+        return storages
+
+    def storage_types(self):
+        """Map storage id -> type ("local-lvm" -> "lvmthin")."""
+        return {sid: s.get("type") for sid, s in self.storage_config().items()}
+
+    def backup_session(self, vm, log):
+        """A VM backup in progress: see ProxmoxVmBackup."""
+        return ProxmoxVmBackup(self, vm, log)
 
     @staticmethod
     def parse_conf(path):
@@ -260,6 +280,208 @@ class ProxmoxConnector(HypervisorConnector):
             },
             "vms": vms,
         }
+
+
+def _run(argv, timeout=120, check=True):
+    """Run a command; raise with its error output when it fails."""
+    res = subprocess.run(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout)
+    if check and res.returncode != 0:
+        err = (res.stderr or res.stdout).decode("utf-8", errors="replace").strip()
+        raise RuntimeError("{} failed: {}".format(" ".join(argv[:3]), err[:500] or "exit {}".format(res.returncode)))
+    return res
+
+
+class ProxmoxVmBackup(object):
+    """Back up one VM of this node: the core agent calls prepare(command)
+    before running borg and cleanup() after, whatever happened.
+
+    prepare():
+      1. reads the VM config and picks the disks to back up (supported, not
+         excluded by the plan);
+      2. freezes the guest filesystems when the QEMU guest agent answers;
+      3. takes a thin snapshot of each disk, then thaws at once (the guest is
+         frozen for the time of the lvcreate calls only);
+      4. builds <WORK_ROOT>/vm-<vmid>/vm-<vmid>/ holding a symlink per
+         snapshot (<disk key>.raw), the VM config (qemu-server.conf) and a
+         manifest (bbs-vm.json) describing the disks for a restore;
+      5. returns the borg command with --read-special (borg reads the block
+         devices behind the symlinks as files) and that directory as path,
+         run from WORK_ROOT/vm-<vmid>, so the archive holds vm-<vmid>/...
+    """
+
+    WORK_ROOT = "/var/lib/bbs-agent/vm-backup"
+    SNAP_SUFFIX = "-bbs-snap"
+
+    def __init__(self, connector, vm, log):
+        ref = str(vm.get("ref", ""))
+        if not re.match(r"^[0-9]+$", ref):
+            raise ValueError("invalid VMID {!r}".format(ref))
+        self.c = connector
+        self.vmid = ref
+        self.exclude = set(d for d in (vm.get("exclude_disks") or []) if isinstance(d, str))
+        self.log = log
+        self.root = os.path.join(self.WORK_ROOT, "vm-" + ref)
+        self.snapshots = []  # (vg, lv) created by this run
+        self.frozen = False
+
+    # -- helpers -------------------------------------------------------------
+
+    def _status(self):
+        out = _run(["qm", "status", self.vmid], timeout=30).stdout.decode("utf-8", errors="replace")
+        m = re.search(r"status:\s*(\S+)", out)
+        return m.group(1) if m else "unknown"
+
+    def _guest_agent_answers(self, conf):
+        if conf.get("agent", "0").split(",")[0] not in ("1", "enabled=1"):
+            return False
+        try:
+            return _run(["qm", "guest", "cmd", self.vmid, "ping"], timeout=15, check=False).returncode == 0
+        except Exception:
+            return False
+
+    def _thaw(self):
+        for attempt in range(3):
+            try:
+                _run(["qm", "guest", "cmd", self.vmid, "fsfreeze-thaw"], timeout=60)
+                self.frozen = False
+                self.log("Guest filesystems thawed")
+                return
+            except Exception as e:
+                last = e
+        self.log("WARNING: could not thaw the guest filesystems of VM {}: {}. "
+                 "Run 'qm guest cmd {} fsfreeze-thaw' on the node.".format(self.vmid, last, self.vmid))
+
+    @staticmethod
+    def _lv_exists(vg, lv):
+        return _run(["lvs", "--noheadings", "{}/{}".format(vg, lv)], timeout=30, check=False).returncode == 0
+
+    def _remove_snapshot(self, vg, lv):
+        if not self._lv_exists(vg, lv):
+            return True
+        # Right after borg the device can still be held for a moment
+        for attempt in range(5):
+            if _run(["lvremove", "-y", "{}/{}".format(vg, lv)], timeout=60, check=False).returncode == 0:
+                return True
+            time.sleep(2)
+        self.log("WARNING: could not remove snapshot {}/{}; remove it with 'lvremove {}/{}'".format(vg, lv, vg, lv))
+        return False
+
+    @staticmethod
+    def _device_size(device):
+        try:
+            return int(_run(["blockdev", "--getsize64", device], timeout=30).stdout.decode().strip())
+        except Exception:
+            return None
+
+    # -- prepare / cleanup ---------------------------------------------------
+
+    def prepare(self, command):
+        if not hasattr(os, "geteuid") or os.geteuid() != 0:
+            raise RuntimeError("VM backups need the agent to run as root")
+        conf_path = os.path.join(self.c.QEMU_CONF_DIR, self.vmid + ".conf")
+        if not os.path.exists(conf_path):
+            raise RuntimeError("VM {} does not exist on this node".format(self.vmid))
+        conf = self.c.parse_conf(conf_path)
+        storages = self.c.storage_config()
+        types = {sid: s.get("type") for sid, s in storages.items()}
+
+        disks = []
+        for key in sorted(conf):
+            if not self.c.DISK_KEY.match(key):
+                continue
+            d = self.c.disk_entry(key, conf[key], types)
+            if d["kind"] in ("cdrom", "cloudinit", "unused"):
+                continue
+            if key in self.exclude:
+                self.log("Disk {} excluded by the plan".format(key))
+                continue
+            if not d["supported"]:
+                self.log("WARNING: disk {} ({}) not backed up: {}".format(key, d["path"], d["unsupported_reason"]))
+                continue
+            vg = storages.get(d["datastore"], {}).get("vgname")
+            volname = d["path"].split(":", 1)[1] if ":" in d["path"] else ""
+            if not vg or not re.match(r"^[A-Za-z0-9+_.-]+$", volname):
+                self.log("WARNING: disk {} ({}) not backed up: cannot locate its logical volume".format(key, d["path"]))
+                continue
+            d.update(vg=vg, lv=volname, snap=volname + self.SNAP_SUFFIX)
+            disks.append(d)
+        if not disks:
+            raise RuntimeError("VM {} has no disk that can be backed up".format(self.vmid))
+
+        # Leftovers of an interrupted run would make lvcreate fail
+        for d in disks:
+            self._remove_snapshot(d["vg"], d["snap"])
+        shutil.rmtree(self.root, ignore_errors=True)
+
+        status = self._status()
+        freeze = status == "running" and self._guest_agent_answers(conf)
+        if status == "running" and not freeze:
+            self.log("VM {} runs without a responding QEMU guest agent: the backup is crash-consistent "
+                     "(enable the guest agent in the VM options and install qemu-guest-agent in the guest "
+                     "for a consistent one)".format(self.vmid))
+        try:
+            if freeze:
+                self.frozen = True  # thaw in any case, even if the freeze call itself fails half-way
+                try:
+                    _run(["qm", "guest", "cmd", self.vmid, "fsfreeze-freeze"], timeout=60)
+                    self.log("Guest filesystems frozen")
+                except Exception as e:
+                    self.log("WARNING: freezing the guest filesystems failed ({}); the backup is crash-consistent".format(e))
+            for d in disks:
+                _run(["lvcreate", "-s", "-n", d["snap"], "{}/{}".format(d["vg"], d["lv"])], timeout=60)
+                self.snapshots.append((d["vg"], d["snap"]))
+        finally:
+            if self.frozen:
+                self._thaw()
+        self.log("Snapshot taken of {} disk(s): {}".format(len(disks), ", ".join(d["key"] for d in disks)))
+
+        # Thin snapshots are created with activation skipped
+        for d in disks:
+            _run(["lvchange", "-ay", "-K", "{}/{}".format(d["vg"], d["snap"])], timeout=60)
+            d["device"] = "/dev/{}/{}".format(d["vg"], d["snap"])
+        _run(["udevadm", "settle"], timeout=60, check=False)
+
+        vmdir = os.path.join(self.root, "vm-" + self.vmid)
+        os.makedirs(vmdir, mode=0o700)
+        manifest_disks = []
+        for d in disks:
+            if not os.path.exists(d["device"]):
+                raise RuntimeError("snapshot device {} did not appear".format(d["device"]))
+            fname = d["key"] + ".raw"
+            os.symlink(d["device"], os.path.join(vmdir, fname))
+            manifest_disks.append({
+                "key": d["key"], "file": fname, "kind": d["kind"],
+                "volume": d["path"], "storage": d["datastore"], "storage_type": d["datastore_type"],
+                "size_bytes": self._device_size(d["device"]) or d["size_bytes"],
+            })
+        shutil.copyfile(conf_path, os.path.join(vmdir, "qemu-server.conf"))
+        with open(os.path.join(vmdir, "bbs-vm.json"), "w") as f:
+            json.dump({
+                "format": 1,
+                "type": "proxmox",
+                "vmid": int(self.vmid),
+                "name": conf.get("name", ""),
+                "node": self.c.node_name(),
+                "pve_version": self.c.version(),
+                "status": status,
+                "guest_frozen": freeze,
+                "disks": manifest_disks,
+                "excluded_disks": sorted(self.exclude),
+                "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            }, f, indent=2)
+
+        try:
+            dd = command.index("--")
+        except ValueError:
+            raise RuntimeError("unexpected borg command (no '--')")
+        new_command = command[:2] + ["--read-special"] + command[2:dd] + ["--", "vm-" + self.vmid]
+        return new_command, self.root
+
+    def cleanup(self):
+        for vg, lv in reversed(self.snapshots):
+            self._remove_snapshot(vg, lv)
+        self.snapshots = []
+        shutil.rmtree(self.root, ignore_errors=True)
 
 
 # slug -> connector class. Add new connectors here.

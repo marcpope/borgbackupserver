@@ -722,6 +722,7 @@ def get_system_info(config=None):
 # ---------------------------------------------------------------------------
 
 HYPERVISOR_MODULE_FILE = "bbs-hypervisor.py"
+HYPERVISOR_MODULE = None  # the loaded module on a hypervisor agent (set in main)
 HYPERVISOR_ASSIGNMENT_POLL = 30
 HYPERVISOR_DEFAULT_INTERVAL = 300
 _hypervisor_warned = set()  # problems already logged, so the 30 s poll does not repeat them
@@ -6333,6 +6334,37 @@ def _execute_task_inner(config, task, job_id, task_type, command, env_vars,
             return
         logger.info("Executing {} job #{} from snapshot tree {}: {}".format(task_type, job_id, cwd, ' '.join(command)))
 
+    # VM backup (hypervisor agent): the hypervisor module snapshots the VM's
+    # disks and lays them out for borg; cleanup() removes the snapshots.
+    vm_session = None
+    if task_type == "backup" and task.get("hypervisor_vm"):
+        vm = task["hypervisor_vm"]
+        try:
+            if HYPERVISOR_MODULE is None:
+                raise RuntimeError("this agent has no hypervisor module (install it with install.sh --hypervisor)")
+            connector_cls = HYPERVISOR_MODULE.CONNECTORS.get(vm.get("type"))
+            if connector_cls is None:
+                raise RuntimeError("the hypervisor module has no '{}' connector".format(vm.get("type")))
+            label = "VM {}{}".format(vm.get("ref"), " ({})".format(vm["name"]) if vm.get("name") else "")
+            api_request(config, "/api/agent/progress", method="POST", data={
+                "job_id": job_id, "status_message": "Snapshotting {}...".format(label),
+            })
+            vm_session = connector_cls().backup_session(vm, lambda msg: log_to_server(config, job_id, msg))
+            command, cwd = vm_session.prepare(command)
+        except Exception as e:
+            if vm_session is not None:
+                vm_session.cleanup()
+            logger.error("Job #{}: VM backup could not start: {}".format(job_id, e))
+            report_status(config, {
+                "job_id": job_id, "result": "failed",
+                "error_log": "VM backup could not start: {}".format(e),
+            })
+            return
+        api_request(config, "/api/agent/progress", method="POST", data={
+            "job_id": job_id, "status_message": "Backing up {}...".format(label),
+        })
+        logger.info("Executing VM backup job #{} from {}: {}".format(job_id, cwd, ' '.join(command)))
+
     if streams is not None and streams.streams:
         command = _prepare_streaming(config, job_id, command, directories, streams)
 
@@ -6752,6 +6784,9 @@ def _execute_task_inner(config, task, job_id, task_type, command, env_vars,
         if snapshot_session is not None:
             snapshot_session.cleanup()
 
+        if vm_session is not None:
+            vm_session.cleanup()
+
         # Close the catalog SSH pipe
         catalog_ssh_error = ""
         if catalog_ssh:
@@ -7059,7 +7094,8 @@ def main():
 
     # Hypervisor agent: VM inventory in its own thread (see
     # hypervisor_inventory_thread), so it keeps reporting during tasks.
-    hypervisor_module = load_hypervisor_module(config)
+    global HYPERVISOR_MODULE
+    hypervisor_module = HYPERVISOR_MODULE = load_hypervisor_module(config)
     if hypervisor_module is not None:
         threading.Thread(target=hypervisor_inventory_thread, args=(config, hypervisor_module),
                          name="hypervisor-inventory", daemon=True).start()

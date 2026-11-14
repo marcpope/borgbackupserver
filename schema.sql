@@ -283,6 +283,10 @@ CREATE TABLE backup_plans (
     id INT AUTO_INCREMENT PRIMARY KEY,
     agent_id INT NOT NULL,
     repository_id INT NOT NULL,
+    -- VM backup plan (see migration 142): set for a plan that backs up the
+    -- virtual machines of this hypervisor instead of directories
+    hypervisor_id INT DEFAULT NULL,
+    vm_selection ENUM('selected', 'all') DEFAULT NULL,
     name VARCHAR(100) NOT NULL,
     directories TEXT NOT NULL,
     excludes TEXT DEFAULT NULL,
@@ -302,7 +306,20 @@ CREATE TABLE backup_plans (
     notes_updated_at DATETIME DEFAULT NULL,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE,
-    FOREIGN KEY (repository_id) REFERENCES repositories(id) ON DELETE CASCADE
+    FOREIGN KEY (repository_id) REFERENCES repositories(id) ON DELETE CASCADE,
+    CONSTRAINT fk_backup_plans_hypervisor FOREIGN KEY (hypervisor_id) REFERENCES hypervisors(id) ON DELETE CASCADE
+);
+
+-- VMs of a VM backup plan: included VMs ('selected'), or excluded ones
+-- ('all', exclude_vm = 1); exclude_disks lists disk keys left out.
+CREATE TABLE backup_plan_vms (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    backup_plan_id INT NOT NULL,
+    vm_ref VARCHAR(64) NOT NULL,
+    exclude_vm TINYINT(1) NOT NULL DEFAULT 0,
+    exclude_disks JSON DEFAULT NULL,
+    UNIQUE KEY uniq_plan_vm (backup_plan_id, vm_ref),
+    FOREIGN KEY (backup_plan_id) REFERENCES backup_plans(id) ON DELETE CASCADE
 );
 
 CREATE TABLE schedules (
@@ -328,6 +345,8 @@ CREATE TABLE schedules (
 CREATE TABLE backup_jobs (
     id INT AUTO_INCREMENT PRIMARY KEY,
     backup_plan_id INT DEFAULT NULL,
+    -- The VM a VM backup plan's job (or its prune) is for
+    vm_ref VARCHAR(64) DEFAULT NULL,
     agent_id INT NOT NULL,
     repository_id INT DEFAULT NULL,
     source_repository_id INT DEFAULT NULL,
@@ -368,6 +387,8 @@ CREATE TABLE archives (
     id INT AUTO_INCREMENT PRIMARY KEY,
     repository_id INT NOT NULL,
     backup_job_id INT DEFAULT NULL,
+    -- The VM this archive holds (VM backup plans)
+    vm_ref VARCHAR(64) DEFAULT NULL,
     archive_name VARCHAR(255) NOT NULL,
     file_count INT NOT NULL DEFAULT 0,
     original_size BIGINT NOT NULL DEFAULT 0,

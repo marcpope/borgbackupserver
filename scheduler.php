@@ -156,7 +156,7 @@ $graceMinutes = $profileService->globalFailureSetting('job_offline_grace_minutes
 $graceMinutes = max(1, $graceMinutes);
 
 $staleJobs = $db->fetchAll("
-    SELECT bj.id, bj.agent_id, bj.task_type, bj.backup_plan_id, bj.repository_id,
+    SELECT bj.id, bj.agent_id, bj.task_type, bj.backup_plan_id, bj.vm_ref, bj.repository_id,
            bj.status, bj.retry_count, a.name as agent_name,
            COALESCE(cp.job_offline_grace_minutes, {$graceMinutes}) AS grace_minutes
     FROM backup_jobs bj
@@ -212,6 +212,7 @@ foreach ($staleJobs as $sj) {
         // parent_job_id chains the retries so the UI can show history.
         $db->insert('backup_jobs', [
             'backup_plan_id' => $sj['backup_plan_id'],
+            'vm_ref' => $sj['vm_ref'] ?? null,
             'agent_id' => $sj['agent_id'],
             'repository_id' => $sj['repository_id'],
             'task_type' => 'backup',
@@ -1869,6 +1870,11 @@ foreach ($serverJobs as $sj) {
             [$sj['repository_id']]
         )['cnt'] ?? 0);
         $archivePrefix = (($planCount > 1 || $lockedCount > 0) && $sj['backup_plan_id']) ? 'plan' . $sj['backup_plan_id'] : null;
+        // VM backup plans keep one archive series per VM: always prune that
+        // VM's series alone, so retention counts its own archives.
+        if (!empty($sj['vm_ref']) && $sj['backup_plan_id']) {
+            $archivePrefix = \BBS\Services\Hypervisors\HypervisorBackupService::archivePrefix((int) $sj['backup_plan_id'], (string) $sj['vm_ref']);
+        }
         $borgArgs = \BBS\Services\BorgCommandBuilder::buildPruneCommand($plan, $localRepo, $archivePrefix);
         // Remove 'borg' from the front since we'll add it back
         if ($borgArgs[0] === 'borg') {

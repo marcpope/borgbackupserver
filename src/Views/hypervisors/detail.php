@@ -50,6 +50,11 @@ $showHost = count($hosts) > 1; // a single-node hypervisor needs no host column
     <li class="nav-item">
         <a class="nav-link <?= $tab === 'vms' ? 'active' : '' ?>" href="/hypervisors/<?= (int) $hypervisor['id'] ?>"><i class="bi bi-pc-display me-1"></i>Virtual machines</a>
     </li>
+    <?php if ($connector && $connector->can('backup')): ?>
+    <li class="nav-item">
+        <a class="nav-link <?= $tab === 'backups' ? 'active' : '' ?>" href="/hypervisors/<?= (int) $hypervisor['id'] ?>?tab=backups"><i class="bi bi-archive me-1"></i>Backups</a>
+    </li>
+    <?php endif; ?>
     <?php if ($isOwnerOrAdmin): ?>
     <li class="nav-item">
         <a class="nav-link <?= $tab === 'install' ? 'active' : '' ?>" href="/hypervisors/<?= (int) $hypervisor['id'] ?>?tab=install"><i class="bi bi-download me-1"></i>Install agent</a>
@@ -60,7 +65,9 @@ $showHost = count($hosts) > 1; // a single-node hypervisor needs no host column
     <?php endif; ?>
 </ul>
 
-<?php if ($tab === 'settings'): ?>
+<?php if ($tab === 'backups'): ?>
+<?php require __DIR__ . '/backups.php'; ?>
+<?php elseif ($tab === 'settings'): ?>
 <div class="card border-0 shadow-sm" style="max-width: 40rem;">
     <div class="card-body">
         <form method="POST" action="/hypervisors/<?= (int) $hypervisor['id'] ?>/settings">

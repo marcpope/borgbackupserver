@@ -36,7 +36,7 @@ class ProxmoxConnector extends HypervisorConnector
 
     public function capabilities(): array
     {
-        return ['inventory' => true, 'backup' => false, 'restore' => false, 'file_restore' => false];
+        return ['inventory' => true, 'backup' => true, 'restore' => false, 'file_restore' => false];
     }
 
     public function vmIdLabel(): string

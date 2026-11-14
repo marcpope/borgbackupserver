@@ -639,6 +639,7 @@ class AgentApiController extends Controller
             $archiveData = [
                 'repository_id' => $job['repository_id'],
                 'backup_job_id' => $jobId,
+                'vm_ref' => $job['vm_ref'] ?? null,
                 'archive_name' => $input['archive_name'],
                 // What borg reported it stored, not the client's pre-count
                 // estimate — the estimate cannot see exclude patterns and on
@@ -860,6 +861,7 @@ class AgentApiController extends Controller
                 $archiveData = [
                     'repository_id' => $job['repository_id'],
                     'backup_job_id' => $jobId,
+                    'vm_ref' => $job['vm_ref'] ?? null,
                     'archive_name' => $input['archive_name'],
                     // What borg reported it stored, not the client's pre-count
                 // estimate — the estimate cannot see exclude patterns and on
@@ -1084,13 +1086,15 @@ class AgentApiController extends Controller
         if ($shouldAutoPrune) {
             $existingPrune = $this->db->fetchOne(
                 "SELECT id FROM backup_jobs
-                 WHERE backup_plan_id = ? AND task_type = 'prune' AND status IN ('queued', 'sent', 'running')
+                 WHERE backup_plan_id = ? AND vm_ref <=> ? AND task_type = 'prune' AND status IN ('queued', 'sent', 'running')
                  LIMIT 1",
-                [$job['backup_plan_id']]
+                [$job['backup_plan_id'], $job['vm_ref'] ?? null]
             );
             if (!$existingPrune) {
                 $pruneJobId = $this->db->insert('backup_jobs', [
                     'backup_plan_id' => $job['backup_plan_id'],
+                    // VM backups prune their own VM's series (see scheduler.php)
+                    'vm_ref' => $job['vm_ref'] ?? null,
                     'agent_id' => $job['agent_id'],
                     'repository_id' => $job['repository_id'],
                     'task_type' => 'prune',
