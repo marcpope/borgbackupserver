@@ -62,7 +62,7 @@ $showHost = count($hosts) > 1; // a single-node hypervisor needs no host column
     <div class="card-body">
         <?php if ($installCmd): ?>
             <div class="d-flex justify-content-between align-items-center mb-2">
-                <p class="mb-0">Run this command on the hypervisor, as root, to install the BBS hypervisor agent:</p>
+                <p class="mb-0">Run this command in a root shell on the hypervisor (the node's Shell in the Proxmox web UI is one) to install the BBS hypervisor agent:</p>
                 <button class="btn btn-sm btn-outline-secondary" type="button"
                         onclick="BBS.copyText(document.getElementById('installCmdHv').textContent.trim()); this.innerHTML='<i class=\'bi bi-check\'></i> Copied'; setTimeout(() => this.innerHTML='<i class=\'bi bi-clipboard\'></i> Copy', 2000)">
                     <i class="bi bi-clipboard"></i> Copy

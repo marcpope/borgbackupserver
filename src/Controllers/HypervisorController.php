@@ -193,7 +193,7 @@ class HypervisorController extends Controller
         return $h;
     }
 
-    /** Same command as a client's, plus --hypervisor (see clients/detail install tab). */
+    /** A client's install command (see clients/detail install tab) plus --hypervisor. */
     private function installCommand(array $hypervisor): ?string
     {
         try {
@@ -217,7 +217,9 @@ class HypervisorController extends Controller
             $appUrl = ($parts['scheme'] ?? 'https') . '://' . $override . $port;
         }
 
-        return 'curl -s ' . $appUrl . '/get-agent | sudo bash -s -- --server ' . $appUrl
+        // Run as root, without sudo: Proxmox VE does not ship sudo and its
+        // shell is root already.
+        return 'curl -s ' . $appUrl . '/get-agent | bash -s -- --server ' . $appUrl
             . ' --key ' . $apiKey . ' --hypervisor';
     }
 }
