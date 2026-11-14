@@ -4,7 +4,7 @@
 # maintainer's signing key (see bin/bbs-sign-agent). Enable with:
 #   git config core.hooksPath .githooks
 set -e
-changed=$(git diff --cached --name-only -- agent/bbs-agent.py agent/bbs-agent-start.sh)
+changed=$(git diff --cached --name-only -- agent/bbs-agent.py agent/bbs-agent-start.sh agent/bbs-hypervisor.py)
 [ -z "$changed" ] && exit 0
 if ! python3 bin/bbs-sign-agent sign $changed; then
     echo "pre-commit: could not sign the agent scripts. Set BBS_AGENT_SIGNING_KEY or run bbs-sign-agent keygen." >&2

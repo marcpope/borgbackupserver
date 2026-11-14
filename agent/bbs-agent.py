@@ -424,6 +424,9 @@ def load_config():
         "server_url": config.get("server", "url").rstrip("/"),
         "api_key": config.get("server", "api_key"),
         "poll_interval": config.getint("agent", "poll_interval", fallback=30),
+        # "hypervisor" on an agent installed with install.sh --hypervisor:
+        # it then loads bbs-hypervisor.py. Anything else is a client agent.
+        "role": config.get("agent", "role", fallback="client").strip().lower(),
         "auto_update": auto_update,
         "require_signed_updates": require_signed,
         # Optional: confine shell hooks to one directory on this client.
@@ -701,6 +704,86 @@ def get_system_info(config=None):
         pass
 
     return info
+
+
+# ---------------------------------------------------------------------------
+# Hypervisor agents
+#
+# A hypervisor agent is this same agent with `role = hypervisor` in its
+# config and the hypervisor module (bbs-hypervisor.py) next to it; both are
+# set up by `install.sh --hypervisor`. A client agent has neither, so the
+# hypervisor code (connectors for Proxmox, later VMware) is never on it.
+#
+# The server lists, in each task poll answer, the hypervisors this agent
+# serves and their connector type; the agent reports each one's inventory
+# every few minutes or when the server asks (Refresh).
+# ---------------------------------------------------------------------------
+
+HYPERVISOR_MODULE_FILE = "bbs-hypervisor.py"
+HYPERVISOR_INVENTORY_INTERVAL = 300
+
+
+def _hypervisor_module_path():
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), HYPERVISOR_MODULE_FILE)
+
+
+def load_hypervisor_module(config):
+    """The hypervisor module, or None on a client agent."""
+    if config.get("role") != "hypervisor":
+        return None
+    path = _hypervisor_module_path()
+    if not os.path.exists(path):
+        logger.error("This agent is configured as a hypervisor agent but {} is missing; "
+                     "re-run the installer with --hypervisor".format(path))
+        return None
+    try:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("bbs_hypervisor", path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        logger.info("Hypervisor module {} loaded (connectors: {})".format(
+            getattr(module, "MODULE_VERSION", "?"), ", ".join(sorted(module.CONNECTORS))))
+        return module
+    except Exception as e:
+        logger.error("Could not load the hypervisor module: {}".format(e))
+        return None
+
+
+def sync_hypervisor_connectors(module, assigned, current):
+    """Connector instances for the hypervisors the server assigns to this
+    agent: [{"id": 3, "type": "proxmox", "settings": {...}}, ...].
+    Returns {hypervisor_id: connector}; unchanged ones are kept."""
+    connectors = {}
+    for item in assigned or []:
+        try:
+            hid = int(item.get("id"))
+        except (TypeError, ValueError, AttributeError):
+            continue
+        slug = item.get("type")
+        existing = current.get(hid)
+        if existing is not None and existing.slug == slug:
+            connectors[hid] = existing
+            continue
+        cls = module.CONNECTORS.get(slug)
+        if cls is None:
+            logger.warning("Hypervisor #{}: connector '{}' is not in this agent's hypervisor module".format(hid, slug))
+            continue
+        if cls.deployment == getattr(module, "DEPLOY_AGENT_ON_HOST", "agent_on_host") and not cls.detect():
+            logger.warning("Hypervisor #{} is a {} host, but this machine is not one".format(hid, slug))
+            continue
+        connectors[hid] = cls(item.get("settings") or {})
+        logger.info("Serving hypervisor #{} ({})".format(hid, slug))
+    return connectors
+
+
+def report_hypervisor_inventory(config, hypervisor_id, connector):
+    try:
+        inventory = connector.inventory()
+        inventory["hypervisor_id"] = hypervisor_id
+        api_request(config, "/api/agent/hypervisor/inventory", method="POST", data=inventory)
+        logger.debug("Reported hypervisor #{} inventory: {} VMs".format(hypervisor_id, len(inventory["vms"])))
+    except Exception as e:
+        logger.warning("Hypervisor #{} inventory report failed: {}".format(hypervisor_id, e))
 
 
 def register(config):
@@ -1706,6 +1789,30 @@ def execute_update_agent(config, task):
             error_output = "Update refused: the server offers agent {} but this agent runs {}; downgrades are not installed.".format(offered, AGENT_VERSION)
         elif "AGENT_VERSION" not in new_script or len(new_script) < 1000:
             error_output = "Downloaded script failed validation"
+
+        # A hypervisor agent updates its hypervisor module together with the
+        # core, and only when both are valid: a new core with an old module
+        # (or the reverse) is not a combination anyone tested.
+        new_module_bytes = None
+        if not error_output and config.get("role") == "hypervisor" and not IS_WINDOWS:
+            try:
+                mod_req = urllib.request.Request(
+                    "{}/api/agent/download?file={}".format(config['server_url'], HYPERVISOR_MODULE_FILE),
+                    headers=headers, method="GET")
+                with server_urlopen(config, mod_req, 60) as mresp:
+                    new_module_bytes = mresp.read()
+                m_ok, m_why = _verify_signed_script(new_module_bytes)
+                if config.get("require_signed_updates", True) and not m_ok:
+                    error_output = "Update refused: hypervisor module: {}. The agent was not changed.".format(m_why)
+                else:
+                    import ast
+                    ast.parse(new_module_bytes.decode("utf-8"))
+            except SyntaxError as syn_err:
+                error_output = "Downloaded hypervisor module has a syntax error on line {}: {} — keeping current version".format(
+                    syn_err.lineno, syn_err.msg)
+            except Exception as mod_err:
+                error_output = "Could not download the hypervisor module: {} — keeping current version".format(mod_err)
+
         if error_output:
             logger.error(error_output)
         else:
@@ -1745,6 +1852,13 @@ def execute_update_agent(config, task):
             if not IS_WINDOWS:
                 os.chmod(tmp_path, os.stat(script_path).st_mode)
             os.replace(tmp_path, script_path)
+
+            if new_module_bytes is not None:
+                module_path = _hypervisor_module_path()
+                with open(module_path + ".tmp", "wb") as mf:
+                    mf.write(new_module_bytes)
+                os.replace(module_path + ".tmp", module_path)
+                logger.info("Updated hypervisor module at {}".format(module_path))
 
             new_version = offered or "unknown"
 
@@ -6899,6 +7013,13 @@ def main():
     last_info_report = time.time()
     info_report_interval = 3600
 
+    # Hypervisor agent: report the VM inventory of each hypervisor the server
+    # assigns, at start and every few minutes, so the Hypervisors page shows
+    # what runs now.
+    hypervisor_module = load_hypervisor_module(config)
+    hypervisor_connectors = {}
+    last_inventory_report = 0
+
     # Burst-poll window. When the UI's file-browser modal queues list_dir
     # tasks, we want the agent to feel near-real-time — but at 30s default
     # polling, every click is a 15s average wait. Once we see a list_dir
@@ -6921,6 +7042,18 @@ def main():
                 except Exception as e:
                     logger.debug("Periodic info report failed: {}".format(e))
                 last_info_report = time.time()
+
+            if hypervisor_module is not None and isinstance(result, dict) and "hypervisors" in result:
+                before = set(hypervisor_connectors)
+                hypervisor_connectors = sync_hypervisor_connectors(
+                    hypervisor_module, result["hypervisors"], hypervisor_connectors)
+                if set(hypervisor_connectors) - before:
+                    last_inventory_report = 0  # a newly assigned hypervisor reports at once
+            if hypervisor_connectors and (time.time() - last_inventory_report >= HYPERVISOR_INVENTORY_INTERVAL
+                                          or (isinstance(result, dict) and result.get("refresh_inventory"))):
+                for hid, hc in hypervisor_connectors.items():
+                    report_hypervisor_inventory(config, hid, hc)
+                last_inventory_report = time.time()
 
             # Update poll interval if server sends one
             if result and "poll_interval" in result:

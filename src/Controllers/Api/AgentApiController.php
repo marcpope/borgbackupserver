@@ -235,7 +235,119 @@ class AgentApiController extends Controller
             $response['check_jobs'] = array_map(fn($j) => (int) $j['id'], $stalledJobs);
         }
 
+        // A hypervisor agent learns here which hypervisors it serves and
+        // with which connector. Refresh on the Hypervisors page flags one;
+        // the agent then reports at once instead of at its next interval.
+        if (($agent['agent_type'] ?? 'client') === 'hypervisor') {
+            $assigned = $this->db->fetchAll(
+                "SELECT id, type, refresh_requested FROM hypervisors WHERE agent_id = ? ORDER BY id",
+                [$agent['id']]
+            );
+            $response['hypervisors'] = array_map(fn($h) => [
+                'id' => (int) $h['id'],
+                'type' => $h['type'],
+                // Connection settings for proxy connectors go here (decrypted
+                // from config_encrypted) once one exists.
+            ], $assigned);
+            foreach ($assigned as $h) {
+                if (!empty($h['refresh_requested'])) {
+                    $response['refresh_inventory'] = true;
+                    break;
+                }
+            }
+        }
+
         $this->json($response);
+    }
+
+    /**
+     * POST /api/agent/hypervisor/inventory
+     * A hypervisor agent reports the inventory of one of the hypervisors it
+     * serves (hypervisor_id, as listed in its task poll), in the common model
+     * of HypervisorConnector. The VM list replaces the stored one.
+     * Client agents are refused: hypervisors are only created from Add
+     * Hypervisor, never by an agent.
+     */
+    public function hypervisorInventory(): void
+    {
+        $agent = $this->authenticateAgent();
+        if (($agent['agent_type'] ?? 'client') !== 'hypervisor') {
+            $this->json(['error' => 'Not a hypervisor agent'], 403);
+        }
+        $input = $this->getJsonInput();
+
+        $connector = \BBS\Services\Hypervisors\HypervisorRegistry::available($input['type'] ?? null);
+        if (!$connector || empty($input['hypervisor_id']) || !isset($input['vms']) || !is_array($input['vms'])) {
+            $this->json(['error' => 'Unknown hypervisor type or invalid inventory'], 400);
+        }
+
+        $info = $connector->normalizeInfo(is_array($input['info'] ?? null) ? $input['info'] : []);
+        $vms = [];
+        foreach (array_slice($input['vms'], 0, 5000) as $vm) {
+            if (is_array($vm) && ($n = $connector->normalizeVmInput($vm)) !== null) {
+                $vms[$n['ref']] = $n;
+            }
+        }
+
+        $now = date('Y-m-d H:i:s');
+        $pdo = $this->db->getPdo();
+        $pdo->beginTransaction();
+        try {
+            $hypervisor = $this->db->fetchOne(
+                "SELECT id FROM hypervisors WHERE id = ? AND agent_id = ? AND type = ? FOR UPDATE",
+                [(int) $input['hypervisor_id'], $agent['id'], $connector->slug()]
+            );
+            if (!$hypervisor) {
+                $pdo->rollBack();
+                $this->json(['error' => 'This agent does not serve that hypervisor'], 404);
+            }
+            $hypervisorId = (int) $hypervisor['id'];
+
+            $this->db->update('hypervisors', [
+                'info' => json_encode($info),
+                'inventory_at' => $now,
+                'refresh_requested' => 0,
+            ], 'id = ?', [$hypervisorId]);
+
+            foreach ($vms as $vm) {
+                $this->db->query("
+                    INSERT INTO hypervisor_vms
+                        (hypervisor_id, vm_ref, name, host, status, cpus, memory_bytes, uptime_seconds,
+                         guest_tools, is_template, tags, disks, extra, last_seen)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON DUPLICATE KEY UPDATE
+                        name = VALUES(name), host = VALUES(host), status = VALUES(status),
+                        cpus = VALUES(cpus), memory_bytes = VALUES(memory_bytes),
+                        uptime_seconds = VALUES(uptime_seconds), guest_tools = VALUES(guest_tools),
+                        is_template = VALUES(is_template), tags = VALUES(tags), disks = VALUES(disks),
+                        extra = VALUES(extra), last_seen = VALUES(last_seen)
+                ", [
+                    $hypervisorId, $vm['ref'], $vm['name'], $vm['host'], $vm['status'],
+                    $vm['cpus'], $vm['memory_bytes'], $vm['uptime_seconds'],
+                    $vm['guest_tools'], $vm['is_template'], $vm['tags'],
+                    json_encode($vm['disks']), json_encode($vm['extra']), $now,
+                ]);
+            }
+
+            $refs = array_map('strval', array_keys($vms));
+            if (empty($refs)) {
+                $this->db->delete('hypervisor_vms', 'hypervisor_id = ?', [$hypervisorId]);
+            } else {
+                $placeholders = implode(',', array_fill(0, count($refs), '?'));
+                $this->db->delete('hypervisor_vms', "hypervisor_id = ? AND vm_ref NOT IN ({$placeholders})",
+                    array_merge([$hypervisorId], $refs));
+            }
+
+            $pdo->commit();
+        } catch (\Throwable $e) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            error_log('Hypervisor inventory failed for agent ' . $agent['id'] . ': ' . $e->getMessage());
+            $this->json(['error' => 'Could not store inventory'], 500);
+        }
+
+        $this->json(['status' => 'ok', 'hypervisor_id' => $hypervisorId, 'vms' => count($vms)]);
     }
 
     /**
@@ -1239,6 +1351,7 @@ class AgentApiController extends Controller
             'install.sh' => 'agent/install.sh',
             'bbs-agent.py' => 'agent/bbs-agent.py',
             'bbs-agent-start.sh' => 'agent/bbs-agent-start.sh',
+            'bbs-hypervisor.py' => 'agent/bbs-hypervisor.py',
             'com.borgbackupserver.agent.plist' => 'agent/com.borgbackupserver.agent.plist',
             'install-windows.ps1' => 'agent/install-windows.ps1',
             'uninstall-windows.ps1' => 'agent/uninstall-windows.ps1',

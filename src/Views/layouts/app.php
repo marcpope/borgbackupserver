@@ -65,7 +65,7 @@
             </a>
             <?php
             $navIcons = [
-                'Dashboard' => 'bi-speedometer2', 'Clients' => 'bi-display',
+                'Dashboard' => 'bi-speedometer2', 'Clients' => 'bi-display', 'Hypervisors' => 'bi-hdd-rack',
                 'Queue' => 'bi-clock-history', 'Schedules' => 'bi-calendar-week',
                 'Log' => 'bi-journal-text', 'Storage' => 'bi-hdd-stack',
                 'Settings' => 'bi-gear', 'Users' => 'bi-people',
@@ -179,6 +179,11 @@
                     </a>
                 </li>
                 <li class="nav-item">
+                    <a href="/hypervisors" class="nav-link sidebar-link <?= $pt === 'Hypervisors' ? 'active' : '' ?>">
+                        <i class="bi bi-hdd-rack"></i><span class="sidebar-label">Hypervisors</span>
+                    </a>
+                </li>
+                <li class="nav-item">
                     <a href="/queue" class="nav-link sidebar-link <?= $pt === 'Queue' ? 'active' : '' ?>">
                         <i class="bi bi-clock-history"></i><span class="sidebar-label">Queue</span>
                     </a>
@@ -278,6 +283,9 @@
                 </a>
                 <a href="/clients" class="list-group-item list-group-item-action d-flex align-items-center <?= $pt === 'Clients' ? 'active' : '' ?>">
                     <i class="bi bi-display fs-6 me-3"></i>Clients
+                </a>
+                <a href="/hypervisors" class="list-group-item list-group-item-action d-flex align-items-center <?= $pt === 'Hypervisors' ? 'active' : '' ?>">
+                    <i class="bi bi-hdd-rack fs-6 me-3"></i>Hypervisors
                 </a>
                 <a href="/queue" class="list-group-item list-group-item-action d-flex align-items-center <?= $pt === 'Queue' ? 'active' : '' ?>">
                     <i class="bi bi-clock-history fs-6 me-3"></i>Queue

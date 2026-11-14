@@ -46,7 +46,8 @@ class ClientController extends Controller
             FROM agents a
             LEFT JOIN users u ON u.id = a.user_id
             LEFT JOIN client_profiles cp ON cp.id = a.client_profile_id
-            WHERE {$where}
+            -- Hypervisor agents are listed under Hypervisors
+            WHERE a.agent_type = 'client' AND {$where}
             ORDER BY a.name ASC, a.id DESC
         ", $params);
 
@@ -247,89 +248,22 @@ class ClientController extends Controller
             $this->redirect('/clients/add');
         }
 
-        $apiKey = bin2hex(random_bytes(32));
         // A non-admin always owns the clients they add (#481)
         $userId = $this->isAdmin()
             ? (!empty($_POST['user_id']) ? (int) $_POST['user_id'] : null)
             : (int) $_SESSION['user_id'];
 
-        // Falls back to the default profile rather than null, so failure
-        // settings and plan defaults always resolve to something.
-        $profileService = new \BBS\Services\ClientProfileService();
-        $profileId = !empty($_POST['client_profile_id'])
-            ? (int) $_POST['client_profile_id']
-            : $profileService->defaultProfileId();
-        if ($profileId && !$profileService->find($profileId)) {
-            $profileId = $profileService->defaultProfileId();
-        }
-
-        $location = mb_substr(trim($_POST['location'] ?? ''), 0, 100);
-
-        $id = $this->db->insert('agents', [
-            'name' => $name,
-            'location' => $location !== '' ? $location : null,
-            'api_key_hash' => hash('sha256', $apiKey),
-            'api_key_encrypted' => \BBS\Services\Encryption::encrypt($apiKey),
-            'status' => 'setup',
-            'user_id' => $userId,
-            'client_profile_id' => $profileId,
-        ]);
-
-        // Determine SSH home path: use storage_path unless a separate storage location
-        // is configured for repos. SSH home dirs MUST be on a local filesystem (chown
-        // is required for sshd), so if storage_path points to a NAS/NFS mount that also
-        // has a matching storage location, fall back to /var/bbs/home.
-        $storageSetting = $this->db->fetchOne("SELECT `value` FROM settings WHERE `key` = 'storage_path'");
-        $storagePath = $storageSetting['value'] ?? null;
-        if (!$storagePath) {
-            $this->db->delete('agents', 'id = ?', [$id]);
-            $this->flash('danger', 'Cannot create client — no storage path configured. Go to Settings to set one.');
+        try {
+            $id = (new \BBS\Services\AgentProvisioningService())->create(
+                $name,
+                $userId,
+                !empty($_POST['client_profile_id']) ? (int) $_POST['client_profile_id'] : null,
+                $_POST['location'] ?? '',
+                'client'
+            );
+        } catch (\RuntimeException $e) {
+            $this->flash('danger', 'Cannot create client — ' . $e->getMessage());
             $this->redirect('/clients/add');
-        }
-
-        // If storage_path matches a storage location, it's intended for repo storage
-        // (possibly a NAS/NFS mount). Use /var/bbs/home for SSH home dirs instead.
-        $sshHomePath = $storagePath;
-        $matchingLocation = $this->db->fetchOne(
-            "SELECT id FROM storage_locations WHERE path = ?",
-            [rtrim($storagePath, '/')]
-        );
-        if ($matchingLocation && is_dir('/var/bbs/home')) {
-            $sshHomePath = '/var/bbs/home';
-        }
-
-        // Create storage directory
-        $clientDir = rtrim($sshHomePath, '/') . '/' . $id;
-        if (!is_dir($clientDir) && !@mkdir($clientDir, 0755, true)) {
-            $this->db->delete('agents', 'id = ?', [$id]);
-            $this->flash('danger', "Cannot create client — failed to create storage directory: {$clientDir}. Check permissions on {$sshHomePath}.");
-            $this->redirect('/clients/add');
-        }
-
-        // Provision SSH access: create Unix user, SSH keys, authorized_keys
-        $sshResult = SshKeyManager::provisionClient($id, $name, $sshHomePath);
-        if (!$sshResult) {
-            // Clean up: remove storage dir and agent record
-            @rmdir($clientDir);
-            $this->db->delete('agents', 'id = ?', [$id]);
-            $detail = SshKeyManager::getLastHelperError();
-            $this->flash('danger', 'Cannot create client — SSH provisioning failed'
-                . ($detail ? ': ' . htmlspecialchars($detail) : '')
-                . '. Ensure bbs-ssh-helper is installed at /usr/local/bin/bbs-ssh-helper with sudo access. See the Installation Guide: https://github.com/marcpope/borgbackupserver/wiki/Installation');
-            $this->redirect('/clients/add');
-        }
-
-        $this->db->insert('server_log', [
-            'agent_id' => $id,
-            'level' => 'info',
-            'message' => "Client created. SSH provisioned: user {$sshResult['unix_user']}, home {$sshResult['home_dir']}",
-        ]);
-
-        // The owner gets access and all permissions on their client by
-        // default; an admin can back individual permissions off in the
-        // user's profile (#337)
-        if ($userId) {
-            (new PermissionService())->grantOwnerDefaults($userId, $id);
         }
 
         $this->flash('success', 'Client created. To install, copy the Install Agent code and run it in a terminal on the client machine.');
