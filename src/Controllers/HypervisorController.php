@@ -56,7 +56,8 @@ class HypervisorController extends Controller
 
         $this->view('hypervisors/add', [
             'pageTitle' => 'Hypervisors',
-            'connectors' => HypervisorRegistry::all(),
+            // Planned connectors stay in the registry but are not shown
+            'connectors' => array_filter(HypervisorRegistry::all(), fn($c) => $c->isAvailable()),
             'users' => $this->isAdmin() ? $this->db->fetchAll("SELECT id, username FROM users ORDER BY username") : [],
         ]);
     }

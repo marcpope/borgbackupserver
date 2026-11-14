@@ -13,17 +13,12 @@ $selected = $_GET['type'] ?? null;
     <?php foreach ($connectors as $c): ?>
     <?php $canAdd = $c->isAvailable() && $c->deployment() === HypervisorConnector::DEPLOY_AGENT_ON_HOST; ?>
     <div class="col-lg-4 col-md-6">
-        <div class="card border-0 shadow-sm h-100 <?= $c->isAvailable() ? '' : 'opacity-75' ?>">
+        <div class="card border-0 shadow-sm h-100">
             <div class="card-body">
                 <div class="d-flex align-items-center mb-2">
                     <i class="bi bi-<?= htmlspecialchars($c->icon()) ?> fs-3 me-2 text-primary"></i>
                     <div>
                         <div class="fw-semibold"><?= htmlspecialchars($c->label()) ?></div>
-                        <?php if ($c->isAvailable()): ?>
-                            <span class="badge bg-success">Available</span>
-                        <?php else: ?>
-                            <span class="badge bg-secondary">Planned</span>
-                        <?php endif; ?>
                         <span class="badge bg-body-secondary text-body border fw-normal">
                             <?= $c->deployment() === HypervisorConnector::DEPLOY_AGENT_ON_HOST ? 'Agent on the host' : 'Proxy agent + API' ?>
                         </span>
