@@ -898,6 +898,37 @@ class BorgArchiveSource(object):
             progress(total)
         return total
 
+    def list(self, path):
+        """The items under a path of the archive, in archive order, as
+        borg list --json-lines gives them (path, type, size...)."""
+        command = self.base[:1] + ["list", "--json-lines"] + self.base[2:] + [path]
+        res = subprocess.run(command, env=self.env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=3600)
+        if res.returncode != 0:
+            raise RuntimeError(self._error(path, res.stderr))
+        return [json.loads(l) for l in res.stdout.decode("utf-8", errors="replace").splitlines() if l.strip()]
+
+    @contextlib.contextmanager
+    def stream(self, path):
+        """The contents of every file under a path, one after the other in
+        archive order, as a file object. Read it to the end."""
+        global current_borg_proc
+        errfile = tempfile.TemporaryFile()
+        proc = subprocess.Popen(self._command(path), env=self.env, stdout=subprocess.PIPE,
+                                stderr=errfile, **_popen_new_group_kwargs())
+        current_borg_proc = proc  # lets a cancel from the server kill it
+        try:
+            yield proc.stdout
+        except BaseException:
+            if proc.poll() is None:
+                _kill_process_tree(proc)
+            proc.wait()
+            raise
+        finally:
+            current_borg_proc = None
+        if proc.wait() != 0:
+            errfile.seek(0)
+            raise RuntimeError(self._error(path, errfile.read()))
+
 
 def execute_restore_vm(config, task):
     """Restore a VM archive as a new VM through the hypervisor module."""
@@ -6495,6 +6526,8 @@ def _execute_task_inner(config, task, job_id, task_type, command, env_vars,
             })
             vm_session = connector_cls().backup_session(vm, lambda msg: log_to_server(config, job_id, msg))
             command, cwd = vm_session.prepare(command)
+            if hasattr(vm_session, "borg_env"):
+                env = dict(env, **vm_session.borg_env())
         except Exception as e:
             if vm_session is not None:
                 vm_session.cleanup()
@@ -6929,7 +6962,12 @@ def _execute_task_inner(config, task, job_id, task_type, command, env_vars,
             snapshot_session.cleanup()
 
         if vm_session is not None:
-            vm_session.cleanup()
+            # The session keeps its snapshots as change tracking references
+            # only when borg stored the archive
+            try:
+                vm_session.cleanup(succeeded=(locals().get("result") == "completed"))
+            except TypeError:
+                vm_session.cleanup()  # module older than the agent
 
         # Close the catalog SSH pipe
         catalog_ssh_error = ""
