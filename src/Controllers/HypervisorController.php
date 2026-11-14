@@ -120,7 +120,7 @@ class HypervisorController extends Controller
             $this->redirect('/hypervisors');
         }
 
-        $tab = in_array($_GET['tab'] ?? '', ['vms', 'backups', 'install', 'settings'], true) ? $_GET['tab'] : 'vms';
+        $tab = in_array($_GET['tab'] ?? '', ['vms', 'backups', 'restore', 'install', 'settings'], true) ? $_GET['tab'] : 'vms';
         $isOwnerOrAdmin = $this->isOwnerOrAdmin($hypervisor);
         if (in_array($tab, ['install', 'settings'], true) && !$isOwnerOrAdmin) {
             $tab = 'vms';
@@ -141,6 +141,7 @@ class HypervisorController extends Controller
         }
 
         $backups = $tab === 'backups' ? $this->backupsTabData($hypervisor, $vms) : [];
+        $restore = $tab === 'restore' ? $this->restoreTabData($hypervisor, $vms) : [];
 
         $this->view('hypervisors/detail', [
             'pageTitle' => 'Hypervisors',
@@ -152,7 +153,137 @@ class HypervisorController extends Controller
             'isOwnerOrAdmin' => $isOwnerOrAdmin,
             'installCmd' => $installCmd,
             'backups' => $backups,
+            'restore' => $restore,
         ]);
+    }
+
+    /**
+     * Restore points per VM: the VM archives in this hypervisor agent's
+     * repositories (archives.vm_ref), newest first, and recent VM restores.
+     */
+    private function restoreTabData(array $hypervisor, array $vms): array
+    {
+        $agentId = (int) $hypervisor['agent_id'];
+        $archives = $this->db->fetchAll("
+            SELECT ar.id, ar.vm_ref, ar.archive_name, ar.original_size, ar.deduplicated_size, ar.created_at,
+                   r.name as repo_name
+            FROM archives ar
+            JOIN repositories r ON r.id = ar.repository_id
+            WHERE r.agent_id = ? AND ar.vm_ref IS NOT NULL
+            ORDER BY CAST(ar.vm_ref AS UNSIGNED), ar.vm_ref, ar.id DESC
+        ", [$agentId]);
+        $byVm = [];
+        foreach ($archives as $a) {
+            $byVm[$a['vm_ref']][] = $a;
+        }
+
+        $info = json_decode($hypervisor['info'] ?? '', true) ?: [];
+        $connector = HypervisorRegistry::get($hypervisor['type']);
+        $restoreTypes = $connector ? $connector->restoreDatastoreTypes() : [];
+        $storages = array_values(array_filter(
+            (array) ($info['datastores'] ?? []),
+            fn($s) => in_array($s['type'] ?? '', $restoreTypes, true)
+        ));
+
+        return [
+            'byVm' => $byVm,
+            'vmNames' => array_column($vms, 'name', 'vm_ref'),
+            'storages' => $storages,
+            'jobs' => $this->db->fetchAll("
+                SELECT bj.id, bj.vm_ref, bj.status, bj.status_message, bj.restore_options, bj.completed_at,
+                       bj.duration_seconds, SUBSTRING(bj.error_log, 1, 300) as error_log, SUBSTRING(bj.task_result, 1, 300) as output
+                FROM backup_jobs bj
+                WHERE bj.agent_id = ? AND bj.task_type = 'restore_vm'
+                ORDER BY bj.id DESC LIMIT 15
+            ", [$agentId]),
+            'canRestore' => $this->hasPermission(PermissionService::RESTORE, $agentId),
+        ];
+    }
+
+    /**
+     * Queue a full VM restore: the archive is restored as a NEW VM (new
+     * VMID, new disks, new MAC addresses, network unplugged by default), so
+     * the original VM is never touched.
+     */
+    public function restore(int $id): void
+    {
+        $this->requireAuth();
+        $this->verifyCsrf();
+
+        $hypervisor = $this->getHypervisor($id);
+        if (!$hypervisor) {
+            $this->flash('danger', 'Hypervisor not found.');
+            $this->redirect('/hypervisors');
+        }
+        $agentId = (int) $hypervisor['agent_id'];
+        $back = "/hypervisors/{$id}?tab=restore";
+        if (!$this->hasPermission(PermissionService::RESTORE, $agentId)) {
+            $this->flash('danger', 'You do not have permission to restore.');
+            $this->redirect($back);
+        }
+        $connector = HypervisorRegistry::get($hypervisor['type']);
+        if (!$connector || !$connector->can('restore')) {
+            $this->flash('danger', 'This hypervisor type cannot restore VMs yet.');
+            $this->redirect($back);
+        }
+
+        $archive = $this->db->fetchOne("
+            SELECT ar.id, ar.vm_ref, ar.archive_name, ar.repository_id
+            FROM archives ar JOIN repositories r ON r.id = ar.repository_id
+            WHERE ar.id = ? AND r.agent_id = ? AND ar.vm_ref IS NOT NULL
+        ", [(int) ($_POST['archive_id'] ?? 0), $agentId]);
+        if (!$archive) {
+            $this->flash('danger', 'Restore point not found.');
+            $this->redirect($back);
+        }
+
+        $vmidRaw = trim($_POST['target_vmid'] ?? '');
+        if ($vmidRaw !== '' && (!ctype_digit($vmidRaw) || (int) $vmidRaw < 100 || (int) $vmidRaw > 999999999)) {
+            $this->flash('danger', 'The new VMID must be a number from 100 upwards, or left empty for the next free one.');
+            $this->redirect($back);
+        }
+        $storage = trim($_POST['storage'] ?? '');
+        $info = json_decode($hypervisor['info'] ?? '', true) ?: [];
+        $allowed = array_filter(
+            (array) ($info['datastores'] ?? []),
+            fn($s) => in_array($s['type'] ?? '', $connector->restoreDatastoreTypes(), true)
+        );
+        if (!in_array($storage, array_column($allowed, 'id'), true)) {
+            $this->flash('danger', 'Choose a storage this hypervisor can restore VM disks to.');
+            $this->redirect($back);
+        }
+        $name = trim($_POST['name'] ?? '');
+        if ($name !== '' && !preg_match('/^[A-Za-z0-9]([A-Za-z0-9.-]{0,61}[A-Za-z0-9])?$/', $name)) {
+            $this->flash('danger', 'The VM name may contain letters, digits, dots and dashes only.');
+            $this->redirect($back);
+        }
+
+        $options = [
+            'vmid' => $vmidRaw === '' ? null : (int) $vmidRaw,
+            'storage' => $storage,
+            'name' => $name === '' ? null : $name,
+            'network_down' => empty($_POST['network_up']),
+            'start' => !empty($_POST['start']),
+        ];
+        $jobId = $this->db->insert('backup_jobs', [
+            'agent_id' => $agentId,
+            'repository_id' => (int) $archive['repository_id'],
+            'vm_ref' => $archive['vm_ref'],
+            'task_type' => 'restore_vm',
+            'status' => 'queued',
+            'restore_archive_id' => (int) $archive['id'],
+            'restore_options' => json_encode($options),
+        ]);
+        $this->db->insert('server_log', [
+            'agent_id' => $agentId,
+            'backup_job_id' => $jobId,
+            'level' => 'info',
+            'message' => "VM restore queued: VM {$archive['vm_ref']} from \"{$archive['archive_name']}\" as "
+                . ($options['vmid'] ? "VMID {$options['vmid']}" : 'the next free VMID') . " on {$storage}",
+        ]);
+
+        $this->flash('success', 'VM restore queued.');
+        $this->redirect($back);
     }
 
     /** Plans, repositories and recent jobs for the Backups tab. */

@@ -63,6 +63,12 @@ abstract class HypervisorConnector
         return !empty($this->capabilities()[$capability]);
     }
 
+    /** Datastore types (as in info.datastores) a full VM restore can write disks to. */
+    public function restoreDatastoreTypes(): array
+    {
+        return [];
+    }
+
     /** What the hypervisor calls a VM id ("VMID" on Proxmox, "MoRef" on vSphere). */
     public function vmIdLabel(): string
     {

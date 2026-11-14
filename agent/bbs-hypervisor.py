@@ -34,7 +34,7 @@ import subprocess
 import sys
 import time
 
-MODULE_VERSION = "1.1.0"
+MODULE_VERSION = "1.2.0"
 
 IS_WINDOWS = sys.platform == "win32"
 IS_MACOS = sys.platform == "darwin"
@@ -150,6 +150,13 @@ class ProxmoxConnector(HypervisorConnector):
     def backup_session(self, vm, log):
         """A VM backup in progress: see ProxmoxVmBackup."""
         return ProxmoxVmBackup(self, vm, log)
+
+    # Storage types a VM's disks can be restored to
+    RESTORE_STORAGE = ("lvmthin",)
+
+    def restore_vm(self, source, ref, options, log, progress):
+        """Restore a VM archive as a new VM: see ProxmoxVmRestore."""
+        return ProxmoxVmRestore(self, source, ref, options, log, progress).run()
 
     @staticmethod
     def parse_conf(path):
@@ -482,6 +489,174 @@ class ProxmoxVmBackup(object):
             self._remove_snapshot(vg, lv)
         self.snapshots = []
         shutil.rmtree(self.root, ignore_errors=True)
+
+
+class ProxmoxVmRestore(object):
+    """Restore one VM archive (made by ProxmoxVmBackup) as a NEW VM.
+
+    `source` reads files out of the archive (the core agent's
+    BorgArchiveSource): read(path) returns a small file, copy_to(path,
+    device, progress) streams a disk image onto a block device.
+
+      1. read the manifest (bbs-vm.json) and the VM config from the archive;
+      2. claim the target VMID by creating its config with "lock: create";
+      3. for each disk in the manifest: allocate a volume on the target
+         storage (pvesm alloc) and stream the image onto it;
+      4. write the config: new volumes, new MAC addresses, network cards
+         unplugged unless asked otherwise, new SMBIOS UUID and VM generation
+         ID, name, a note saying where it came from;
+      5. start it if asked.
+    Any failure frees the volumes created so far and removes the config.
+    """
+
+    def __init__(self, connector, source, ref, options, log, progress):
+        ref = str(ref)
+        if not re.match(r"^[0-9]+$", ref):
+            raise ValueError("invalid source VMID {!r}".format(ref))
+        self.c = connector
+        self.source = source
+        self.ref = ref
+        self.options = options or {}
+        self.log = log
+        self.progress = progress
+
+    @staticmethod
+    def _vmid_taken(vmid):
+        import glob
+        for pattern in ("/etc/pve/nodes/*/qemu-server/{}.conf", "/etc/pve/nodes/*/lxc/{}.conf"):
+            if glob.glob(pattern.format(vmid)):
+                return True
+        return False
+
+    def _target_vmid(self):
+        requested = self.options.get("vmid")
+        if requested:
+            vmid = int(requested)
+            if vmid < 100:
+                raise RuntimeError("VMID {} is reserved by Proxmox".format(vmid))
+            if self._vmid_taken(vmid):
+                raise RuntimeError("VMID {} already exists".format(vmid))
+            return vmid
+        out = _run(["pvesh", "get", "/cluster/nextid", "--output-format", "json"], timeout=60).stdout
+        return int(json.loads(out.decode("utf-8")))
+
+    @staticmethod
+    def _mac():
+        # Proxmox's own prefix, so the address looks like one it generated
+        import random
+        return "BC:24:11:{:02X}:{:02X}:{:02X}".format(random.randint(0, 255), random.randint(0, 255), random.randint(0, 255))
+
+    def _rewrite_conf(self, conf_text, new_volumes, vmid):
+        import uuid
+        out = []
+        named = False
+        for line in conf_text.splitlines():
+            if line.startswith("["):
+                break  # snapshots of the original VM are not restored
+            if line.startswith("#"):
+                out.append(line)  # description
+                continue
+            if ":" not in line:
+                continue
+            key, value = [x.strip() for x in line.split(":", 1)]
+            if key in ("parent", "lock", "template"):
+                continue
+            if self.c.DISK_KEY.match(key):
+                if key in new_volumes:
+                    rest = value.split(",", 1)[1] if "," in value else ""
+                    value = new_volumes[key] + ("," + rest if rest else "")
+                elif "media=cdrom" in value:
+                    value = "none,media=cdrom"  # the ISO may not exist here
+                else:
+                    if not key.startswith("unused"):
+                        self.log("Disk {} was not in the backup; it is left out of the restored VM".format(key))
+                    continue
+            elif re.match(r"^net[0-9]+$", key):
+                value = re.sub(r"((?:^|,)[A-Za-z0-9]+=)[0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5}",
+                               lambda m: m.group(1) + self._mac(), value)
+                if self.options.get("network_down", True) and "link_down=1" not in value:
+                    value += ",link_down=1"
+            elif key == "name":
+                value = self.options.get("name") or (value + "-restored")[:63]
+                named = True
+            elif key == "smbios1":
+                value = re.sub(r"uuid=[0-9A-Fa-f-]+", "uuid=" + str(uuid.uuid4()), value)
+            elif key == "vmgenid":
+                value = str(uuid.uuid4())
+            out.append("{}: {}".format(key, value))
+        if not named and self.options.get("name"):
+            out.append("name: {}".format(self.options["name"]))
+        note = "#Restored by BBS from VM {} (backup of {}) on {}".format(
+            self.ref, self.manifest.get("created_at", "?"), time.strftime("%Y-%m-%d %H:%M"))
+        return "\n".join([note] + out) + "\n"
+
+    def run(self):
+        self.manifest = json.loads(self.source.read("vm-{}/bbs-vm.json".format(self.ref)).decode("utf-8"))
+        conf_text = self.source.read("vm-{}/qemu-server.conf".format(self.ref)).decode("utf-8", errors="replace")
+        disks = self.manifest.get("disks") or []
+        if not disks:
+            raise RuntimeError("the backup holds no disk")
+
+        storage = self.options.get("storage") or ""
+        st = self.c.storage_config().get(storage)
+        if not st or st.get("type") not in self.c.RESTORE_STORAGE:
+            raise RuntimeError("storage '{}' does not exist here or cannot hold restored disks (supported: {})".format(
+                storage, ", ".join(self.c.RESTORE_STORAGE)))
+
+        vmid = self._target_vmid()
+        conf_path = os.path.join(self.c.QEMU_CONF_DIR, "{}.conf".format(vmid))
+        # Claim the VMID first; O_EXCL fails if someone took it meanwhile
+        fd = os.open(conf_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o640)
+        os.write(fd, b"lock: create\n")
+        os.close(fd)
+        self.log("Restoring VM {} as VMID {} on {}".format(self.ref, vmid, storage))
+
+        created = []
+        try:
+            total = sum(int(d.get("size_bytes") or 0) for d in disks)
+            done = 0
+            new_volumes = {}
+            for i, d in enumerate(disks):
+                size = int(d.get("size_bytes") or 0)
+                if size <= 0 or not re.match(r"^[A-Za-z0-9._-]+$", d.get("file", "")):
+                    raise RuntimeError("bad disk entry in the manifest: {}".format(d))
+                name = "vm-{}-disk-{}".format(vmid, i)
+                _run(["pvesm", "alloc", storage, str(vmid), name, str((size + 1023) // 1024)], timeout=300)
+                volid = "{}:{}".format(storage, name)
+                created.append(volid)
+                device = _run(["pvesm", "path", volid], timeout=60).stdout.decode("utf-8").strip()
+                if st.get("vgname"):
+                    _run(["lvchange", "-ay", "{}/{}".format(st["vgname"], name)], timeout=60, check=False)
+                if not os.path.exists(device):
+                    raise RuntimeError("volume {} has no device at {}".format(volid, device))
+                self.log("Restoring disk {} ({:.1f} GiB) to {}".format(d["key"], size / 1024.0 ** 3, volid))
+                written = self.source.copy_to(
+                    "vm-{}/{}".format(self.ref, d["file"]), device,
+                    lambda n, base=done, key=d["key"]: self.progress(base + n, total, "Restoring disk {}".format(key)))
+                if written != size:
+                    raise RuntimeError("disk {}: {} bytes restored, {} expected".format(d["key"], written, size))
+                done += size
+                new_volumes[d["key"]] = volid
+
+            with open(conf_path, "w") as f:
+                f.write(self._rewrite_conf(conf_text, new_volumes, vmid))
+        except BaseException:
+            for volid in reversed(created):
+                _run(["pvesm", "free", volid], timeout=300, check=False)
+            try:
+                os.remove(conf_path)
+            except OSError:
+                pass
+            raise
+
+        message = "VM {} restored as VMID {} on {} ({} disk(s){})".format(
+            self.ref, vmid, storage, len(new_volumes),
+            ", network unplugged" if self.options.get("network_down", True) else "")
+        if self.options.get("start"):
+            _run(["qm", "start", str(vmid)], timeout=300)
+            message += ", started"
+        self.log(message)
+        return message
 
 
 # slug -> connector class. Add new connectors here.

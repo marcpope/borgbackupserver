@@ -8,6 +8,12 @@ namespace BBS\Services\Hypervisors;
  */
 class ProxmoxConnector extends HypervisorConnector
 {
+    /** Storage types a VM can be restored to (see ProxmoxConnector in bbs-hypervisor.py). */
+    public function restoreDatastoreTypes(): array
+    {
+        return ['lvmthin'];
+    }
+
     public function slug(): string
     {
         return 'proxmox';
@@ -36,7 +42,7 @@ class ProxmoxConnector extends HypervisorConnector
 
     public function capabilities(): array
     {
-        return ['inventory' => true, 'backup' => true, 'restore' => false, 'file_restore' => false];
+        return ['inventory' => true, 'backup' => true, 'restore' => true, 'file_restore' => false];
     }
 
     public function vmIdLabel(): string

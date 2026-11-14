@@ -101,6 +101,7 @@ class App
         $this->router->map('POST', '/hypervisors/[i:id]/refresh', 'HypervisorController@refresh');
         $this->router->map('POST', '/hypervisors/[i:id]/settings', 'HypervisorController@updateSettings');
         $this->router->map('POST', '/hypervisors/[i:id]/plans', 'HypervisorController@storePlan');
+        $this->router->map('POST', '/hypervisors/[i:id]/restore', 'HypervisorController@restore');
         $this->router->map('GET', '/clients', 'ClientController@index');
         $this->router->map('GET', '/clients/add', 'ClientController@add');
         $this->router->map('POST', '/clients/add', 'ClientController@store');

@@ -821,6 +821,145 @@ def hypervisor_inventory_thread(config, module):
             time.sleep(1)
 
 
+class BorgArchiveSource(object):
+    """Files of one archive, for a hypervisor restore. `base_command` is the
+    server's "borg extract [options] repo::archive --"; each read runs it
+    with --stdout and one path, so nothing is written to local disk."""
+
+    CHUNK = 4 * 1024 * 1024
+
+    def __init__(self, base_command, env):
+        self.base = list(base_command)
+        self.env = env
+
+    def _command(self, path):
+        return self.base[:2] + ["--stdout"] + self.base[2:] + [path]
+
+    @staticmethod
+    def _error(path, stderr_bytes):
+        lines = [l for l in stderr_bytes.decode("utf-8", errors="replace").splitlines() if l.strip()]
+        return "borg extract of {} failed: {}".format(path, " / ".join(lines[-3:]) or "no output")
+
+    def read(self, path, max_bytes=16 * 1024 * 1024):
+        """A small file of the archive (manifest, VM config)."""
+        res = subprocess.run(self._command(path), env=self.env, stdout=subprocess.PIPE,
+                             stderr=subprocess.PIPE, timeout=3600)
+        if res.returncode != 0:
+            raise RuntimeError(self._error(path, res.stderr))
+        if len(res.stdout) > max_bytes:
+            raise RuntimeError("{} is unexpectedly large ({} bytes)".format(path, len(res.stdout)))
+        return res.stdout
+
+    def copy_to(self, path, device, progress=None):
+        """Stream a disk image of the archive onto a block device. All-zero
+        chunks are skipped rather than written, so a new thin volume stays
+        thin (its unwritten blocks read as zeros). Returns the bytes read."""
+        global current_borg_proc
+        errfile = tempfile.TemporaryFile()
+        proc = subprocess.Popen(self._command(path), env=self.env, stdout=subprocess.PIPE,
+                                stderr=errfile, **_popen_new_group_kwargs())
+        current_borg_proc = proc  # lets a cancel from the server kill it
+        total = 0
+        zero = bytes(self.CHUNK)
+        last_report = 0
+        try:
+            with open(device, "r+b") as out:
+                while True:
+                    parts = []
+                    need = self.CHUNK
+                    while need > 0:
+                        piece = proc.stdout.read(need)
+                        if not piece:
+                            break
+                        parts.append(piece)
+                        need -= len(piece)
+                    buf = b"".join(parts)
+                    if not buf:
+                        break
+                    if buf == zero[:len(buf)]:
+                        out.seek(len(buf), os.SEEK_CUR)
+                    else:
+                        out.write(buf)
+                    total += len(buf)
+                    if progress and time.time() - last_report >= 3:
+                        progress(total)
+                        last_report = time.time()
+                out.flush()
+                os.fsync(out.fileno())
+            rc = proc.wait()
+        finally:
+            current_borg_proc = None
+            if proc.poll() is None:
+                _kill_process_tree(proc)
+        if rc != 0:
+            errfile.seek(0)
+            raise RuntimeError(self._error(path, errfile.read()))
+        if progress:
+            progress(total)
+        return total
+
+
+def execute_restore_vm(config, task):
+    """Restore a VM archive as a new VM through the hypervisor module."""
+    job_id = task.get("job_id")
+    command = list(task.get("command", []))
+    if command and command[0] == "borg" and BORG_PATH:
+        command[0] = BORG_PATH
+    if _refuse_unsafe_command(config, job_id, command):
+        return
+    if len(command) < 4 or command[1] != "extract" or command[-1] != "--":
+        report_status(config, {"job_id": job_id, "result": "failed", "error_log": "unexpected restore command"})
+        return
+
+    remote_key = task.get("remote_ssh_key")
+    if remote_key:
+        try:
+            with open(REMOTE_KEY_PATH, "w", newline="\n") as kf:
+                kf.write(remote_key.replace("\r\n", "\n").replace("\r", "\n").rstrip() + "\n")
+            os.chmod(REMOTE_KEY_PATH, 0o600)
+        except Exception as e:
+            report_status(config, {"job_id": job_id, "result": "failed",
+                                   "error_log": "Failed to write remote SSH key: {}".format(e)})
+            return
+
+    vm = task.get("hypervisor_vm") or {}
+    state = {"last": 0}
+
+    def progress(done, total, message=None):
+        if time.time() - state["last"] < 3 and done < total:
+            return
+        state["last"] = time.time()
+        pct = int(done * 100 / total) if total else 0
+        api_request(config, "/api/agent/progress", method="POST", data={
+            "job_id": job_id, "bytes_processed": done, "bytes_total": total,
+            "status_message": "{} ({}%)".format(message or "Restoring", pct),
+        })
+
+    try:
+        if HYPERVISOR_MODULE is None:
+            raise RuntimeError("this agent has no hypervisor module (install it with install.sh --hypervisor)")
+        connector_cls = HYPERVISOR_MODULE.CONNECTORS.get(vm.get("type"))
+        if connector_cls is None or not hasattr(connector_cls, "restore_vm"):
+            raise RuntimeError("the hypervisor module cannot restore '{}' VMs".format(vm.get("type")))
+        api_request(config, "/api/agent/progress", method="POST", data={
+            "job_id": job_id, "status_message": "Reading the backup of VM {}...".format(vm.get("ref")),
+        })
+        message = connector_cls().restore_vm(
+            BorgArchiveSource(command, _mssql_restore_borg_env(task.get("env", {}))),
+            vm.get("ref"), task.get("restore_options") or {},
+            lambda msg: log_to_server(config, job_id, msg), progress)
+        report_status(config, {"job_id": job_id, "result": "completed", "output_log": message})
+    except Exception as e:
+        logger.error("Job #{}: VM restore failed: {}".format(job_id, e))
+        report_status(config, {"job_id": job_id, "result": "failed", "error_log": "VM restore failed: {}".format(e)})
+    finally:
+        if remote_key:
+            try:
+                os.remove(REMOTE_KEY_PATH)
+            except OSError:
+                pass
+
+
 def report_hypervisor_inventory(config, hypervisor_id, connector):
     try:
         inventory = connector.inventory()
@@ -6093,6 +6232,11 @@ def _execute_task_inner(config, task, job_id, task_type, command, env_vars,
     # Handle SQL Server database restore
     if task_type == "restore_mssql":
         execute_restore_mssql(config, task)
+        return
+
+    # Full VM restore (hypervisor agent)
+    if task_type == "restore_vm":
+        execute_restore_vm(config, task)
         return
 
     # Report running immediately so the UI shows activity

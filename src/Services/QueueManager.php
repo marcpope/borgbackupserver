@@ -16,7 +16,7 @@ class QueueManager
      * care about the agent's connection state.
      */
     public const AGENT_BOUND_TASKS = [
-        'backup', 'backup_dry_run', 'restore', 'restore_mysql', 'restore_pg', 'restore_mongo', 'restore_mssql',
+        'backup', 'backup_dry_run', 'restore', 'restore_mysql', 'restore_pg', 'restore_mongo', 'restore_mssql', 'restore_vm',
         'update_borg', 'update_agent', 'plugin_test', 'plugin_post', 'list_dir',
     ];
 
@@ -240,7 +240,7 @@ class QueueManager
         $busyAgents = $this->db->fetchAll(
             "SELECT DISTINCT agent_id FROM backup_jobs
              WHERE status IN ('sent', 'running')
-               AND task_type IN ('backup', 'restore', 'restore_mysql', 'restore_pg', 'restore_mongo', 'restore_mssql')"
+               AND task_type IN ('backup', 'restore', 'restore_mysql', 'restore_pg', 'restore_mongo', 'restore_mssql', 'restore_vm')"
         );
         $busyAgentIds = array_column($busyAgents, 'agent_id');
 
@@ -534,6 +534,8 @@ class QueueManager
                 $taskPayload = $this->buildRestoreMongoPayload($job);
             } elseif ($job['task_type'] === 'restore_mssql') {
                 $taskPayload = $this->buildRestoreMssqlPayload($job);
+            } elseif ($job['task_type'] === 'restore_vm') {
+                $taskPayload = $this->buildRestoreVmPayload($job);
             } elseif ($job['task_type'] === 'update_borg') {
                 $taskPayload = $this->buildBorgUpdatePayload($job);
             } elseif ($job['task_type'] === 'update_agent') {
@@ -933,6 +935,11 @@ class QueueManager
                 if ($payload) {
                     $tasks[] = $payload;
                 }
+            } elseif ($job['task_type'] === 'restore_vm') {
+                $payload = $this->buildRestoreVmPayload($job);
+                if ($payload) {
+                    $tasks[] = $payload;
+                }
             } elseif ($job['task_type'] === 'update_borg') {
                 $tasks[] = $this->buildBorgUpdatePayload($job);
             } elseif ($job['task_type'] === 'update_agent') {
@@ -1074,6 +1081,64 @@ class QueueManager
         }
 
         return BorgCommandBuilder::toTaskPayload('restore', $cmd, $env, $extra);
+    }
+
+    /**
+     * Build a restore_vm task payload: restore one VM archive as a new VM on
+     * the hypervisor agent. The agent runs the base command below once per
+     * file it needs, adding --stdout and the path (manifest, VM config, each
+     * disk), and writes the disks straight into new volumes.
+     */
+    private function buildRestoreVmPayload(array $job): ?array
+    {
+        $archive = $this->db->fetchOne("
+            SELECT ar.archive_name, ar.vm_ref, r.path as repo_path, r.passphrase_encrypted,
+                   r.storage_type, rsc.remote_port, rsc.ssh_private_key_encrypted as remote_ssh_key_encrypted,
+                   rsc.borg_remote_path, h.type as hypervisor_type
+            FROM archives ar
+            JOIN repositories r ON r.id = ar.repository_id
+            LEFT JOIN remote_ssh_configs rsc ON rsc.id = r.remote_ssh_config_id
+            JOIN hypervisors h ON h.agent_id = r.agent_id
+            WHERE ar.id = ? AND r.agent_id = ?
+            LIMIT 1
+        ", [$job['restore_archive_id'] ?? 0, $job['agent_id']]);
+        if (!$archive || empty($archive['vm_ref'])) {
+            return null;
+        }
+
+        $repo = ['path' => $archive['repo_path'], 'passphrase_encrypted' => $archive['passphrase_encrypted']];
+        $cmd = ['borg', 'extract', '--lock-wait=600', $repo['path'] . '::' . $archive['archive_name'], '--'];
+
+        $remoteSshConfig = null;
+        if (($archive['storage_type'] ?? 'local') === 'remote_ssh' && !empty($archive['remote_ssh_key_encrypted'])) {
+            $remoteSshConfig = [
+                'remote_port' => $archive['remote_port'] ?? 22,
+                'borg_remote_path' => $archive['borg_remote_path'] ?? null,
+            ];
+            $cmd = BorgCommandBuilder::appendRemotePath($cmd, $archive['borg_remote_path'] ?? null);
+        }
+        $env = BorgCommandBuilder::buildEnv($repo, true, $this->getSshPortForAgent($job['agent_id']), $remoteSshConfig);
+
+        $payload = [
+            'task' => 'restore_vm',
+            'job_id' => $job['id'],
+            'command' => $cmd,
+            'env' => $env,
+            'archive_name' => $archive['archive_name'],
+            'hypervisor_vm' => [
+                'type' => $archive['hypervisor_type'],
+                'ref' => (string) $archive['vm_ref'],
+            ],
+            'restore_options' => json_decode($job['restore_options'] ?? '{}', true) ?: new \stdClass(),
+        ];
+        if ($remoteSshConfig) {
+            try {
+                $payload['remote_ssh_key'] = Encryption::decrypt($archive['remote_ssh_key_encrypted']);
+            } catch (\Exception $e) {
+                $payload['remote_ssh_key'] = $archive['remote_ssh_key_encrypted'];
+            }
+        }
+        return $payload;
     }
 
     /**

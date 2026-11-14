@@ -134,7 +134,7 @@ class ClientController extends Controller
         // disaster happened (#141).
         $categoryMap = [
             'backup' => 'backups',
-            'restore' => 'restores', 'restore_mysql' => 'restores', 'restore_pg' => 'restores', 'restore_mongo' => 'restores', 'restore_mssql' => 'restores',
+            'restore' => 'restores', 'restore_mysql' => 'restores', 'restore_pg' => 'restores', 'restore_mongo' => 'restores', 'restore_mssql' => 'restores', 'restore_vm' => 'restores',
             's3_sync' => 's3_sync',
         ];
 
