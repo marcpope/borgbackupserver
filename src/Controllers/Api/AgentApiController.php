@@ -245,6 +245,53 @@ class AgentApiController extends Controller
      * it serves, with which connector, how often to report the inventory, and
      * whether Refresh was pressed.
      */
+    /**
+     * POST /api/agent/hypervisor/browse-upload?job_id=&offset= - one chunk
+     * (raw body) of the tar.gz a vm_browse download task is preparing. Chunks
+     * are appended in order; the offset must be the size received so far.
+     */
+    public function hypervisorBrowseUpload(): void
+    {
+        $agent = $this->authenticateAgent();
+        if (($agent['agent_type'] ?? 'client') !== 'hypervisor') {
+            $this->json(['error' => 'Not a hypervisor agent'], 403);
+        }
+        $jobId = (int) ($_GET['job_id'] ?? 0);
+        $offset = (int) ($_GET['offset'] ?? -1);
+        $job = $this->db->fetchOne(
+            "SELECT id, status, restore_options FROM backup_jobs WHERE id = ? AND agent_id = ? AND task_type = 'vm_browse'",
+            [$jobId, $agent['id']]
+        );
+        if (!$job || !in_array($job['status'], ['sent', 'running'], true)) {
+            $this->json(['error' => 'No running browse download with this id'], 404);
+        }
+        $options = json_decode($job['restore_options'] ?? '', true) ?: [];
+        if (($options['action'] ?? '') !== 'download') {
+            $this->json(['error' => 'This browse task is not a download'], 400);
+        }
+
+        $path = \BBS\Services\Hypervisors\HypervisorBackupService::browseDownloadPath($jobId);
+        clearstatcache(true, $path);
+        $size = is_file($path) ? filesize($path) : 0;
+        if ($offset !== $size) {
+            $this->json(['error' => 'Offset mismatch', 'size' => $size], 409);
+        }
+        $free = @disk_free_space(dirname($path));
+        if ($free !== false && $free < 1073741824) {
+            $this->json(['error' => 'Less than 1 GB free on the server for downloads'], 413);
+        }
+        $in = fopen('php://input', 'rb');
+        $out = fopen($path, 'ab');
+        if (!$in || !$out) {
+            $this->json(['error' => 'Cannot write the download file'], 500);
+        }
+        $written = stream_copy_to_stream($in, $out);
+        fclose($in);
+        fclose($out);
+        $this->db->update('backup_jobs', ['last_progress_at' => date('Y-m-d H:i:s')], 'id = ?', [$jobId]);
+        $this->json(['status' => 'ok', 'size' => $size + (int) $written]);
+    }
+
     public function hypervisorAssignments(): void
     {
         $agent = $this->authenticateAgent();
@@ -484,7 +531,7 @@ class AgentApiController extends Controller
         // gets a limit that fits its bounded size (up to 20000 entries)
         // and the MEDIUMTEXT column (#536).
         foreach (['error_log', 'output_log'] as $k) {
-            $limit = ($k === 'output_log' && $job['task_type'] === 'list_dir') ? 8388608 : 65536;
+            $limit = ($k === 'output_log' && in_array($job['task_type'], ['list_dir', 'vm_browse'], true)) ? 8388608 : 65536;
             if (isset($input[$k]) && is_string($input[$k]) && strlen($input[$k]) > $limit) {
                 $input[$k] = substr($input[$k], 0, $limit) . "\n[truncated]";
             }
@@ -724,7 +771,11 @@ class AgentApiController extends Controller
         // as a fast-path, but DB is the source of truth — Cache returns
         // unavailable on systems where memcached isn't running.
         if (!empty($input['output_log'])) {
-            if (($job['task_type'] ?? '') === 'list_dir' && $result === 'completed') {
+            if (($job['task_type'] ?? '') === 'vm_browse' && $result === 'completed') {
+                // A file-level browse answer (structure, listing): read back by
+                // the browser page, never shown as a log line
+                $this->db->update('backup_jobs', ['task_result' => $input['output_log']], 'id = ?', [$jobId]);
+            } elseif (($job['task_type'] ?? '') === 'list_dir' && $result === 'completed') {
                 $this->db->update('backup_jobs', [
                     'task_result' => $input['output_log'],
                 ], 'id = ?', [$jobId]);

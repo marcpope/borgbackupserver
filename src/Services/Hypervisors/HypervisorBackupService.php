@@ -24,6 +24,30 @@ class HypervisorBackupService
         $this->db = Database::getInstance();
     }
 
+    /** Where the tar.gz of a file-level download (vm_browse job) is kept. */
+    public static function browseDownloadPath(int $jobId): string
+    {
+        $dir = '/var/bbs/tmp/vm-browse';
+        if (!is_dir($dir) && !@mkdir($dir, 0770, true)) {
+            $dir = sys_get_temp_dir() . '/bbs-vm-browse';
+            @mkdir($dir, 0770, true);
+        }
+        return $dir . '/' . $jobId . '.tar.gz';
+    }
+
+    /** Downloads are kept for BROWSE_DOWNLOAD_HOURS, then removed. */
+    public const BROWSE_DOWNLOAD_HOURS = 6;
+
+    public static function cleanBrowseDownloads(): void
+    {
+        $dir = dirname(self::browseDownloadPath(0));
+        foreach (glob($dir . '/*.tar.gz') ?: [] as $f) {
+            if (@filemtime($f) < time() - self::BROWSE_DOWNLOAD_HOURS * 3600) {
+                @unlink($f);
+            }
+        }
+    }
+
     public static function archivePrefix(int $planId, string $vmRef): string
     {
         return 'plan' . $planId . '-vm' . $vmRef;

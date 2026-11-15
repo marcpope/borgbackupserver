@@ -930,6 +930,141 @@ class BorgArchiveSource(object):
             raise RuntimeError(self._error(path, errfile.read()))
 
 
+def close_vm_browse_sessions():
+    """Unmount the archives opened for file-level browsing: borg mount holds
+    a lock on the repository that would hold a backup or restore back."""
+    browser = getattr(HYPERVISOR_MODULE, "BROWSER", None) if HYPERVISOR_MODULE else None
+    if browser is not None:
+        try:
+            browser.close_all()
+        except Exception as e:
+            logger.warning("Could not close the VM browse sessions: {}".format(e))
+
+
+class _BrowseUploader(object):
+    """File object for tarfile: sends what is written to the server in
+    chunks (POST /api/agent/hypervisor/browse-upload), for a file-level
+    download from a VM backup."""
+
+    CHUNK = 4 * 1024 * 1024  # under PHP's default post_max_size (8M)
+
+    def __init__(self, config, job_id):
+        self.config = config
+        self.job_id = job_id
+        self.buf = []
+        self.buffered = 0
+        self.total = 0
+        self.last_report = 0
+
+    def write(self, data):
+        self.buf.append(bytes(data))
+        self.buffered += len(data)
+        if self.buffered >= self.CHUNK:
+            self._send()
+        return len(data)
+
+    def flush(self):
+        pass
+
+    def _send(self):
+        if not self.buffered:
+            return
+        body = b"".join(self.buf)
+        url = "{}/api/agent/hypervisor/browse-upload?job_id={}&offset={}".format(
+            self.config["server_url"], self.job_id, self.total)
+        error = "no answer"
+        for attempt in range(5):
+            req = urllib.request.Request(url, data=body, method="POST", headers={
+                "Authorization": "Bearer {}".format(self.config["api_key"]),
+                "Content-Type": "application/octet-stream",
+                "User-Agent": "BBS-Agent/{}".format(AGENT_VERSION),
+            })
+            try:
+                with server_urlopen(self.config, req, 300) as resp:
+                    answer = json.loads(resp.read().decode("utf-8"))
+                error = None if answer.get("status") == "ok" else (answer.get("error") or str(answer))
+                break  # an answer, good or a refusal: no retry
+            except urllib.error.HTTPError as e:
+                error = "HTTP {}: {}".format(e.code, e.read().decode("utf-8", errors="replace")[:300])
+                if e.code in (400, 403, 404, 409, 413):
+                    break
+            except Exception as e:
+                error = str(e)
+            time.sleep(2 * (attempt + 1))
+        if error is not None:
+            raise RuntimeError("upload to the server failed: {}".format(error))
+        self.total += len(body)
+        self.buf = []
+        self.buffered = 0
+        if time.time() - self.last_report >= 3:
+            self.last_report = time.time()
+            api_request(self.config, "/api/agent/progress", method="POST", data={
+                "job_id": self.job_id, "bytes_processed": self.total,
+                "status_message": "Preparing the download: {:.1f} MiB".format(self.total / 1048576.0),
+            })
+
+    def finish(self):
+        self._send()
+
+
+def execute_vm_browse(config, task):
+    """File-level browsing of a VM backup (hypervisor agent): open the
+    archive (mount, partitions, filesystems), list a directory of one of its
+    volumes, or send a tar.gz of a selection to the server."""
+    job_id = task.get("job_id")
+    command = list(task.get("command", []))
+    if command and command[0] == "borg" and BORG_PATH:
+        command[0] = BORG_PATH
+    if _refuse_unsafe_command(config, job_id, command):
+        return
+    if len(command) < 4 or command[1] != "extract" or command[-1] != "--":
+        report_status(config, {"job_id": job_id, "result": "failed", "error_log": "unexpected browse command"})
+        return
+    params = task.get("browse") or {}
+    action = params.get("action")
+    vm = task.get("hypervisor_vm") or {}
+
+    remote_key = task.get("remote_ssh_key")
+    try:
+        browser = getattr(HYPERVISOR_MODULE, "BROWSER", None) if HYPERVISOR_MODULE else None
+        if browser is None:
+            raise RuntimeError("this agent's hypervisor module cannot browse VM backups")
+        if remote_key:
+            with open(REMOTE_KEY_PATH, "w", newline="\n") as kf:
+                kf.write(remote_key.replace("\r\n", "\n").replace("\r", "\n").rstrip() + "\n")
+            os.chmod(REMOTE_KEY_PATH, 0o600)
+        middle = command[2:-1]
+        mount_cmd = [command[0], "mount", "-f"] + [o for o in middle if o.startswith("--")] \
+            + [o for o in middle if "::" in o]
+        env = _mssql_restore_borg_env(task.get("env", {}))
+        key = str(task.get("archive_id") or task.get("archive_name"))
+        if action == "open":
+            api_request(config, "/api/agent/progress", method="POST", data={
+                "job_id": job_id, "status_message": "Mounting the backup of VM {}...".format(vm.get("ref"))})
+        with browser.use(key, vm.get("ref"), mount_cmd, env) as session:
+            if action == "open":
+                result = session.structure
+            elif action == "list":
+                result = session.list(params.get("volume"), params.get("path") or "")
+            elif action == "download":
+                sink = _BrowseUploader(config, job_id)
+                count = session.download(params.get("volume"), list(params.get("paths") or []), sink)
+                sink.finish()
+                result = {"file_size": sink.total, "entries": count}
+            else:
+                raise RuntimeError("unknown browse action {!r}".format(action))
+        report_status(config, {"job_id": job_id, "result": "completed", "output_log": json.dumps(result)})
+    except Exception as e:
+        logger.error("Job #{}: VM browse ({}) failed: {}".format(job_id, action, e))
+        report_status(config, {"job_id": job_id, "result": "failed", "error_log": str(e)[:2000]})
+    finally:
+        if remote_key:
+            try:
+                os.remove(REMOTE_KEY_PATH)
+            except OSError:
+                pass
+
+
 def execute_restore_vm(config, task):
     """Restore a VM archive as a new VM through the hypervisor module."""
     job_id = task.get("job_id")
@@ -955,6 +1090,7 @@ def execute_restore_vm(config, task):
 
     vm = task.get("hypervisor_vm") or {}
     state = {"last": 0}
+    close_vm_browse_sessions()
 
     def progress(done, total, message=None):
         if time.time() - state["last"] < 3 and done < total:
@@ -6270,6 +6406,11 @@ def _execute_task_inner(config, task, job_id, task_type, command, env_vars,
         execute_restore_vm(config, task)
         return
 
+    # File-level browsing of a VM backup (hypervisor agent)
+    if task_type == "vm_browse":
+        execute_vm_browse(config, task)
+        return
+
     # Report running immediately so the UI shows activity
     api_request(config, "/api/agent/progress", method="POST", data={
         "job_id": job_id,
@@ -6520,6 +6661,7 @@ def _execute_task_inner(config, task, job_id, task_type, command, env_vars,
             connector_cls = HYPERVISOR_MODULE.CONNECTORS.get(vm.get("type"))
             if connector_cls is None:
                 raise RuntimeError("the hypervisor module has no '{}' connector".format(vm.get("type")))
+            close_vm_browse_sessions()
             label = "VM {}{}".format(vm.get("ref"), " ({})".format(vm["name"]) if vm.get("name") else "")
             api_request(config, "/api/agent/progress", method="POST", data={
                 "job_id": job_id, "status_message": "Snapshotting {}...".format(label),
@@ -7278,6 +7420,11 @@ def main():
     # hypervisor_inventory_thread), so it keeps reporting during tasks.
     global HYPERVISOR_MODULE
     hypervisor_module = HYPERVISOR_MODULE = load_hypervisor_module(config)
+    if hypervisor_module is not None and getattr(hypervisor_module, "BROWSER", None) is not None:
+        try:
+            hypervisor_module.BROWSER.cleanup_stale()
+        except Exception as e:
+            logger.warning("Could not clean up old VM browse sessions: {}".format(e))
     if hypervisor_module is not None:
         threading.Thread(target=hypervisor_inventory_thread, args=(config, hypervisor_module),
                          name="hypervisor-inventory", daemon=True).start()
@@ -7337,7 +7484,7 @@ def main():
                             execute_task(config, task)
                         # Refresh burst-poll window when we see a list_dir
                         # task — the user is interactively browsing.
-                        if task.get("task") == "list_dir":
+                        if task.get("task") in ("list_dir", "vm_browse"):
                             burst_until = time.time() + BURST_WINDOW
                     finally:
                         task_running = False

@@ -197,6 +197,8 @@ class HypervisorController extends Controller
                 ORDER BY bj.id DESC LIMIT 15
             ", [$agentId]),
             'canRestore' => $this->hasPermission(PermissionService::RESTORE, $agentId),
+            'canBrowse' => $connector && $connector->can('file_restore')
+                && $this->hasPermission(PermissionService::RESTORE, $agentId),
         ];
     }
 
@@ -284,6 +286,195 @@ class HypervisorController extends Controller
 
         $this->flash('success', 'VM restore queued.');
         $this->redirect($back);
+    }
+
+    /**
+     * The VM restore point a browse request is about, checked: the
+     * hypervisor is visible to the user, the user may restore, the connector
+     * can browse files, and the archive is a VM archive of that hypervisor.
+     * Returns [hypervisor, archive] or sends the error (JSON or redirect).
+     */
+    private function browseContext(int $id, int $archiveId, bool $asJson): array
+    {
+        $fail = function (string $msg, int $code) use ($asJson, $id) {
+            if ($asJson) {
+                $this->json(['error' => $msg], $code);
+            }
+            $this->flash('danger', $msg);
+            $this->redirect($id ? "/hypervisors/{$id}?tab=restore" : '/hypervisors');
+        };
+        $hypervisor = $this->getHypervisor($id);
+        if (!$hypervisor) {
+            $fail('Hypervisor not found.', 404);
+        }
+        $agentId = (int) $hypervisor['agent_id'];
+        if (!$this->hasPermission(PermissionService::RESTORE, $agentId)) {
+            $fail('You do not have permission to restore.', 403);
+        }
+        $connector = HypervisorRegistry::get($hypervisor['type']);
+        if (!$connector || !$connector->can('file_restore')) {
+            $fail('This hypervisor type cannot browse files in VM backups yet.', 400);
+        }
+        $archive = $this->db->fetchOne("
+            SELECT ar.id, ar.vm_ref, ar.archive_name, ar.repository_id, ar.created_at, ar.original_size,
+                   r.name as repo_name
+            FROM archives ar JOIN repositories r ON r.id = ar.repository_id
+            WHERE ar.id = ? AND r.agent_id = ? AND ar.vm_ref IS NOT NULL
+        ", [$archiveId, $agentId]);
+        if (!$archive) {
+            $fail('Restore point not found.', 404);
+        }
+        return [$hypervisor, $archive];
+    }
+
+    /** GET /hypervisors/{id}/browse/{archiveId} - file-level browser of a VM restore point. */
+    public function browse(int $id, int $archiveId): void
+    {
+        $this->requireAuth();
+        [$hypervisor, $archive] = $this->browseContext($id, $archiveId, false);
+        $vm = $this->db->fetchOne(
+            "SELECT name FROM hypervisor_vms WHERE hypervisor_id = ? AND vm_ref = ?",
+            [$id, $archive['vm_ref']]
+        );
+        $this->view('hypervisors/browse', [
+            'pageTitle' => 'Hypervisors',
+            'hypervisor' => $hypervisor,
+            'archive' => $archive,
+            'vmName' => $vm['name'] ?? null,
+        ]);
+    }
+
+    /**
+     * POST /hypervisors/{id}/browse/{archiveId} - queue a vm_browse task.
+     * JSON body: {action: open|list|download, volume, path, paths[]}.
+     * Answers {task_id}; poll /hypervisors/{id}/browse-task/{task_id}.
+     */
+    public function browseRequest(int $id, int $archiveId): void
+    {
+        $this->requireAuth();
+        $this->verifyCsrf();
+        [$hypervisor, $archive] = $this->browseContext($id, $archiveId, true);
+        if (($hypervisor['agent_status'] ?? 'offline') !== 'online') {
+            $this->json(['error' => 'The hypervisor agent is offline.'], 409);
+        }
+
+        $input = json_decode(file_get_contents('php://input'), true) ?: [];
+        $action = (string) ($input['action'] ?? '');
+        if (!in_array($action, ['open', 'list', 'download'], true)) {
+            $this->json(['error' => 'Unknown action.'], 400);
+        }
+        $request = ['action' => $action];
+        if ($action !== 'open') {
+            $volume = (string) ($input['volume'] ?? '');
+            if (!preg_match('/^[A-Za-z0-9_.+-]{1,200}$/', $volume)) {
+                $this->json(['error' => 'Invalid volume.'], 400);
+            }
+            $request['volume'] = $volume;
+        }
+        $validPath = fn($p) => is_string($p) && strlen($p) <= 4096 && !str_contains($p, "\0");
+        if ($action === 'list') {
+            $path = $input['path'] ?? '';
+            if (!$validPath($path)) {
+                $this->json(['error' => 'Invalid path.'], 400);
+            }
+            $request['path'] = $path;
+        }
+        if ($action === 'download') {
+            $paths = $input['paths'] ?? [];
+            if (!is_array($paths) || !$paths || count($paths) > 1000 || count(array_filter($paths, $validPath)) !== count($paths)) {
+                $this->json(['error' => 'Select between 1 and 1000 files or folders.'], 400);
+            }
+            $request['paths'] = array_values($paths);
+            \BBS\Services\Hypervisors\HypervisorBackupService::cleanBrowseDownloads();
+        }
+
+        $jobId = $this->db->insert('backup_jobs', [
+            'agent_id' => (int) $hypervisor['agent_id'],
+            'repository_id' => (int) $archive['repository_id'],
+            'vm_ref' => $archive['vm_ref'],
+            'task_type' => 'vm_browse',
+            'status' => 'queued',
+            'restore_archive_id' => (int) $archive['id'],
+            'restore_options' => json_encode($request),
+        ]);
+        if ($action === 'download') {
+            $this->db->insert('server_log', [
+                'agent_id' => (int) $hypervisor['agent_id'],
+                'backup_job_id' => $jobId,
+                'level' => 'info',
+                'message' => "VM file download requested: VM {$archive['vm_ref']} from \"{$archive['archive_name']}\", "
+                    . count($request['paths']) . " item(s) of volume {$request['volume']}",
+            ]);
+        }
+        $this->json(['status' => 'pending', 'task_id' => $jobId]);
+    }
+
+    /** GET /hypervisors/{id}/browse-task/{jobId} - state and answer of a vm_browse task. */
+    public function browseTask(int $id, int $jobId): void
+    {
+        $this->requireAuth();
+        $hypervisor = $this->getHypervisor($id);
+        if (!$hypervisor || !$this->hasPermission(PermissionService::RESTORE, (int) $hypervisor['agent_id'])) {
+            $this->json(['error' => 'Access denied'], 403);
+        }
+        $job = $this->db->fetchOne(
+            "SELECT id, status, status_message, error_log, task_result, restore_options
+             FROM backup_jobs WHERE id = ? AND agent_id = ? AND task_type = 'vm_browse'",
+            [$jobId, (int) $hypervisor['agent_id']]
+        );
+        if (!$job) {
+            $this->json(['error' => 'Task not found'], 404);
+        }
+        if ($job['status'] === 'failed') {
+            $this->json(['status' => 'failed', 'error' => $job['error_log'] ?: 'The agent could not do it.']);
+        }
+        if ($job['status'] !== 'completed') {
+            $this->json(['status' => 'pending', 'state' => $job['status'], 'message' => $job['status_message']]);
+        }
+        $out = ['status' => 'completed', 'result' => json_decode($job['task_result'] ?? '', true)];
+        $options = json_decode($job['restore_options'] ?? '', true) ?: [];
+        if (($options['action'] ?? '') === 'download') {
+            $out['download_url'] = "/hypervisors/{$id}/browse-download/{$jobId}";
+        }
+        $this->json($out);
+    }
+
+    /** GET /hypervisors/{id}/browse-download/{jobId} - the tar.gz a download task prepared. */
+    public function browseDownload(int $id, int $jobId): void
+    {
+        $this->requireAuth();
+        $hypervisor = $this->getHypervisor($id);
+        if (!$hypervisor || !$this->hasPermission(PermissionService::RESTORE, (int) $hypervisor['agent_id'])) {
+            $this->flash('danger', 'Access denied.');
+            $this->redirect('/hypervisors');
+        }
+        $job = $this->db->fetchOne(
+            "SELECT bj.id, bj.status, bj.vm_ref, bj.restore_options, ar.created_at
+             FROM backup_jobs bj LEFT JOIN archives ar ON ar.id = bj.restore_archive_id
+             WHERE bj.id = ? AND bj.agent_id = ? AND bj.task_type = 'vm_browse'",
+            [$jobId, (int) $hypervisor['agent_id']]
+        );
+        $options = json_decode($job['restore_options'] ?? '', true) ?: [];
+        $path = \BBS\Services\Hypervisors\HypervisorBackupService::browseDownloadPath($jobId);
+        if (!$job || $job['status'] !== 'completed' || ($options['action'] ?? '') !== 'download' || !is_file($path)) {
+            $this->flash('danger', 'This download is not available (it is kept for '
+                . \BBS\Services\Hypervisors\HypervisorBackupService::BROWSE_DOWNLOAD_HOURS . ' hours).');
+            $this->redirect("/hypervisors/{$id}?tab=restore");
+        }
+        $name = sprintf('vm%s-%s-%s.tar.gz',
+            preg_replace('/[^A-Za-z0-9_-]/', '_', (string) $job['vm_ref']),
+            preg_replace('/[^A-Za-z0-9_.+-]/', '_', (string) ($options['volume'] ?? 'files')),
+            $job['created_at'] ? date('Ymd-His', strtotime($job['created_at'])) : $jobId);
+        set_time_limit(0);
+        while (ob_get_level() > 0) {
+            ob_end_clean();
+        }
+        header('Content-Type: application/gzip');
+        header('Content-Disposition: attachment; filename="' . $name . '"');
+        header('Content-Length: ' . filesize($path));
+        header('X-Content-Type-Options: nosniff');
+        readfile($path);
+        exit;
     }
 
     /** Plans, repositories and recent jobs for the Backups tab. */

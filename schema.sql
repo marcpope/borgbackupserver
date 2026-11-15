@@ -350,7 +350,7 @@ CREATE TABLE backup_jobs (
     agent_id INT NOT NULL,
     repository_id INT DEFAULT NULL,
     source_repository_id INT DEFAULT NULL,
-    task_type ENUM('backup', 'backup_dry_run', 'prune', 'restore', 'restore_mysql', 'restore_pg', 'restore_mongo', 'restore_mssql', 'restore_vm', 'check', 'compact', 'update_borg', 'update_agent', 'plugin_test', 'plugin_post', 's3_sync', 'repo_check', 'repo_repair', 'break_lock', 's3_restore', 'catalog_sync', 'catalog_rebuild', 'catalog_rebuild_full', 'archive_delete', 'list_dir', 'archive_lock') NOT NULL DEFAULT 'backup',
+    task_type ENUM('backup', 'backup_dry_run', 'prune', 'restore', 'restore_mysql', 'restore_pg', 'restore_mongo', 'restore_mssql', 'restore_vm', 'check', 'compact', 'update_borg', 'update_agent', 'plugin_test', 'plugin_post', 's3_sync', 'repo_check', 'repo_repair', 'break_lock', 's3_restore', 'catalog_sync', 'catalog_rebuild', 'catalog_rebuild_full', 'archive_delete', 'list_dir', 'archive_lock', 'vm_browse') NOT NULL DEFAULT 'backup',
     plugin_config_id INT DEFAULT NULL,
     -- Frozen at dispatch: what this backup actually ran with (#452)
     directories TEXT DEFAULT NULL,

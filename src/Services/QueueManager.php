@@ -17,11 +17,11 @@ class QueueManager
      */
     public const AGENT_BOUND_TASKS = [
         'backup', 'backup_dry_run', 'restore', 'restore_mysql', 'restore_pg', 'restore_mongo', 'restore_mssql', 'restore_vm',
-        'update_borg', 'update_agent', 'plugin_test', 'plugin_post', 'list_dir',
+        'update_borg', 'update_agent', 'plugin_test', 'plugin_post', 'list_dir', 'vm_browse',
     ];
 
     /** Task types that never touch the repository's storage. */
-    private const STORAGE_FREE_TASKS = ['update_borg', 'update_agent', 'plugin_test', 'plugin_post', 'list_dir', 'break_lock'];
+    private const STORAGE_FREE_TASKS = ['update_borg', 'update_agent', 'plugin_test', 'plugin_post', 'list_dir', 'break_lock', 'vm_browse'];
 
     /** Task types the scheduler runs on the server; agents never run or report them. */
     /**
@@ -536,6 +536,8 @@ class QueueManager
                 $taskPayload = $this->buildRestoreMssqlPayload($job);
             } elseif ($job['task_type'] === 'restore_vm') {
                 $taskPayload = $this->buildRestoreVmPayload($job);
+            } elseif ($job['task_type'] === 'vm_browse') {
+                $taskPayload = $this->buildRestoreVmPayload($job, 'vm_browse');
             } elseif ($job['task_type'] === 'update_borg') {
                 $taskPayload = $this->buildBorgUpdatePayload($job);
             } elseif ($job['task_type'] === 'update_agent') {
@@ -935,8 +937,8 @@ class QueueManager
                 if ($payload) {
                     $tasks[] = $payload;
                 }
-            } elseif ($job['task_type'] === 'restore_vm') {
-                $payload = $this->buildRestoreVmPayload($job);
+            } elseif ($job['task_type'] === 'restore_vm' || $job['task_type'] === 'vm_browse') {
+                $payload = $this->buildRestoreVmPayload($job, $job['task_type']);
                 if ($payload) {
                     $tasks[] = $payload;
                 }
@@ -1088,8 +1090,11 @@ class QueueManager
      * the hypervisor agent. The agent runs the base command below once per
      * file it needs, adding --stdout and the path (manifest, VM config, each
      * disk), and writes the disks straight into new volumes.
+     *
+     * A vm_browse task (file-level browsing) carries the same command, from
+     * which the agent builds its borg mount, and the request in 'browse'.
      */
-    private function buildRestoreVmPayload(array $job): ?array
+    private function buildRestoreVmPayload(array $job, string $task = 'restore_vm'): ?array
     {
         $archive = $this->db->fetchOne("
             SELECT ar.archive_name, ar.vm_ref, r.path as repo_path, r.passphrase_encrypted,
@@ -1103,6 +1108,13 @@ class QueueManager
             LIMIT 1
         ", [$job['restore_archive_id'] ?? 0, $job['agent_id']]);
         if (!$archive || empty($archive['vm_ref'])) {
+            // The restore point was pruned or deleted after the job was
+            // queued: fail it, or it would be re-queued forever
+            $this->db->update('backup_jobs', [
+                'status' => 'failed',
+                'completed_at' => date('Y-m-d H:i:s'),
+                'error_log' => 'The restore point no longer exists (pruned or deleted).',
+            ], "id = ? AND status IN ('queued', 'sent')", [$job['id']]);
             return null;
         }
 
@@ -1119,8 +1131,9 @@ class QueueManager
         }
         $env = BorgCommandBuilder::buildEnv($repo, true, $this->getSshPortForAgent($job['agent_id']), $remoteSshConfig);
 
+        $options = json_decode($job['restore_options'] ?? '{}', true) ?: new \stdClass();
         $payload = [
-            'task' => 'restore_vm',
+            'task' => $task,
             'job_id' => $job['id'],
             'command' => $cmd,
             'env' => $env,
@@ -1129,8 +1142,13 @@ class QueueManager
                 'type' => $archive['hypervisor_type'],
                 'ref' => (string) $archive['vm_ref'],
             ],
-            'restore_options' => json_decode($job['restore_options'] ?? '{}', true) ?: new \stdClass(),
         ];
+        if ($task === 'vm_browse') {
+            $payload['archive_id'] = (int) $job['restore_archive_id'];
+            $payload['browse'] = $options;
+        } else {
+            $payload['restore_options'] = $options;
+        }
         if ($remoteSshConfig) {
             try {
                 $payload['remote_ssh_key'] = Encryption::decrypt($archive['remote_ssh_key_encrypted']);

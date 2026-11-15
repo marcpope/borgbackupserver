@@ -21,23 +21,26 @@ inventory in the common model the server stores:
 VM backup and restore are connector methods too, so adding ESXi or vCenter
 is a new class registered in CONNECTORS.
 
-Run as a script, `bbs-hypervisor.py segfs <spec> <mountpoint>` serves the
-segment filesystem used by changed block tracking (see segfs_serve).
+Run as a script, `bbs-hypervisor.py segfs|imagefs <spec> <mountpoint>`
+serves the segment filesystem of changed block tracking (segfs_serve) or
+the volume images of file-level browsing (imagefs_serve, VmBrowser).
 
 This file is signed like bbs-agent.py (bin/bbs-sign-agent): an agent
 refuses an update of it whose signature does not verify.
 """
+import contextlib
 import json
 import logging
 import os
 import re
 import shutil
+import signal
 import socket
 import subprocess
 import sys
 import time
 
-MODULE_VERSION = "1.3.0"
+MODULE_VERSION = "1.4.0"
 
 IS_WINDOWS = sys.platform == "win32"
 IS_MACOS = sys.platform == "darwin"
@@ -642,11 +645,7 @@ class ProxmoxVmBackup(object):
             if _run(["fusermount", "-u", self.mountpoint], timeout=60, check=False).returncode != 0:
                 _run(["fusermount", "-u", "-z", self.mountpoint], timeout=60, check=False)
         if self.fuse_proc is not None:
-            try:
-                self.fuse_proc.wait(timeout=15)
-            except subprocess.TimeoutExpired:
-                self.fuse_proc.kill()
-                self.fuse_proc.wait()
+            _stop_group(self.fuse_proc)
             self.fuse_proc = None
 
     # -- prepare / cleanup ---------------------------------------------------
@@ -845,30 +844,16 @@ class ProxmoxVmBackup(object):
             self._unlock()
 
 
-def segfs_serve(spec_path, mountpoint):
-    """Read-only FUSE filesystem showing block devices as directories of
-    fixed-size segment files, with the timestamps given in the spec:
+def readonly_fuse(mountpoint, nodes, read, fsname):
+    """Serve a read-only FUSE filesystem until it is unmounted.
 
-        /<disk key>/000000.seg, 000001.seg, ...
-
-    Run in its own process by ProxmoxVmBackup; returns when unmounted.
+    nodes: path ("/", "/a", "/a/b") -> {"dir": bool, "ino": int, "size": int,
+    "ts": ns, "children": [names]} ; read(path, size, offset) -> bytes.
     Talks to libfuse 2 through ctypes, so it needs no Python package; the
-    stat layout below is the x86_64 one (cbt_unavailable() checks the arch)."""
+    stat layout below is the x86_64 one (callers check the arch)."""
     import ctypes
     import errno
     import stat as stat_mod
-
-    with open(spec_path) as f:
-        spec = json.load(f)
-    seg = int(spec["segment_size"])
-    dir_ts = int(spec["ts"])
-    disks = {}
-    for i, d in enumerate(spec["disks"]):
-        disks[d["key"]] = {
-            "index": i, "fd": os.open(d["device"], os.O_RDONLY),
-            "size": int(d["size"]), "ts": [int(t) for t in d["seg_ts"]],
-        }
-    seg_name = re.compile(r"^(\d{6})\.seg$")
 
     class Timespec(ctypes.Structure):
         _fields_ = [("tv_sec", ctypes.c_long), ("tv_nsec", ctypes.c_long)]
@@ -900,23 +885,6 @@ def segfs_serve(spec_path, mountpoint):
     class Operations(ctypes.Structure):
         _fields_ = [(n, types.get(n, ctypes.c_void_p)) for n in names]
 
-    def lookup(path):
-        parts = [p for p in path.decode("utf-8", errors="replace").split("/") if p]
-        if not parts:
-            return ("root", None, None)
-        d = disks.get(parts[0])
-        if d is None or len(parts) > 2:
-            return None
-        if len(parts) == 1:
-            return ("dir", d, None)
-        m = seg_name.match(parts[1])
-        if not m or int(m.group(1)) >= len(d["ts"]):
-            return None
-        return ("seg", d, int(m.group(1)))
-
-    def seg_len(d, idx):
-        return min(seg, d["size"] - idx * seg)
-
     def guarded(fn):
         def wrapper(*args):
             try:
@@ -931,79 +899,63 @@ def segfs_serve(spec_path, mountpoint):
         field.tv_sec = ts // 10 ** 9
         field.tv_nsec = ts % 10 ** 9
 
+    def node_of(path):
+        return nodes.get(path.decode("utf-8", errors="replace"))
+
     @guarded
     def op_getattr(path, st_p):
-        node = lookup(path)
+        node = node_of(path)
         if node is None:
             return -errno.ENOENT
         ctypes.memset(st_p, 0, ctypes.sizeof(Stat))
         st = st_p.contents
-        kind, d, idx = node
-        ts = dir_ts
-        if kind == "root":
-            st.st_mode, st.st_nlink, st.st_ino = stat_mod.S_IFDIR | 0o500, 2 + len(disks), 1
-        elif kind == "dir":
-            st.st_mode, st.st_nlink, st.st_ino = stat_mod.S_IFDIR | 0o500, 2, 2 + d["index"]
+        if node["dir"]:
+            st.st_mode, st.st_nlink = stat_mod.S_IFDIR | 0o500, 2
         else:
-            size = seg_len(d, idx)
             st.st_mode, st.st_nlink = stat_mod.S_IFREG | 0o400, 1
-            st.st_ino = ((d["index"] + 1) << 32) | idx
-            st.st_size = size
-            st.st_blocks = (size + 511) // 512
-            ts = d["ts"][idx]
+            st.st_size = node["size"]
+            st.st_blocks = (node["size"] + 511) // 512
+        st.st_ino = node["ino"]
         st.st_blksize = 65536
-        set_time(ts, st.st_atim)
-        set_time(ts, st.st_mtim)
-        set_time(ts, st.st_ctim)
+        set_time(node["ts"], st.st_atim)
+        set_time(node["ts"], st.st_mtim)
+        set_time(node["ts"], st.st_ctim)
         return 0
 
     @guarded
     def op_open(path, fi):
-        node = lookup(path)
+        node = node_of(path)
         if node is None:
             return -errno.ENOENT
-        if node[0] != "seg":
+        if node["dir"]:
             return -errno.EISDIR
-        flags = ctypes.cast(fi, ctypes.POINTER(ctypes.c_int))[0]
-        if flags & os.O_ACCMODE != os.O_RDONLY:
+        if ctypes.cast(fi, ctypes.POINTER(ctypes.c_int))[0] & os.O_ACCMODE != os.O_RDONLY:
             return -errno.EROFS
         return 0
 
     @guarded
     def op_read(path, buf, size, offset, fi):
-        node = lookup(path)
-        if node is None or node[0] != "seg":
+        node = node_of(path)
+        if node is None or node["dir"]:
             return -errno.ENOENT
-        kind, d, idx = node
-        length = seg_len(d, idx)
-        if offset >= length:
+        if offset >= node["size"]:
             return 0
-        want = min(size, length - offset)
-        pos = idx * seg + offset
-        got = 0
-        while got < want:
-            data = os.pread(d["fd"], want - got, pos + got)
-            if not data:
-                return -errno.EIO  # the device is shorter than it said
-            ctypes.memmove(buf + got, data, len(data))
-            got += len(data)
-        return got
+        want = min(size, node["size"] - offset)
+        data = read(path.decode("utf-8", errors="replace"), want, offset)
+        if len(data) != want:
+            return -errno.EIO  # the source is shorter than it said
+        ctypes.memmove(buf, data, want)
+        return want
 
     @guarded
     def op_readdir(path, buf, filler, offset, fi):
-        node = lookup(path)
+        node = node_of(path)
         if node is None:
             return -errno.ENOENT
-        if node[0] == "seg":
+        if not node["dir"]:
             return -errno.ENOTDIR
-        for name in (".", ".."):
-            filler(buf, name.encode(), None, 0)
-        if node[0] == "root":
-            for key in sorted(disks):
-                filler(buf, key.encode("utf-8"), None, 0)
-        else:
-            for i in range(len(node[1]["ts"])):
-                filler(buf, "{:06d}.seg".format(i).encode(), None, 0)
+        for name in [".", ".."] + node["children"]:
+            filler(buf, name.encode("utf-8"), None, 0)
         return 0
 
     ops = Operations()
@@ -1016,10 +968,936 @@ def segfs_serve(spec_path, mountpoint):
     lib.fuse_main_real.argtypes = [ctypes.c_int, ctypes.POINTER(ctypes.c_char_p), ctypes.POINTER(Operations),
                                    ctypes.c_size_t, ctypes.c_void_p]
     lib.fuse_main_real.restype = ctypes.c_int
-    args = [b"bbs-segfs", mountpoint.encode(), b"-f", b"-s", b"-o",
-            b"ro,use_ino,fsname=bbs-segfs,subtype=bbs-segfs,kernel_cache,entry_timeout=86400,attr_timeout=86400"]
+    args = [b"bbs-" + fsname.encode(), mountpoint.encode(), b"-f", b"-s", b"-o",
+            b"ro,use_ino,fsname=bbs-" + fsname.encode() + b",subtype=bbs-" + fsname.encode()
+            + b",kernel_cache,entry_timeout=86400,attr_timeout=86400"]
     argv = (ctypes.c_char_p * len(args))(*args)
     return lib.fuse_main_real(len(args), argv, ctypes.byref(ops), ctypes.sizeof(ops), None)
+
+
+def _pread_full(fd, size, offset):
+    parts = []
+    while size > 0:
+        data = os.pread(fd, size, offset)
+        if not data:
+            break
+        parts.append(data)
+        size -= len(data)
+        offset += len(data)
+    return b"".join(parts)
+
+
+def segfs_serve(spec_path, mountpoint):
+    """Block devices shown as directories of fixed-size segment files with
+    the timestamps given in the spec (changed block tracking, see
+    ProxmoxVmBackup):  /<disk key>/000000.seg, 000001.seg, ..."""
+    with open(spec_path) as f:
+        spec = json.load(f)
+    seg = int(spec["segment_size"])
+    ts = int(spec["ts"])
+    nodes = {"/": {"dir": True, "ino": 1, "size": 0, "ts": ts, "children": []}}
+    fds = {}
+    for i, d in enumerate(spec["disks"]):
+        key, size = d["key"], int(d["size"])
+        fds[key] = os.open(d["device"], os.O_RDONLY)
+        names = []
+        for idx, t in enumerate(d["seg_ts"]):
+            name = "{:06d}.seg".format(idx)
+            names.append(name)
+            nodes["/{}/{}".format(key, name)] = {
+                "dir": False, "ino": ((i + 1) << 32) | idx, "size": min(seg, size - idx * seg),
+                "ts": int(t), "key": key, "start": idx * seg,
+            }
+        nodes["/" + key] = {"dir": True, "ino": 2 + i, "size": 0, "ts": ts, "children": names}
+        nodes["/"]["children"].append(key)
+
+    def read(path, size, offset):
+        node = nodes[path]
+        return _pread_full(fds[node["key"]], size, node["start"] + offset)
+
+    return readonly_fuse(mountpoint, nodes, read, "segfs")
+
+
+def imagefs_serve(spec_path, mountpoint):
+    """Volumes of a VM backup shown as image files, /<volume id>.img, for
+    file-level browsing. A volume is a list of extents of the VM's disks
+    (a partition is one, a logical volume one or more); a disk is a list of
+    files of the mounted archive (one image, or its segments)."""
+    with open(spec_path) as f:
+        spec = json.load(f)
+    disks = {}
+    for key, parts in spec["disks"].items():
+        starts, pos = [], 0
+        for path, size in parts:
+            starts.append((pos, int(size), path))
+            pos += int(size)
+        disks[key] = starts
+    nodes = {"/": {"dir": True, "ino": 1, "size": 0, "ts": int(spec["ts"]), "children": []}}
+    for i, (vid, vol) in enumerate(sorted(spec["volumes"].items())):
+        name = vid + ".img"
+        nodes["/" + name] = {"dir": False, "ino": 2 + i, "size": int(vol["size"]), "ts": int(spec["ts"]),
+                             "extents": [[int(a), int(b), k, int(c)] for a, b, k, c in vol["extents"]]}
+        nodes["/"]["children"].append(name)
+
+    fd_cache = {}  # path -> fd, a few at a time (a disk can have thousands of segments)
+
+    def fd_of(path):
+        fd = fd_cache.pop(path, None)
+        if fd is None:
+            fd = os.open(path, os.O_RDONLY)
+            if len(fd_cache) >= 64:
+                old = next(iter(fd_cache))
+                os.close(fd_cache.pop(old))
+        fd_cache[path] = fd  # most recently used last
+        return fd
+
+    def read_disk(key, size, offset):
+        out = []
+        for start, length, path in disks[key]:
+            if size <= 0:
+                break
+            if offset >= start + length or offset + size <= start:
+                continue
+            n = min(size, start + length - offset)
+            data = _pread_full(fd_of(path), n, offset - start)
+            if len(data) != n:
+                raise IOError("short read from {}".format(path))
+            out.append(data)
+            offset += n
+            size -= n
+        if size > 0:
+            raise IOError("read past the end of disk {}".format(key))
+        return b"".join(out)
+
+    def read(path, size, offset):
+        out = []
+        for vstart, length, key, dstart in nodes[path]["extents"]:
+            if size <= 0:
+                break
+            if offset >= vstart + length or offset + size <= vstart:
+                continue
+            n = min(size, vstart + length - offset)
+            out.append(read_disk(key, n, dstart + offset - vstart))
+            offset += n
+            size -= n
+        return b"".join(out)
+
+    return readonly_fuse(mountpoint, nodes, read, "imagefs")
+
+
+# -- partition tables, LVM, filesystem probing (file-level browsing) ---------
+
+SECTOR = 512
+
+MBR_TYPES = {
+    0x01: "FAT12", 0x04: "FAT16", 0x05: "Extended", 0x06: "FAT16", 0x07: "NTFS / exFAT", 0x0B: "FAT32",
+    0x0C: "FAT32", 0x0E: "FAT16", 0x0F: "Extended", 0x27: "Windows recovery", 0x82: "Linux swap",
+    0x83: "Linux", 0x85: "Linux extended", 0x8E: "Linux LVM", 0xEE: "GPT protective", 0xEF: "EFI system",
+    0xFD: "Linux RAID",
+}
+MBR_EXTENDED = (0x05, 0x0F, 0x85)
+
+GPT_TYPES = {
+    "C12A7328-F81F-11D2-BA4B-00A0C93EC93B": "EFI system",
+    "21686148-6449-6E6F-744E-656564454649": "BIOS boot",
+    "0FC63DAF-8483-4772-8E79-3D69D8477DE4": "Linux filesystem",
+    "E6D6D379-F507-44C2-A23C-238F2A3DF928": "Linux LVM",
+    "0657FD6D-A4AB-43C4-84E5-0933C84B4F4F": "Linux swap",
+    "A19D880F-05FC-4D3B-A006-743F0F84911E": "Linux RAID",
+    "4F68BCE3-E8CD-4DB1-96E7-FBCAF984B709": "Linux root (x86-64)",
+    "933AC7E1-2EB4-4F13-B844-0E14E2AEF915": "Linux home",
+    "BC13C2FF-59E6-4262-A352-B275FD6F7172": "Linux /boot",
+    "EBD0A0A2-B9E5-4433-87C0-68B6B72699C7": "Microsoft basic data",
+    "E3C9E316-0B5C-4DB8-817D-F92DF00215AE": "Microsoft reserved",
+    "DE94BBA4-06D1-4D40-A16A-BFD50179D6AC": "Windows recovery",
+}
+
+
+def _guid(raw):
+    import uuid
+    return str(uuid.UUID(bytes_le=raw)).upper()
+
+
+def parse_partition_table(read, disk_size):
+    """(scheme, partitions) of a disk; scheme is "gpt", "dos" or None.
+    partition: number, start, size, type, extended, logical, name."""
+    import struct
+    mbr = read(0, SECTOR)
+    if len(mbr) < SECTOR or mbr[510:512] != b"\x55\xaa":
+        return None, []
+    entries = []
+    for i in range(4):
+        e = mbr[446 + 16 * i: 462 + 16 * i]
+        ptype = e[4]
+        lba, count = struct.unpack("<II", e[8:16])
+        if ptype and count:
+            entries.append((i + 1, ptype, lba, count))
+    if not entries:
+        # A filesystem boot sector (FAT, NTFS) also ends with 55 AA
+        return None, []
+    if any(t == 0xEE for _, t, _, _ in entries):
+        return "gpt", _parse_gpt(read, disk_size)
+
+    parts = []
+    for number, ptype, lba, count in entries:
+        ext = ptype in MBR_EXTENDED
+        parts.append({"number": number, "start": lba * SECTOR, "size": count * SECTOR,
+                      "type": MBR_TYPES.get(ptype, "type 0x{:02x}".format(ptype)),
+                      "extended": ext, "logical": False, "name": ""})
+        if ext:
+            # Chain of extended boot records: each holds one logical partition
+            # (relative to itself) and the link to the next (relative to the
+            # extended partition)
+            ext_start = lba
+            ebr = lba
+            nr = 5
+            seen = set()
+            while ebr and ebr not in seen and nr < 128:
+                seen.add(ebr)
+                sec = read(ebr * SECTOR, SECTOR)
+                if len(sec) < SECTOR or sec[510:512] != b"\x55\xaa":
+                    break
+                t1 = sec[446 + 4]
+                l1, c1 = struct.unpack("<II", sec[446 + 8:446 + 16])
+                if t1 and c1:
+                    parts.append({"number": nr, "start": (ebr + l1) * SECTOR, "size": c1 * SECTOR,
+                                  "type": MBR_TYPES.get(t1, "type 0x{:02x}".format(t1)),
+                                  "extended": False, "logical": True, "name": ""})
+                    nr += 1
+                l2, c2 = struct.unpack("<II", sec[462 + 8:462 + 16])
+                ebr = ext_start + l2 if (sec[462 + 4] and c2) else 0
+    return "dos", parts
+
+
+def _parse_gpt(read, disk_size):
+    import struct
+    hdr = read(SECTOR, SECTOR)
+    if hdr[0:8] != b"EFI PART":
+        # Primary header lost: the backup one is in the last sector
+        hdr = read(disk_size - SECTOR, SECTOR)
+        if hdr[0:8] != b"EFI PART":
+            return []
+    entries_lba, = struct.unpack("<Q", hdr[72:80])
+    count, size = struct.unpack("<II", hdr[80:88])
+    count = min(count, 256)
+    if size < 128 or size > 4096:
+        return []
+    table = read(entries_lba * SECTOR, count * size)
+    parts = []
+    for i in range(count):
+        e = table[i * size:(i + 1) * size]
+        if len(e) < 128 or e[0:16] == b"\x00" * 16:
+            continue
+        first, last = struct.unpack("<QQ", e[32:48])
+        type_guid = _guid(e[0:16])
+        name = e[56:128].decode("utf-16-le", errors="replace").split("\x00")[0]
+        parts.append({"number": i + 1, "start": first * SECTOR, "size": (last - first + 1) * SECTOR,
+                      "type": GPT_TYPES.get(type_guid, type_guid), "extended": False, "logical": False,
+                      "name": name})
+    return parts
+
+
+def probe_content(read, size):
+    """{"fs": ..., "label": ...} of a volume, from its magic numbers; fs is
+    None when unknown. Browsable kinds are in BROWSABLE_FS."""
+    def at(off, n):
+        if off + n > size:
+            return b""
+        return read(off, n)
+
+    def text(raw):
+        return raw.split(b"\x00")[0].decode("utf-8", errors="replace").strip()
+
+    head = at(0, 4096)
+    for i in range(4):
+        sec = head[i * SECTOR:(i + 1) * SECTOR]
+        if sec[0:8] == b"LABELONE" and sec[24:32] == b"LVM2 001":
+            return {"fs": "LVM2_member", "label": ""}
+    if head[0:6] == b"LUKS\xba\xbe":
+        return {"fs": "crypto_LUKS", "label": ""}
+    if head[0:4] == b"XFSB":
+        return {"fs": "xfs", "label": text(head[108:120])}
+    if head[3:11] == b"NTFS    ":
+        return {"fs": "ntfs", "label": ""}
+    if head[3:11] == b"EXFAT   ":
+        return {"fs": "exfat", "label": ""}
+    if head[510:512] == b"\x55\xaa" and (head[82:87] == b"FAT32" or head[54:59] in (b"FAT12", b"FAT16")):
+        label = text(head[71:82]) if head[82:87] == b"FAT32" else text(head[43:54])
+        return {"fs": "vfat", "label": "" if label == "NO NAME" else label}
+    sb = at(1024, 1024)
+    if sb[56:58] == b"\x53\xef":
+        import struct
+        compat, incompat, ro_compat = struct.unpack("<III", sb[92:104])
+        fs = "ext4" if (incompat & 0x2C0 or ro_compat & 0x8) else ("ext3" if compat & 0x4 else "ext2")
+        return {"fs": fs, "label": text(sb[120:136])}
+    btr = at(65536, 4096)
+    if btr[64:72] == b"_BHRfS_M":
+        return {"fs": "btrfs", "label": text(btr[0x12b:0x12b + 256])}
+    for page in (4096, 8192, 16384, 65536):
+        if at(page - 10, 10) in (b"SWAPSPACE2", b"SWAP-SPACE"):
+            return {"fs": "swap", "label": ""}
+    return {"fs": None, "label": ""}
+
+
+# Filesystems the browser mounts, and the read-only options that keep the
+# kernel from writing anything (no journal replay) or trusting the content
+BROWSABLE_FS = {
+    "ext2": ("ext2", "ro,noload"), "ext3": ("ext3", "ro,noload"), "ext4": ("ext4", "ro,noload"),
+    "xfs": ("xfs", "ro,norecovery,nouuid"),
+    "btrfs": ("btrfs", "ro,rescue=nologreplay"),
+    "ntfs": ("ntfs3", "ro"),
+    "vfat": ("vfat", "ro"),
+    "exfat": ("exfat", "ro"),
+}
+
+
+def _lvm_text_parse(text):
+    """LVM2 text metadata (the VG description) as nested dicts."""
+    tokens = re.findall(r'"(?:\\.|[^"\\])*"|[A-Za-z0-9_.+-]+|[{}\[\]=,]|#[^\n]*', text)
+    tokens = [t for t in tokens if not t.startswith("#")]
+    pos = [0]
+
+    def value():
+        t = tokens[pos[0]]
+        pos[0] += 1
+        if t == "[":
+            items = []
+            while tokens[pos[0]] != "]":
+                if tokens[pos[0]] == ",":
+                    pos[0] += 1
+                    continue
+                items.append(value())
+            pos[0] += 1
+            return items
+        if t.startswith('"'):
+            return t[1:-1].replace('\\"', '"').replace("\\\\", "\\")
+        try:
+            return int(t)
+        except ValueError:
+            return t
+
+    def block(end):
+        out = {}
+        while pos[0] < len(tokens) and tokens[pos[0]] != end:
+            name = tokens[pos[0]]
+            nxt = tokens[pos[0] + 1] if pos[0] + 1 < len(tokens) else None
+            if nxt == "{":
+                pos[0] += 2
+                out[name] = block("}")
+                pos[0] += 1
+            elif nxt == "=":
+                pos[0] += 2
+                out[name] = value()
+            else:
+                pos[0] += 1
+        return out
+
+    return block(None)
+
+
+def read_lvm_pv(read, size):
+    """(pv_uuid, vg_name, vg_metadata) of an LVM2 physical volume, or None."""
+    import struct
+    head = read(0, 4 * SECTOR)
+    for i in range(4):
+        sec = head[i * SECTOR:(i + 1) * SECTOR]
+        if sec[0:8] == b"LABELONE" and sec[24:32] == b"LVM2 001":
+            break
+    else:
+        return None
+    offset_xl, = struct.unpack("<I", sec[20:24])
+    pvh = read(i * SECTOR + offset_xl, SECTOR)
+    pv_uuid = pvh[0:32].decode("ascii", errors="replace")
+    pos = 40
+    areas = [[], []]  # data areas, then metadata areas, each list ends with a zero entry
+    for which in (0, 1):
+        while pos + 16 <= len(pvh):
+            off, sz = struct.unpack("<QQ", pvh[pos:pos + 16])
+            pos += 16
+            if off == 0 and sz == 0:
+                break
+            areas[which].append((off, sz))
+    for mda_off, mda_size in areas[1]:
+        mh = read(mda_off, SECTOR)
+        if mh[4:20] != b" LVM2 x[5A%r0N*>":
+            continue
+        rl_off, rl_size = struct.unpack("<QQ", mh[40:56])
+        if not rl_size:
+            continue
+        if rl_off + rl_size <= mda_size:
+            raw = read(mda_off + rl_off, rl_size)
+        else:  # the text wraps around the circular buffer
+            first = mda_size - rl_off
+            raw = read(mda_off + rl_off, first) + read(mda_off + SECTOR, rl_size - first)
+        meta = _lvm_text_parse(raw.decode("utf-8", errors="replace").rstrip("\x00"))
+        for name, vg in meta.items():
+            if isinstance(vg, dict) and "physical_volumes" in vg:
+                return pv_uuid, name, vg
+    return None
+
+
+class VmBrowseSession(object):
+    """One VM archive opened for file-level browsing on this node:
+
+      WORK/borg      borg mount of the archive (borg mount -f, our child)
+      WORK/img       imagefs: one image file per volume (partition, LV...)
+      WORK/vol/<id>  each browsable filesystem, mounted read-only from a
+                     read-only loop device on its image
+
+    Partition tables and LVM metadata are read here, in Python: the guest's
+    LVM physical volumes are never exposed as block devices, so the host's
+    LVM never sees (or auto-activates) the guest's volume groups."""
+
+    def __init__(self, root, archive_key, ref):
+        self.root = root
+        self.key = archive_key
+        self.ref = str(ref)
+        self.work = os.path.join(root, "a" + re.sub(r"[^0-9A-Za-z_-]", "_", str(archive_key)))
+        self.borg_mnt = os.path.join(self.work, "borg")
+        self.img_mnt = os.path.join(self.work, "img")
+        self.vol_root = os.path.join(self.work, "vol")
+        self.borg_proc = None
+        self.img_proc = None
+        self.loops = []
+        self.mounts = {}  # volume id -> mount path
+        self.structure = None
+        self.last_used = time.time()
+        self.busy = 0
+
+    # -- open -----------------------------------------------------------------
+
+    def open(self, borg_mount_cmd, env, log=None):
+        os.makedirs(self.borg_mnt, mode=0o700)
+        errlog = open(os.path.join(self.work, "borg-mount.log"), "wb")
+        self.borg_proc = subprocess.Popen(borg_mount_cmd + [self.borg_mnt], env=env, stdin=subprocess.DEVNULL,
+                                          stdout=subprocess.DEVNULL, stderr=errlog, start_new_session=True)
+        errlog.close()
+        self._wait_mount(self.borg_mnt, self.borg_proc, "borg-mount.log", 900)
+        base = os.path.join(self.borg_mnt, "vm-" + self.ref)
+        with open(os.path.join(base, "bbs-vm.json")) as f:
+            manifest = json.load(f)
+
+        # Disks: the image file(s) of each one in the borg mount
+        disk_parts = {}
+        disks = []
+        for d in manifest.get("disks") or []:
+            key = d.get("key", "")
+            if not re.match(r"^[A-Za-z0-9_-]+$", key):
+                continue
+            size = int(d.get("size_bytes") or 0)
+            if d.get("layout") == "segments":
+                seg = int(d["segment_size"])
+                folder = os.path.join(base, d["dir"])
+                parts = [[os.path.join(folder, "{:06d}.seg".format(i)), min(seg, size - i * seg)]
+                         for i in range(int(d["segments"]))]
+            else:
+                parts = [[os.path.join(base, d["file"]), size]]
+            disk_parts[key] = parts
+            disks.append({"key": key, "size": size, "kind": d.get("kind", "disk")})
+
+        readers = {k: self._disk_reader(p) for k, p in disk_parts.items()}
+        volumes = {}  # id -> {"size", "extents", "title", "fs", "label", ...}
+        pvs = {}  # pv uuid -> (vg name, vg meta, disk key, byte offset of the PV)
+        out_disks = []
+        for d in disks:
+            key, size = d["key"], d["size"]
+            read = readers[key]
+            scheme, parts = parse_partition_table(read, size)
+            entry = {"key": key, "size": size, "kind": d["kind"], "table": scheme, "partitions": []}
+            if not parts:
+                parts = [{"number": 0, "start": 0, "size": size, "type": "whole disk", "extended": False,
+                          "logical": False, "name": ""}]
+            for p in parts:
+                pid = "{}-p{}".format(key, p["number"]) if p["number"] else key
+                p = dict(p, id=pid)
+                if not p["extended"] and p["size"] > 0:
+                    sub = (lambda off, n, s=p["start"], r=read: r(s + off, n))
+                    content = probe_content(sub, p["size"])
+                    p.update(content)
+                    if content["fs"] == "LVM2_member":
+                        info = read_lvm_pv(sub, p["size"])
+                        if info:
+                            pvs[info[0]] = (info[1], info[2], key, p["start"])
+                            p["vg"] = info[1]
+                    volumes[pid] = {"size": p["size"], "extents": [[0, p["size"], key, p["start"]]],
+                                    "fs": content["fs"], "label": content["label"],
+                                    "title": "{} partition {}".format(key, p["number"]) if p["number"] else key}
+                entry["partitions"].append(p)
+            out_disks.append(entry)
+
+        vgs = self._volume_groups(pvs, readers, volumes)
+        self.structure = {"vm": {k: manifest.get(k) for k in ("vmid", "name", "created_at", "guest_frozen", "node")},
+                          "disks": out_disks, "volume_groups": vgs, "volumes": {}}
+
+        # Serve every volume as an image file, then mount the browsable ones
+        spec_path = os.path.join(self.work, "imagefs.json")
+        with open(spec_path, "w") as f:
+            json.dump({"ts": time.time_ns(), "disks": disk_parts,
+                       "volumes": {vid: {"size": v["size"], "extents": v["extents"]} for vid, v in volumes.items()}}, f)
+        os.makedirs(self.img_mnt, mode=0o700)
+        errlog = open(os.path.join(self.work, "imagefs.log"), "wb")
+        self.img_proc = subprocess.Popen(
+            [sys.executable, os.path.abspath(__file__), "imagefs", spec_path, self.img_mnt],
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=errlog, start_new_session=True)
+        errlog.close()
+        self._wait_mount(self.img_mnt, self.img_proc, "imagefs.log", 30)
+
+        for vid, v in sorted(volumes.items()):
+            info = {"title": v["title"], "size": v["size"], "fs": v["fs"], "label": v["label"],
+                    "browsable": False, "error": None}
+            if v["fs"] in BROWSABLE_FS:
+                try:
+                    self._mount_volume(vid, v["fs"])
+                    info["browsable"] = True
+                except Exception as e:
+                    info["error"] = str(e)[:300]
+            elif v["fs"] == "LVM2_member":
+                info["error"] = "LVM physical volume: browse its logical volumes"
+            elif v["fs"] == "swap":
+                info["error"] = "swap space, no files"
+            elif v["fs"] == "crypto_LUKS":
+                info["error"] = "encrypted (LUKS), not supported"
+            elif v.get("unsupported"):
+                info["error"] = v["unsupported"]
+            else:
+                info["error"] = "no filesystem recognised"
+            self.structure["volumes"][vid] = info
+        return self.structure
+
+    def _wait_mount(self, path, proc, logname, timeout):
+        deadline = time.time() + timeout
+        while not os.path.ismount(path):
+            if proc.poll() is not None or time.time() > deadline:
+                try:
+                    with open(os.path.join(self.work, logname), "rb") as f:
+                        err = f.read()[-600:].decode("utf-8", errors="replace").strip()
+                except OSError:
+                    err = ""
+                raise RuntimeError("mount of {} failed: {}".format(os.path.basename(path), err or "timeout"))
+            time.sleep(0.2)
+
+    @staticmethod
+    def _disk_reader(parts):
+        """read(offset, size) over the files of one disk in the borg mount."""
+        starts, pos = [], 0
+        for path, size in parts:
+            starts.append((pos, size, path))
+            pos += size
+        handles = {}
+
+        def read(offset, size):
+            out = []
+            for start, length, path in starts:
+                if size <= 0:
+                    break
+                if offset >= start + length or offset + size <= start:
+                    continue
+                n = min(size, start + length - offset)
+                if path not in handles:
+                    if len(handles) > 32:
+                        os.close(handles.pop(next(iter(handles))))
+                    handles[path] = os.open(path, os.O_RDONLY)
+                out.append(_pread_full(handles[path], n, offset - start))
+                offset += n
+                size -= n
+            return b"".join(out)
+        return read
+
+    def _volume_groups(self, pvs, readers, volumes):
+        """Logical volumes of the volume groups whose PVs are all here, as
+        volumes (extents on the disks); linear ones only."""
+        groups = {}
+        for pv_uuid, (vg_name, meta, key, pv_start) in pvs.items():
+            groups.setdefault(vg_name, {"meta": meta, "pvs": {}})["pvs"][pv_uuid] = (key, pv_start)
+        out = []
+        for vg_name, g in sorted(groups.items()):
+            meta = g["meta"]
+            extent = int(meta.get("extent_size", 0)) * SECTOR
+            pv_names = {}
+            missing = []
+            for pv_name, pv in (meta.get("physical_volumes") or {}).items():
+                uid = str(pv.get("id", "")).replace("-", "")
+                if uid in g["pvs"]:
+                    key, start = g["pvs"][uid]
+                    pv_names[pv_name] = (key, start + int(pv.get("pe_start", 0)) * SECTOR)
+                else:
+                    missing.append(pv_name)
+            lvs = []
+            for lv_name, lv in sorted((meta.get("logical_volumes") or {}).items()):
+                if not isinstance(lv, dict) or "VISIBLE" not in (lv.get("status") or []):
+                    continue
+                vid = "lvm-{}-{}".format(re.sub(r"[^A-Za-z0-9_.+-]", "_", vg_name), lv_name)
+                extents, size, reason = [], 0, None
+                for s in range(1, int(lv.get("segment_count", 0)) + 1):
+                    seg = lv.get("segment{}".format(s)) or {}
+                    count = int(seg.get("extent_count", 0)) * extent
+                    stripes = seg.get("stripes") or []
+                    if seg.get("type") != "striped" or int(seg.get("stripe_count", 0)) != 1 or len(stripes) != 2:
+                        reason = "{} logical volume, not supported".format(seg.get("type", "?"))
+                        break
+                    if stripes[0] not in pv_names:
+                        reason = "a physical volume of {} is missing from the backup".format(vg_name)
+                        break
+                    key, pe0 = pv_names[stripes[0]]
+                    extents.append([int(seg.get("start_extent", 0)) * extent, count, key, pe0 + int(stripes[1]) * extent])
+                    size += count
+                entry = {"name": lv_name, "id": vid, "size": size}
+                if reason is None and extents:
+                    def sub(off, n, e=extents):
+                        # Probing reads only the first few KiB: first extent
+                        for vstart, length, k, dstart in e:
+                            if vstart <= off < vstart + length:
+                                return readers[k](dstart + off - vstart, min(n, vstart + length - off))
+                        return b""
+                    content = probe_content(sub, size)
+                    entry.update(content)
+                    volumes[vid] = {"size": size, "extents": extents, "fs": content["fs"], "label": content["label"],
+                                    "title": "{}/{}".format(vg_name, lv_name)}
+                else:
+                    entry.update(fs=None, label="", unsupported=reason or "empty")
+                lvs.append(entry)
+            out.append({"name": vg_name, "missing_pvs": missing, "lvs": lvs})
+        return out
+
+    def _mount_volume(self, vid, fs):
+        fstype, opts = BROWSABLE_FS[fs]
+        image = os.path.join(self.img_mnt, vid + ".img")
+        loop = _run(["losetup", "--find", "--show", "--read-only", image], timeout=60).stdout.decode().strip()
+        self.loops.append(loop)
+        _loop_record(loop, vid + ".img", True)
+        target = os.path.join(self.vol_root, vid)
+        os.makedirs(target, mode=0o700, exist_ok=True)
+        _run(["mount", "-t", fstype, "-o", opts + ",nodev,nosuid,noexec", loop, target], timeout=300)
+        self.mounts[vid] = target
+
+    # -- browse -------------------------------------------------------------
+
+    def resolve(self, vid, path):
+        """Absolute path of `path` inside volume `vid`; refuses to leave it
+        (.., or a symlink of the guest pointing elsewhere)."""
+        root = self.mounts.get(vid)
+        if root is None:
+            raise RuntimeError("volume {} is not browsable".format(vid))
+        rel = "/".join(p for p in str(path or "").split("/") if p not in ("", "."))
+        if any(p == ".." for p in rel.split("/")):
+            raise RuntimeError("invalid path")
+        full = os.path.join(root, rel) if rel else root
+        real = os.path.realpath(full)
+        if real != root and not real.startswith(root + "/"):
+            raise RuntimeError("{} leads outside the volume".format(path))
+        return full, rel
+
+    def list(self, vid, path, limit=5000):
+        import stat as stat_mod
+        full, rel = self.resolve(vid, path)
+        if not os.path.isdir(full) or os.path.islink(full):
+            raise RuntimeError("{} is not a directory".format(path or "/"))
+        entries = []
+        truncated = False
+        with os.scandir(full) as it:
+            for e in it:
+                if len(entries) >= limit:
+                    truncated = True
+                    break
+                try:
+                    st = e.stat(follow_symlinks=False)
+                except OSError:
+                    continue
+                if stat_mod.S_ISDIR(st.st_mode):
+                    kind = "d"
+                elif stat_mod.S_ISREG(st.st_mode):
+                    kind = "f"
+                elif stat_mod.S_ISLNK(st.st_mode):
+                    kind = "l"
+                else:
+                    kind = "o"
+                item = {"name": e.name, "type": kind, "size": st.st_size if kind == "f" else None,
+                        "mtime": int(st.st_mtime), "mode": stat_mod.filemode(st.st_mode)}
+                if kind == "l":
+                    try:
+                        item["target"] = os.readlink(e.path)
+                    except OSError:
+                        pass
+                entries.append(item)
+        entries.sort(key=lambda x: (x["type"] != "d", x["name"].lower()))
+        return {"volume": vid, "path": rel, "entries": entries, "truncated": truncated}
+
+    def download(self, vid, paths, sink):
+        """Write a tar.gz of the selected paths of a volume to sink (a file
+        object). Symlinks are stored as links, never followed."""
+        import tarfile
+        members = []
+        for p in paths[:1000]:
+            full, rel = self.resolve(vid, p)
+            if not rel:
+                rel = "."
+            members.append((full, rel))
+        if not members:
+            raise RuntimeError("nothing selected")
+        count = [0]
+
+        def track(info):
+            count[0] += 1
+            return info
+        with tarfile.open(fileobj=sink, mode="w|gz", format=tarfile.PAX_FORMAT) as tar:
+            for full, rel in members:
+                tar.add(full, arcname=rel, recursive=True, filter=track)
+        return count[0]
+
+    # -- close ----------------------------------------------------------------
+
+    def close(self):
+        for vid, target in list(self.mounts.items()):
+            if _run(["umount", target], timeout=120, check=False).returncode != 0:
+                _run(["umount", "-l", target], timeout=60, check=False)
+        self.mounts = {}
+        for loop in self.loops:
+            _run(["losetup", "-d", loop], timeout=60, check=False)
+            _loop_record(loop, None, False)
+        self.loops = []
+        for mnt, proc in ((self.img_mnt, self.img_proc), (self.borg_mnt, self.borg_proc)):
+            _unmount_fuse(mnt)
+            _stop_group(proc)
+        self.img_proc = self.borg_proc = None
+        shutil.rmtree(self.work, ignore_errors=True)
+
+
+LOOP_RECORD = "/var/lib/bbs-agent/vm-browse.loops"
+
+
+def _loop_record(loop, image_name, add):
+    """Keep the loop devices of browse sessions in a file, so that an agent
+    restarted while one was open can detach them: by then their image files
+    (imagefs, killed with the agent) no longer have a usable path."""
+    try:
+        with open(LOOP_RECORD) as f:
+            entries = [l.rstrip("\n").split("\t") for l in f if "\t" in l]
+    except OSError:
+        entries = []
+    entries = [e for e in entries if e[0] != loop]
+    if add:
+        entries.append([loop, image_name])
+    with open(LOOP_RECORD + ".tmp", "w") as f:
+        f.writelines("{}\t{}\n".format(a, b) for a, b in entries)
+    os.replace(LOOP_RECORD + ".tmp", LOOP_RECORD)
+
+
+def _detach_recorded_loops():
+    try:
+        with open(LOOP_RECORD) as f:
+            entries = [l.rstrip("\n").split("\t") for l in f if "\t" in l]
+    except OSError:
+        return
+    for loop, image_name in entries:
+        res = _run(["losetup", "-n", "-O", "BACK-FILE", loop], timeout=30, check=False)
+        back = res.stdout.decode("utf-8", errors="replace").strip()
+        # Still the device we attached (same image name), not one reused since
+        if res.returncode == 0 and os.path.basename(back.split(" (")[0]) == image_name:
+            _run(["losetup", "-d", loop], timeout=60, check=False)
+    try:
+        os.remove(LOOP_RECORD)
+    except OSError:
+        pass
+
+
+def _unmount_fuse(mnt):
+    """Unmount a FUSE mount, lazily if it stays busy."""
+    for attempt in range(5):
+        if not os.path.ismount(mnt):
+            return
+        if _run(["fusermount", "-u", mnt], timeout=60, check=False).returncode == 0:
+            return
+        time.sleep(1)
+    _run(["fusermount", "-u", "-z", mnt], timeout=60, check=False)
+
+
+def _stop_group(proc, grace=10):
+    """Stop a process started with start_new_session=True and everything in
+    its group. borg is a PyInstaller binary: the process we start is a
+    launcher and the real borg is its child, so killing the pid alone leaves
+    a borg mount running, and holding a lock on the repository."""
+    if proc is None:
+        return
+    try:
+        proc.wait(timeout=grace)
+    except subprocess.TimeoutExpired:
+        pass
+
+    def group_alive():
+        try:
+            os.killpg(proc.pid, 0)
+            return True
+        except (ProcessLookupError, PermissionError):
+            return False
+    for sig, wait in ((signal.SIGTERM, 15), (signal.SIGKILL, 5)):
+        if not group_alive():
+            break
+        try:
+            os.killpg(proc.pid, sig)
+        except ProcessLookupError:
+            break
+        deadline = time.time() + wait
+        while group_alive() and time.time() < deadline:
+            if proc.poll() is None:
+                try:
+                    proc.wait(timeout=0.5)
+                except subprocess.TimeoutExpired:
+                    pass
+            else:
+                time.sleep(0.5)
+    if proc.poll() is None:
+        proc.kill()
+        proc.wait()
+
+
+def _kill_stale_processes(marker):
+    """Processes whose command line mentions `marker` (an agent work path):
+    borg mount and imagefs left by an agent that stopped with a session open."""
+    for pid in os.listdir("/proc"):
+        if not pid.isdigit() or int(pid) == os.getpid():
+            continue
+        try:
+            with open("/proc/{}/cmdline".format(pid), "rb") as f:
+                cmd = f.read().replace(b"\x00", b" ").decode("utf-8", errors="replace")
+        except OSError:
+            continue
+        if marker in cmd and ("borg" in cmd or "imagefs" in cmd):
+            try:
+                os.kill(int(pid), signal.SIGTERM)
+            except OSError:
+                pass
+
+
+class VmBrowser(object):
+    """The browse sessions of this agent, one per archive, closed after
+    IDLE_SECONDS without use and before any backup or restore (borg mount
+    keeps a lock on the repository that would hold a backup back)."""
+
+    ROOT = "/var/lib/bbs-agent/vm-browse"
+    IDLE_SECONDS = 600
+
+    def __init__(self):
+        import threading
+        self.sessions = {}
+        self.lock = threading.RLock()
+        self.reaper = None
+
+    @staticmethod
+    def unavailable():
+        import platform
+        if IS_WINDOWS or IS_MACOS:
+            return "only on Linux"
+        if not hasattr(os, "geteuid") or os.geteuid() != 0:
+            return "the agent must run as root"
+        if platform.machine() not in ("x86_64", "amd64"):
+            return "only implemented for x86_64"
+        for tool in ("fusermount", "losetup", "mount"):
+            if not shutil.which(tool):
+                return "{} is not installed".format(tool)
+        if not os.path.exists("/dev/fuse"):
+            return "/dev/fuse is missing"
+        try:
+            import ctypes
+            ctypes.CDLL("libfuse.so.2")
+        except OSError:
+            return "libfuse2 is not installed"
+        return None
+
+    @contextlib.contextmanager
+    def use(self, archive_key, ref, borg_mount_cmd, env, log=None):
+        """The session of an archive (opened if needed), kept from the idle
+        reaper while in use."""
+        with self.lock:
+            s = self.session(archive_key, ref, borg_mount_cmd, env, log)
+            s.busy += 1
+        try:
+            yield s
+        finally:
+            with self.lock:
+                s.busy -= 1
+                s.last_used = time.time()
+
+    def cleanup_stale(self):
+        """Leftovers of an agent that stopped with sessions open."""
+        if not os.path.isdir(self.ROOT):
+            _detach_recorded_loops()
+            return
+        try:
+            with open("/proc/mounts") as f:
+                mounts = [line.split()[1].replace("\\040", " ") for line in f]
+        except OSError:
+            mounts = []
+        for m in sorted((m for m in mounts if m.startswith(self.ROOT + "/")), key=len, reverse=True):
+            if "/vol/" in m:
+                _run(["umount", "-l", m], timeout=60, check=False)
+        _detach_recorded_loops()
+        try:
+            out = _run(["losetup", "-l", "-n", "-O", "NAME,BACK-FILE"], timeout=30, check=False).stdout.decode()
+            for line in out.splitlines():
+                parts = line.split(None, 1)
+                if len(parts) == 2 and parts[1].strip().startswith(self.ROOT + "/"):
+                    _run(["losetup", "-d", parts[0]], timeout=30, check=False)
+        except Exception:
+            pass
+        for m in sorted((m for m in mounts if m.startswith(self.ROOT + "/")), key=len, reverse=True):
+            if "/vol/" not in m:
+                _run(["fusermount", "-u", "-z", m], timeout=60, check=False)
+        _kill_stale_processes(self.ROOT + "/")
+        for name in os.listdir(self.ROOT):
+            shutil.rmtree(os.path.join(self.ROOT, name), ignore_errors=True)
+
+    def session(self, archive_key, ref, borg_mount_cmd, env, log=None):
+        """The open session of an archive, opened now if needed."""
+        with self.lock:
+            s = self.sessions.get(archive_key)
+            if s is not None:
+                s.last_used = time.time()
+                return s
+            reason = self.unavailable()
+            if reason:
+                raise RuntimeError("file-level browsing is unavailable on this node: {}".format(reason))
+            # One archive mounted at a time keeps the node's resources and the
+            # repository locks in check
+            self.close_all()
+            os.makedirs(self.ROOT, mode=0o700, exist_ok=True)
+            s = VmBrowseSession(self.ROOT, archive_key, ref)
+            try:
+                s.open(borg_mount_cmd, env, log)
+            except BaseException:
+                s.close()
+                raise
+            self.sessions[archive_key] = s
+            self._start_reaper()
+            return s
+
+    def close_all(self):
+        with self.lock:
+            for key, s in list(self.sessions.items()):
+                s.close()
+                del self.sessions[key]
+
+    def _start_reaper(self):
+        import threading
+        if self.reaper is not None and self.reaper.is_alive():
+            return
+
+        def loop():
+            while True:
+                time.sleep(30)
+                with self.lock:
+                    for key, s in list(self.sessions.items()):
+                        if s.busy == 0 and time.time() - s.last_used > self.IDLE_SECONDS:
+                            logger.info("Closing idle VM browse session {}".format(key))
+                            s.close()
+                            del self.sessions[key]
+                    if not self.sessions:
+                        self.reaper = None
+                        return
+        self.reaper = threading.Thread(target=loop, name="vm-browse-reaper", daemon=True)
+        self.reaper.start()
+
+
+BROWSER = VmBrowser()
 
 
 class ProxmoxVmRestore(object):
@@ -1265,5 +2143,7 @@ CONNECTORS = {c.slug: c for c in (ProxmoxConnector,)}
 if __name__ == "__main__":
     if len(sys.argv) == 4 and sys.argv[1] == "segfs":
         sys.exit(segfs_serve(sys.argv[2], sys.argv[3]))
-    sys.stderr.write("usage: bbs-hypervisor.py segfs <spec.json> <mountpoint>\n")
+    if len(sys.argv) == 4 and sys.argv[1] == "imagefs":
+        sys.exit(imagefs_serve(sys.argv[2], sys.argv[3]))
+    sys.stderr.write("usage: bbs-hypervisor.py segfs|imagefs <spec.json> <mountpoint>\n")
     sys.exit(2)

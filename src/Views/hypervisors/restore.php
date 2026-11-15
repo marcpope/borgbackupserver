@@ -15,6 +15,8 @@ $fmt = fn($b) => \BBS\Services\ServerStats::formatBytes((int) $b);
     A full restore creates a <strong>new VM</strong> from the restore point: new VMID, new disks on the storage you
     choose, new MAC addresses and, unless you tick "Network connected", network cards unplugged. The original VM is
     never touched. Disks excluded from the backup are left out of the restored VM.
+    <strong>Browse files</strong> opens a restore point to pick files or folders inside the VM and download them as a
+    tar.gz, without restoring the VM.
 </div>
 
 <?php if (empty($restore['byVm'])): ?>
@@ -38,7 +40,12 @@ $fmt = fn($b) => \BBS\Services\ServerStats::formatBytes((int) $b);
                     <td><?= htmlspecialchars($a['repo_name']) ?></td>
                     <td><?= $fmt($a['original_size']) ?></td>
                     <td><?= $fmt($a['deduplicated_size']) ?></td>
-                    <td class="text-end">
+                    <td class="text-end text-nowrap">
+                        <?php if ($restore['canBrowse']): ?>
+                        <a class="btn btn-sm btn-outline-secondary" href="/hypervisors/<?= $hid ?>/browse/<?= (int) $a['id'] ?>">
+                            <i class="bi bi-folder2-open me-1"></i>Browse files
+                        </a>
+                        <?php endif; ?>
                         <?php if ($restore['canRestore'] && !empty($restore['storages'])): ?>
                         <button class="btn btn-sm btn-outline-primary" type="button" data-bs-toggle="collapse" data-bs-target="#restore<?= (int) $a['id'] ?>">
                             <i class="bi bi-arrow-counterclockwise me-1"></i>Restore…

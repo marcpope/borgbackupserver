@@ -18,6 +18,7 @@ class JobType
         'restore_mongo' => 'MongoDB restore',
         'restore_mssql' => 'SQL Server restore',
         'restore_vm' => 'VM restore',
+        'vm_browse' => 'VM file browse',
         'prune' => 'Prune',
         'compact' => 'Compact',
         's3_sync' => 'Offsite sync',
