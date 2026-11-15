@@ -20,6 +20,12 @@ $when = \BBS\Core\TimeHelper::format($archive['created_at'], 'Y-m-d H:i');
     </div>
 </div>
 
+<div id="vbLock" class="alert alert-warning small d-flex flex-wrap align-items-center gap-2 py-2" style="display:none !important">
+    <i class="bi bi-lock-fill"></i>
+    <span id="vbLockText"></span>
+    <button class="btn btn-sm btn-warning ms-auto" id="vbClose"><i class="bi bi-unlock me-1"></i>Close session</button>
+</div>
+
 <div id="vbStatus" class="alert alert-info small d-flex align-items-center gap-2">
     <span class="spinner-border spinner-border-sm"></span>
     <span id="vbStatusText">Opening the restore point on the hypervisor (mounting the backup, reading partitions and filesystems)…</span>
@@ -32,8 +38,9 @@ $when = \BBS\Core\TimeHelper::format($archive['created_at'], 'Y-m-d H:i');
             <div class="card-body p-2" id="vbTree"></div>
         </div>
         <div class="text-muted small mt-2">
-            Filesystems are mounted read-only on the hypervisor while you browse, and unmounted after
-            10 minutes without activity or when a backup starts.
+            <i class="bi bi-shield-lock me-1"></i>The filesystems are opened read-only inside a throwaway isolation VM
+            on the hypervisor, never by the hypervisor itself; it is stopped after 10 minutes without activity or
+            when a backup starts.
         </div>
     </div>
     <div class="col-lg-8">
@@ -270,6 +277,46 @@ $when = \BBS\Core\TimeHelper::format($archive['created_at'], 'Y-m-d H:i');
         }
     });
 
+    // -- repository lock held by this session --------------------------------
+    // The session keeps the restore point mounted (borg mount), which locks
+    // the repository; show for how long, and when it closes if left idle.
+    let lock = null; // {locked, closesIn, at}: the server's numbers and when we got them
+    const dur = s => {
+        s = Math.max(0, Math.round(s));
+        if (s < 60) return s + ' s';
+        const m = Math.floor(s / 60);
+        return m < 60 ? m + ' min' + (m < 10 ? ' ' + String(s % 60).padStart(2, '0') + ' s' : '')
+            : Math.floor(m / 60) + ' h ' + String(m % 60).padStart(2, '0') + ' min';
+    };
+    function drawLock() {
+        const bar = document.getElementById('vbLock');
+        if (!lock) { bar.style.setProperty('display', 'none', 'important'); return; }
+        const gone = (Date.now() - lock.at) / 1000;
+        bar.style.removeProperty('display');
+        document.getElementById('vbLockText').innerHTML = 'Repository <strong>' + esc(lock.repo) + '</strong> locked by this browse session for <strong>'
+            + dur(lock.locked + gone) + '</strong>. It closes after 10 minutes without activity (in ' + dur(lock.closesIn - gone)
+            + '), or when a backup or restore of this hypervisor starts.';
+    }
+    async function pollLock() {
+        try {
+            const s = await fetch(base + '/browse-session/<?= $aid ?>').then(x => x.json());
+            lock = s.open ? {repo: s.repository, locked: s.locked_seconds, closesIn: s.closes_in_seconds, at: Date.now()} : null;
+        } catch (e) { /* keep the last state */ }
+        drawLock();
+    }
+    setInterval(drawLock, 1000);
+    setInterval(pollLock, 15000);
+    document.getElementById('vbClose').addEventListener('click', async () => {
+        const b = document.getElementById('vbClose');
+        b.disabled = true;
+        await fetch(base + '/browse-close/<?= $aid ?>', {method: 'POST', headers: {'X-CSRF-Token': csrf, 'Accept': 'application/json'}});
+        document.getElementById('vbLockText').textContent = 'Closing the session…';
+        for (let i = 0; i < 20 && lock; i++) { await new Promise(r => setTimeout(r, 1500)); await pollLock(); }
+        b.disabled = false;
+        status('Session closed: the repository is released. Opening a folder again re-opens the restore point.', 'success', false);
+        Object.keys(listCache).forEach(k => delete listCache[k]);
+    });
+
     // -- open ----------------------------------------------------------------
     run({action: 'open'}, p => status(waitText(p, 'Opening the restore point on the hypervisor…'), 'info', true))
         .then(res => {
@@ -283,6 +330,7 @@ $when = \BBS\Core\TimeHelper::format($archive['created_at'], 'Y-m-d H:i');
             for (const g of structure.volume_groups || []) for (const lv of g.lvs) order.push(lv.id);
             const first = order.find(v => (structure.volumes[v] || {}).browsable);
             if (first) openDir(first, '');
+            pollLock();
         })
         .catch(e => status('Could not open this restore point: ' + e.message, 'danger', false));
 })();

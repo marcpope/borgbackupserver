@@ -106,6 +106,8 @@ class App
         $this->router->map('POST', '/hypervisors/[i:id]/browse/[i:archiveId]', 'HypervisorController@browseRequest');
         $this->router->map('GET', '/hypervisors/[i:id]/browse-task/[i:jobId]', 'HypervisorController@browseTask');
         $this->router->map('GET', '/hypervisors/[i:id]/browse-download/[i:jobId]', 'HypervisorController@browseDownload');
+        $this->router->map('GET', '/hypervisors/[i:id]/browse-session/[i:archiveId]', 'HypervisorController@browseSession');
+        $this->router->map('POST', '/hypervisors/[i:id]/browse-close/[i:archiveId]', 'HypervisorController@browseClose');
         $this->router->map('GET', '/clients', 'ClientController@index');
         $this->router->map('GET', '/clients/add', 'ClientController@add');
         $this->router->map('POST', '/clients/add', 'ClientController@store');
@@ -318,6 +320,7 @@ class App
         $this->router->map('POST', '/api/agent/hypervisor/inventory', 'Api\\AgentApiController@hypervisorInventory');
         $this->router->map('GET', '/api/agent/hypervisor/assignments', 'Api\\AgentApiController@hypervisorAssignments');
         $this->router->map('POST', '/api/agent/hypervisor/browse-upload', 'Api\\AgentApiController@hypervisorBrowseUpload');
+        $this->router->map('POST', '/api/agent/hypervisor/browse-session', 'Api\\AgentApiController@hypervisorBrowseSession');
         $this->router->map('POST', '/api/agent/catalog', 'Api\\AgentApiController@catalog');
         $this->router->map('GET', '/api/agent/ssh-key', 'Api\\AgentApiController@sshKey');
         $this->router->map('GET', '/api/agent/download', 'Api\\AgentApiController@downloadFile');

@@ -199,6 +199,7 @@ class HypervisorController extends Controller
             'canRestore' => $this->hasPermission(PermissionService::RESTORE, $agentId),
             'canBrowse' => $connector && $connector->can('file_restore')
                 && $this->hasPermission(PermissionService::RESTORE, $agentId),
+            'browseSessions' => (new \BBS\Services\Hypervisors\HypervisorBackupService())->openBrowseSessions($agentId),
         ];
     }
 
@@ -407,6 +408,76 @@ class HypervisorController extends Controller
             ]);
         }
         $this->json(['status' => 'pending', 'task_id' => $jobId]);
+    }
+
+    /**
+     * GET /hypervisors/{id}/browse-session/{archiveId} - is a browse session
+     * of this restore point open on the agent, and since when (the lock it
+     * holds on the repository).
+     */
+    public function browseSession(int $id, int $archiveId): void
+    {
+        $this->requireAuth();
+        $hypervisor = $this->getHypervisor($id);
+        if (!$hypervisor || !$this->hasPermission(PermissionService::RESTORE, (int) $hypervisor['agent_id'])) {
+            $this->json(['error' => 'Access denied'], 403);
+        }
+        $rows = (new \BBS\Services\Hypervisors\HypervisorBackupService())->openBrowseSessions((int) $hypervisor['agent_id'], $archiveId);
+        if (!$rows) {
+            $this->json(['open' => false]);
+        }
+        $s = $rows[0];
+        $this->json([
+            'open' => true,
+            'repository' => $s['repo_name'],
+            'locked_seconds' => (int) $s['locked_seconds'],
+            'idle_seconds' => (int) $s['idle_seconds'],
+            'closes_in_seconds' => (int) $s['closes_in_seconds'],
+        ]);
+    }
+
+    /**
+     * POST /hypervisors/{id}/browse-close/{archiveId} - close the browse
+     * session of a restore point now (unmounts it, frees the repository).
+     * Answers JSON for fetch() callers, or redirects back for a form post.
+     */
+    public function browseClose(int $id, int $archiveId): void
+    {
+        $this->requireAuth();
+        $this->verifyCsrf();
+        $asJson = str_contains($_SERVER['HTTP_ACCEPT'] ?? '', 'application/json');
+        $hypervisor = $this->getHypervisor($id);
+        if (!$hypervisor || !$this->hasPermission(PermissionService::RESTORE, (int) $hypervisor['agent_id'])) {
+            $asJson ? $this->json(['error' => 'Access denied'], 403) : $this->redirect('/hypervisors');
+        }
+        $archive = $this->db->fetchOne(
+            "SELECT ar.id, ar.vm_ref, ar.repository_id FROM archives ar JOIN repositories r ON r.id = ar.repository_id
+             WHERE ar.id = ? AND r.agent_id = ?",
+            [$archiveId, (int) $hypervisor['agent_id']]
+        );
+        if ($archive) {
+            $this->db->insert('backup_jobs', [
+                'agent_id' => (int) $hypervisor['agent_id'],
+                'repository_id' => (int) $archive['repository_id'],
+                'vm_ref' => $archive['vm_ref'],
+                'task_type' => 'vm_browse',
+                'status' => 'queued',
+                'restore_archive_id' => (int) $archive['id'],
+                'restore_options' => json_encode(['action' => 'close']),
+            ]);
+        } else {
+            // The restore point is gone (pruned): forget its session row
+            $this->db->query(
+                "UPDATE vm_browse_sessions SET closed_at = NOW(), close_reason = 'restore point deleted'
+                 WHERE agent_id = ? AND archive_id = ? AND closed_at IS NULL",
+                [(int) $hypervisor['agent_id'], $archiveId]
+            );
+        }
+        if ($asJson) {
+            $this->json(['status' => 'ok']);
+        }
+        $this->flash('success', 'The browse session is being closed; the repository is released in a few seconds.');
+        $this->redirect("/hypervisors/{$id}?tab=restore");
     }
 
     /** GET /hypervisors/{id}/browse-task/{jobId} - state and answer of a vm_browse task. */

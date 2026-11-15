@@ -19,6 +19,30 @@ $fmt = fn($b) => \BBS\Services\ServerStats::formatBytes((int) $b);
     tar.gz, without restoring the VM.
 </div>
 
+<?php foreach ($restore['browseSessions'] ?? [] as $bs): ?>
+<?php $dur = fn($s) => \BBS\Services\Hypervisors\HypervisorBackupService::shortDuration((int) $s); ?>
+<div class="alert alert-warning small d-flex flex-wrap align-items-center gap-2">
+    <i class="bi bi-lock-fill"></i>
+    <span>
+        Repository <strong><?= htmlspecialchars($bs['repo_name'] ?? '?') ?></strong> locked for
+        <strong><?= $dur($bs['locked_seconds']) ?></strong> by the file browse session of
+        VM <?= htmlspecialchars($bs['vm_ref'] ?? '?') ?>
+        <?php if (!empty($bs['archive_created_at'])): ?>(restore point <?= htmlspecialchars(\BBS\Core\TimeHelper::format($bs['archive_created_at'], 'Y-m-d H:i')) ?>)<?php endif; ?>.
+        Idle for <?= $dur($bs['idle_seconds']) ?>: closes by itself in <?= $dur($bs['closes_in_seconds']) ?>.
+        Backups and restores of this hypervisor close it first; prune or compact runs on the server wait for it.
+    </span>
+    <span class="ms-auto d-flex gap-2">
+        <?php if (!empty($bs['archive_name'])): ?>
+        <a class="btn btn-sm btn-outline-secondary" href="/hypervisors/<?= $hid ?>/browse/<?= (int) $bs['archive_id'] ?>">Open</a>
+        <?php endif; ?>
+        <form method="POST" action="/hypervisors/<?= $hid ?>/browse-close/<?= (int) $bs['archive_id'] ?>" class="d-inline">
+            <input type="hidden" name="csrf_token" value="<?= $this->csrfToken() ?>">
+            <button class="btn btn-sm btn-warning" type="submit"><i class="bi bi-unlock me-1"></i>Close session</button>
+        </form>
+    </span>
+</div>
+<?php endforeach; ?>
+
 <?php if (empty($restore['byVm'])): ?>
     <div class="card border-0 shadow-sm"><div class="card-body text-muted">No VM restore point yet. Back up a VM from the Backups tab first.</div></div>
 <?php endif; ?>

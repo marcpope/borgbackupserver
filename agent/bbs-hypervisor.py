@@ -40,7 +40,7 @@ import subprocess
 import sys
 import time
 
-MODULE_VERSION = "1.4.0"
+MODULE_VERSION = "1.5.0"
 
 IS_WINDOWS = sys.platform == "win32"
 IS_MACOS = sys.platform == "darwin"
@@ -1239,18 +1239,6 @@ def probe_content(read, size):
     return {"fs": None, "label": ""}
 
 
-# Filesystems the browser mounts, and the read-only options that keep the
-# kernel from writing anything (no journal replay) or trusting the content
-BROWSABLE_FS = {
-    "ext2": ("ext2", "ro,noload"), "ext3": ("ext3", "ro,noload"), "ext4": ("ext4", "ro,noload"),
-    "xfs": ("xfs", "ro,norecovery,nouuid"),
-    "btrfs": ("btrfs", "ro,rescue=nologreplay"),
-    "ntfs": ("ntfs3", "ro"),
-    "vfat": ("vfat", "ro"),
-    "exfat": ("exfat", "ro"),
-}
-
-
 def _lvm_text_parse(text):
     """LVM2 text metadata (the VG description) as nested dicts."""
     tokens = re.findall(r'"(?:\\.|[^"\\])*"|[A-Za-z0-9_.+-]+|[{}\[\]=,]|#[^\n]*', text)
@@ -1336,17 +1324,519 @@ def read_lvm_pv(read, size):
     return None
 
 
+# -- isolation proxy: the filesystems are opened in a throwaway VM -----------
+#
+# A VM backup holds whatever its guest wrote, including a filesystem crafted
+# to exploit a bug of a kernel filesystem driver. So the browser never mounts
+# a guest filesystem on the hypervisor: a small KVM virtual machine (the
+# node's own kernel, an initramfs built here holding Python and this module,
+# no network) gets the volumes as read-only virtio disks, mounts them with
+# its own kernel and answers list/tar requests over a virtio-serial channel.
+# A malicious filesystem can at worst take over that VM, which sees nothing
+# but the volumes it was given and is killed when the session closes.
+
+FRAME_JSON = b"J"
+FRAME_DATA = b"D"
+FRAME_MAX = 16 * 1024 * 1024
+
+# Filesystem -> (kernel type, mount options), mounted with MS_RDONLY |
+# MS_NOSUID | MS_NODEV | MS_NOEXEC; no journal replay, nothing written.
+VM_FS = {
+    "ext2": ("ext2", ""),  # no journal, so no "noload"
+    "ext3": ("ext3", "noload"), "ext4": ("ext4", "noload"),
+    "xfs": ("xfs", "norecovery,nouuid"),
+    "btrfs": ("btrfs", "rescue=nologreplay"),
+    "ntfs": ("ntfs3", "iocharset=utf8"),
+    "vfat": ("vfat", "iocharset=utf8,shortname=mixed"),
+    "exfat": ("exfat", "iocharset=utf8"),
+}
+BROWSABLE_FS = VM_FS
+HELPER_KERNEL_MODULES = ("xfs", "btrfs", "ntfs3", "exfat", "vfat", "ext4", "nls_utf8", "nls_cp437", "nls_iso8859_1")
+HELPER_MAX_DRIVES = 24  # one PCI slot each
+
+
+def _frame_send(write, kind, payload):
+    import struct
+    write(kind + struct.pack(">I", len(payload)) + payload)
+
+
+def _frame_recv(read_exact):
+    """(kind, payload) of the next frame."""
+    import struct
+    head = read_exact(5)
+    kind, size = head[0:1], struct.unpack(">I", head[1:5])[0]
+    if kind not in (FRAME_JSON, FRAME_DATA) or size > FRAME_MAX:
+        raise RuntimeError("protocol error on the helper channel")
+    return kind, read_exact(size)
+
+
+def _safe_resolve(root, path):
+    """(absolute path, relative path) of `path` under `root`, refusing to
+    leave it (.., or a symlink pointing elsewhere)."""
+    rel = "/".join(p for p in str(path or "").split("/") if p not in ("", "."))
+    if any(p == ".." for p in rel.split("/")):
+        raise RuntimeError("invalid path")
+    full = os.path.join(root, rel) if rel else root
+    real = os.path.realpath(full)
+    if real != root and not real.startswith(root + "/"):
+        raise RuntimeError("{} leads outside the volume".format(path))
+    return full, rel
+
+
+def _list_dir(root, path, limit=5000):
+    import stat as stat_mod
+    full, rel = _safe_resolve(root, path)
+    if not os.path.isdir(full) or os.path.islink(full):
+        raise RuntimeError("{} is not a directory".format(path or "/"))
+    entries = []
+    truncated = False
+    with os.scandir(full) as it:
+        for e in it:
+            if len(entries) >= limit:
+                truncated = True
+                break
+            try:
+                st = e.stat(follow_symlinks=False)
+            except OSError:
+                continue
+            if stat_mod.S_ISDIR(st.st_mode):
+                kind = "d"
+            elif stat_mod.S_ISREG(st.st_mode):
+                kind = "f"
+            elif stat_mod.S_ISLNK(st.st_mode):
+                kind = "l"
+            else:
+                kind = "o"
+            item = {"name": e.name, "type": kind, "size": st.st_size if kind == "f" else None,
+                    "mtime": int(st.st_mtime), "mode": stat_mod.filemode(st.st_mode)}
+            if kind == "l":
+                try:
+                    item["target"] = os.readlink(e.path)
+                except OSError:
+                    pass
+            entries.append(item)
+    entries.sort(key=lambda x: (x["type"] != "d", x["name"].lower()))
+    return {"path": rel, "entries": entries, "truncated": truncated}
+
+
+def _tar_paths(root, paths, sink):
+    """tar.gz of the selected paths of a volume into sink (a file object);
+    symlinks are stored as links, never followed."""
+    import tarfile
+    members = []
+    for p in list(paths)[:1000]:
+        full, rel = _safe_resolve(root, p)
+        members.append((full, rel or "."))
+    if not members:
+        raise RuntimeError("nothing selected")
+    count = [0]
+
+    def track(info):
+        count[0] += 1
+        return info
+    with tarfile.open(fileobj=sink, mode="w|gz", format=tarfile.PAX_FORMAT) as tar:
+        for full, rel in members:
+            tar.add(full, arcname=rel, recursive=True, filter=track)
+    return count[0]
+
+
+class HelperImage(object):
+    """The helper VM's boot files: the running kernel, and an initramfs
+    built from this node's own Python, this module and the filesystem
+    modules of that kernel. Built once per kernel and module version."""
+
+    DIR = "/var/lib/bbs-agent/vm-browse-helper"
+
+    @classmethod
+    def kernel(cls):
+        return "/boot/vmlinuz-" + os.uname().release
+
+    @classmethod
+    def ensure(cls):
+        import hashlib
+        release = os.uname().release
+        with open(os.path.abspath(__file__), "rb") as f:
+            me = f.read()
+        key = hashlib.sha256(me + release.encode() + sys.version.encode()).hexdigest()[:16]
+        path = os.path.join(cls.DIR, "initrd-{}-{}.img".format(release, key))
+        if os.path.exists(path):
+            return cls.kernel(), path
+        os.makedirs(cls.DIR, mode=0o700, exist_ok=True)
+        for old in os.listdir(cls.DIR):
+            if old.startswith("initrd-"):
+                try:
+                    os.remove(os.path.join(cls.DIR, old))
+                except OSError:
+                    pass
+        tmp = path + ".tmp"
+        cls._build(tmp, me)
+        os.replace(tmp, path)
+        return cls.kernel(), path
+
+    @staticmethod
+    def _ldd(path):
+        out = _run(["ldd", path], timeout=30, check=False).stdout.decode("utf-8", errors="replace")
+        libs = []
+        for line in out.splitlines():
+            m = re.search(r"(/\S+)\s+\(0x", line)
+            if m:
+                libs.append(m.group(1))
+        return libs
+
+    @classmethod
+    def _build(cls, target, module_source):
+        import gzip
+        files = {}  # path in the image -> source path on the host
+        python = os.path.realpath(sys.executable)
+        files["/usr/bin/python3"] = python
+        stdlib = os.path.dirname(os.__file__)
+        skip = {"test", "tests", "idlelib", "tkinter", "turtledemo", "ensurepip", "lib2to3", "pydoc_data",
+                "__pycache__", "site-packages", "dist-packages", "venv"}
+        dynload = []
+        for dirpath, dirnames, filenames in os.walk(stdlib):
+            dirnames[:] = [d for d in dirnames if d not in skip and not d.startswith("config-")]
+            for name in filenames:
+                src = os.path.join(dirpath, name)
+                files[src] = src
+                if name.endswith(".so"):
+                    dynload.append(src)
+        for binary in [python] + dynload:
+            for lib in cls._ldd(binary):
+                files[lib] = os.path.realpath(lib)
+
+        modules = []
+        for name in HELPER_KERNEL_MODULES:
+            out = _run(["modprobe", "--show-depends", name], timeout=30, check=False).stdout.decode()
+            for line in out.splitlines():
+                parts = line.split()
+                if len(parts) >= 2 and parts[0] == "insmod" and parts[1] not in modules:
+                    modules.append(parts[1])
+                    files[parts[1]] = parts[1]
+
+        init = (b"#!/usr/bin/python3 -SB\n"
+                b"import sys\n"
+                b"sys.argv = ['bbs-helper', 'vmhelper']\n"
+                b"exec(compile(open('/bbs/helper.py').read(), '/bbs/helper.py', 'exec'),"
+                b" {'__name__': '__main__', '__file__': '/bbs/helper.py'})\n")
+        blobs = {"/init": (init, 0o100755), "/bbs/helper.py": (module_source, 0o100644),
+                 "/bbs/modules.list": ("\n".join(modules).encode() + b"\n", 0o100644)}
+
+        entries = []  # (name, mode, data, rdev)
+        dirs = set()
+
+        def add_dirs(p):
+            parent = os.path.dirname(p)
+            while parent not in ("/", "") and parent not in dirs:
+                dirs.add(parent)
+                parent = os.path.dirname(parent)
+        for p in list(files) + list(blobs) + ["/proc/x", "/sys/x", "/dev/x", "/mnt/x", "/tmp/x"]:
+            add_dirs(p)
+        for d in sorted(dirs, key=lambda x: (x.count("/"), x)):
+            entries.append((d, 0o040755, b"", (0, 0)))
+        entries.append(("/dev/console", 0o020600, b"", (5, 1)))
+        entries.append(("/dev/null", 0o020666, b"", (1, 3)))
+        for p, src in sorted(files.items()):
+            with open(src, "rb") as f:
+                data = f.read()
+            mode = 0o100755 if os.access(src, os.X_OK) else 0o100644
+            entries.append((p, mode, data, (0, 0)))
+        for p, (data, mode) in blobs.items():
+            entries.append((p, mode, data, (0, 0)))
+        # /lib64 for the dynamic loader on a merged-usr system
+        if "/lib64/ld-linux-x86-64.so.2" not in files:
+            for p in list(files):
+                if p.endswith("/ld-linux-x86-64.so.2"):
+                    with open(files[p], "rb") as f:
+                        entries.append(("/lib64/ld-linux-x86-64.so.2", 0o100755, f.read(), (0, 0)))
+                    break
+
+        with gzip.open(target, "wb", compresslevel=6) as out:
+            ino = 1
+            for name, mode, data, (rmaj, rmin) in entries + [("TRAILER!!!", 0, b"", (0, 0))]:
+                n = name.lstrip("/").encode() + b"\0"
+                head = "070701" + "".join("{:08X}".format(v) for v in (
+                    ino, mode, 0, 0, 2 if mode & 0o040000 else 1, 0, len(data), 0, 0, rmaj, rmin, len(n), 0))
+                out.write(head.encode() + n + b"\0" * ((4 - (110 + len(n)) % 4) % 4))
+                out.write(data + b"\0" * ((4 - len(data) % 4) % 4))
+                ino += 1
+
+
+class BrowseVM(object):
+    """The helper VM of one browse session (see the comment above)."""
+
+    MEMORY_MB = 512
+
+    def __init__(self, work, drives):
+        self.work = work
+        self.drives = drives  # [(volume id, image path)]
+        self.proc = None
+        self.sock = None
+        self.seq = 0
+
+    @staticmethod
+    def unavailable():
+        if not shutil.which("qemu-system-x86_64"):
+            return "qemu-system-x86_64 is not installed"
+        if not os.path.exists(HelperImage.kernel()):
+            return "the running kernel's image {} is missing".format(HelperImage.kernel())
+        for tool in ("ldd", "modprobe"):
+            if not shutil.which(tool):
+                return "{} is not installed".format(tool)
+        return None
+
+    def start(self, timeout=120):
+        kernel, initrd = HelperImage.ensure()
+        sock_path = os.path.join(self.work, "helper.sock")
+        kvm = os.access("/dev/kvm", os.R_OK | os.W_OK)
+        args = [shutil.which("qemu-system-x86_64"), "-name", "bbs-browse-helper",
+                "-machine", "q35,accel=" + ("kvm" if kvm else "tcg"), "-cpu", "host" if kvm else "max",
+                "-m", str(self.MEMORY_MB), "-smp", "2",
+                "-nodefaults", "-no-user-config", "-nographic", "-no-reboot",
+                "-kernel", kernel, "-initrd", initrd,
+                "-append", "console=ttyS0 quiet panic=-1 rdinit=/init",
+                "-serial", "file:" + os.path.join(self.work, "helper-console.log"),
+                "-device", "virtio-serial-pci",
+                "-chardev", "socket,id=ch0,path={},server=on,wait=off".format(sock_path),
+                "-device", "virtserialport,chardev=ch0,name=bbs",
+                "-sandbox", "on,obsolete=deny,elevateprivileges=deny,spawn=deny,resourcecontrol=deny"]
+        for i, (vid, image) in enumerate(self.drives):
+            if "," in image:
+                raise RuntimeError("unexpected character in {}".format(image))
+            args += ["-drive", "if=none,id=d{0},file={1},format=raw,readonly=on,file.locking=off".format(i, image),
+                     "-device", "virtio-blk-pci,drive=d{0},serial=bbs{0}".format(i)]
+        errlog = open(os.path.join(self.work, "helper-qemu.log"), "wb")
+        self.proc = subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=errlog, stderr=errlog,
+                                     start_new_session=True)
+        errlog.close()
+
+        deadline = time.time() + timeout
+        while True:
+            if self.proc.poll() is not None:
+                raise RuntimeError("the helper VM did not start: {}".format(self._log_tail()))
+            try:
+                s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                s.connect(sock_path)
+                self.sock = s
+                break
+            except OSError:
+                s.close()
+                if time.time() > deadline:
+                    raise RuntimeError("the helper VM did not start in time")
+                time.sleep(0.1)
+        # The guest opens its end of the channel once booted: say hello until
+        # it answers (requests carry an id, so a late answer is ignored)
+        while True:
+            try:
+                return self.request({"op": "hello"}, timeout=3)
+            except socket.timeout:
+                if self.proc.poll() is not None or time.time() > deadline:
+                    raise RuntimeError("the helper VM did not answer: {}".format(self._log_tail()))
+
+    def _log_tail(self):
+        out = []
+        for name in ("helper-qemu.log", "helper-console.log"):
+            try:
+                with open(os.path.join(self.work, name), "rb") as f:
+                    out.append(f.read()[-400:].decode("utf-8", errors="replace").strip())
+            except OSError:
+                pass
+        return " / ".join(o for o in out if o) or "no output"
+
+    def _read_exact(self, n):
+        chunks = []
+        while n > 0:
+            data = self.sock.recv(min(n, 1048576))
+            if not data:
+                raise RuntimeError("the helper VM closed the channel: {}".format(self._log_tail()))
+            chunks.append(data)
+            n -= len(data)
+        return b"".join(chunks)
+
+    def request(self, obj, timeout=300, sink=None):
+        """Send a request; returns the JSON answer. Data frames that come
+        before it (a tar stream) go to sink.write."""
+        self.seq += 1
+        obj = dict(obj, id=self.seq)
+        self.sock.settimeout(timeout)
+        _frame_send(self.sock.sendall, FRAME_JSON, json.dumps(obj).encode())
+        while True:
+            kind, payload = _frame_recv(self._read_exact)
+            if kind == FRAME_DATA:
+                if sink is None:
+                    raise RuntimeError("unexpected data from the helper VM")
+                sink.write(payload)
+                continue
+            answer = json.loads(payload.decode("utf-8"))
+            if answer.get("id") != self.seq:
+                continue  # answer to an earlier hello
+            if not answer.get("ok"):
+                raise RuntimeError(answer.get("error") or "the helper VM refused the request")
+            return answer
+
+    def stop(self):
+        if self.sock is not None:
+            try:
+                self.sock.close()
+            except OSError:
+                pass
+            self.sock = None
+        if self.proc is not None:
+            if self.proc.poll() is None:
+                try:
+                    os.killpg(self.proc.pid, signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
+            _stop_group(self.proc, grace=5)
+            self.proc = None
+
+
+def vmhelper_main():
+    """PID 1 of the helper VM: mount the volumes it was given, read-only,
+    and answer list/tar requests from the host on the virtio-serial port."""
+    import ctypes
+    libc = ctypes.CDLL(None, use_errno=True)
+
+    def mount(src, dst, fstype, flags, data):
+        os.makedirs(dst, exist_ok=True)
+        if libc.mount(src.encode(), dst.encode(), fstype.encode(), ctypes.c_ulong(flags),
+                      data.encode() if data else None) != 0:
+            err = ctypes.get_errno()
+            raise OSError(err, os.strerror(err))
+
+    for src, dst, fstype in (("proc", "/proc", "proc"), ("sysfs", "/sys", "sysfs"), ("devtmpfs", "/dev", "devtmpfs")):
+        try:
+            mount(src, dst, fstype, 0, "")
+        except OSError:
+            pass
+    try:
+        with open("/bbs/modules.list") as f:
+            for path in [l.strip() for l in f if l.strip()]:
+                fd = os.open(path, os.O_RDONLY)
+                libc.syscall(313, fd, b"", 0)  # finit_module; EEXIST when built in is fine
+                os.close(fd)
+    except OSError as e:
+        print("bbs-helper: module loading: {}".format(e), flush=True)
+
+    port = None
+    for _ in range(100):
+        try:
+            for d in os.listdir("/sys/class/virtio-ports"):
+                with open("/sys/class/virtio-ports/{}/name".format(d)) as f:
+                    if f.read().strip() == "bbs":
+                        port = "/dev/" + d
+        except OSError:
+            pass
+        if port and os.path.exists(port):
+            break
+        time.sleep(0.1)
+    if not port:
+        print("bbs-helper: no channel to the host", flush=True)
+        return 1
+    disks = {}
+    for b in os.listdir("/sys/block"):
+        try:
+            with open("/sys/block/{}/serial".format(b)) as f:
+                disks[f.read().strip()] = "/dev/" + b
+        except OSError:
+            pass
+    fd = os.open(port, os.O_RDWR)
+
+    def read_exact(n):
+        chunks = []
+        while n > 0:
+            data = os.read(fd, min(n, 65536))
+            if not data:
+                time.sleep(0.05)  # host not connected yet
+                continue
+            chunks.append(data)
+            n -= len(data)
+        return b"".join(chunks)
+
+    def write(data):
+        view = memoryview(data)
+        while view:
+            n = os.write(fd, view)
+            view = view[n:]
+
+    def reply(req, **values):
+        _frame_send(write, FRAME_JSON, json.dumps(dict(values, id=req.get("id"), ok=True)).encode())
+
+    class Sink(object):
+        def __init__(self):
+            self.buf = []
+            self.size = 0
+
+        def write(self, data):
+            self.buf.append(bytes(data))
+            self.size += len(data)
+            if self.size >= 1048576:
+                self.flush()
+            return len(data)
+
+        def flush(self):
+            if self.size:
+                _frame_send(write, FRAME_DATA, b"".join(self.buf))
+                self.buf, self.size = [], 0
+
+    print("bbs-helper: ready, {} disk(s)".format(len(disks)), flush=True)
+    mounts = {}
+    while True:
+        kind, payload = _frame_recv(read_exact)
+        if kind != FRAME_JSON:
+            continue
+        req = json.loads(payload.decode("utf-8"))
+        try:
+            op = req.get("op")
+            if op == "hello":
+                reply(req, disks=sorted(disks))
+            elif op == "mount":
+                results = {}
+                for v in req.get("volumes") or []:
+                    vid = v["vid"]
+                    try:
+                        dev = disks.get(v["serial"])
+                        if not dev:
+                            raise RuntimeError("disk not attached")
+                        fstype, opts = VM_FS[v["fs"]]
+                        target = "/mnt/" + re.sub(r"[^A-Za-z0-9_.+-]", "_", vid)
+                        mount(dev, target, fstype, 1 | 2 | 4 | 8, opts)
+                        mounts[vid] = target
+                        results[vid] = None
+                    except Exception as e:
+                        results[vid] = str(e)[:300]
+                reply(req, results=results)
+            elif op == "list":
+                root = mounts.get(req.get("vid"))
+                if root is None:
+                    raise RuntimeError("volume not browsable")
+                reply(req, listing=_list_dir(root, req.get("path") or ""))
+            elif op == "tar":
+                root = mounts.get(req.get("vid"))
+                if root is None:
+                    raise RuntimeError("volume not browsable")
+                sink = Sink()
+                count = _tar_paths(root, req.get("paths") or [], sink)
+                sink.flush()
+                reply(req, entries=count)
+            else:
+                raise RuntimeError("unknown request")
+        except Exception as e:
+            _frame_send(write, FRAME_JSON, json.dumps({"id": req.get("id"), "ok": False, "error": str(e)[:500]}).encode())
+
+
 class VmBrowseSession(object):
     """One VM archive opened for file-level browsing on this node:
 
       WORK/borg      borg mount of the archive (borg mount -f, our child)
       WORK/img       imagefs: one image file per volume (partition, LV...)
-      WORK/vol/<id>  each browsable filesystem, mounted read-only from a
-                     read-only loop device on its image
+      helper VM      gets the images of the browsable volumes as read-only
+                     disks and mounts them (BrowseVM): no guest filesystem
+                     is ever mounted on the hypervisor itself
 
-    Partition tables and LVM metadata are read here, in Python: the guest's
-    LVM physical volumes are never exposed as block devices, so the host's
-    LVM never sees (or auto-activates) the guest's volume groups."""
+    Partition tables and LVM metadata are read here, in Python (memory-safe
+    parsing of a few structures): the guest's LVM physical volumes are never
+    exposed as block devices, so the host's LVM never sees (or
+    auto-activates) the guest's volume groups."""
 
     def __init__(self, root, archive_key, ref):
         self.root = root
@@ -1358,9 +1848,10 @@ class VmBrowseSession(object):
         self.vol_root = os.path.join(self.work, "vol")
         self.borg_proc = None
         self.img_proc = None
-        self.loops = []
-        self.mounts = {}  # volume id -> mount path
+        self.vm = None
+        self.browsable = set()
         self.structure = None
+        self.opened_at = time.time()
         self.last_used = time.time()
         self.busy = 0
 
@@ -1429,7 +1920,8 @@ class VmBrowseSession(object):
         self.structure = {"vm": {k: manifest.get(k) for k in ("vmid", "name", "created_at", "guest_frozen", "node")},
                           "disks": out_disks, "volume_groups": vgs, "volumes": {}}
 
-        # Serve every volume as an image file, then mount the browsable ones
+        # Serve every volume as an image file; the helper VM mounts the
+        # browsable ones
         spec_path = os.path.join(self.work, "imagefs.json")
         with open(spec_path, "w") as f:
             json.dump({"ts": time.time_ns(), "disks": disk_parts,
@@ -1442,15 +1934,27 @@ class VmBrowseSession(object):
         errlog.close()
         self._wait_mount(self.img_mnt, self.img_proc, "imagefs.log", 30)
 
+        candidates = [vid for vid, v in sorted(volumes.items()) if v["fs"] in VM_FS]
+        drives = candidates[:HELPER_MAX_DRIVES]
+        results = {}
+        if drives:
+            self.vm = BrowseVM(self.work, [(vid, os.path.join(self.img_mnt, vid + ".img")) for vid in drives])
+            self.vm.start()
+            answer = self.vm.request({"op": "mount", "volumes": [
+                {"vid": vid, "serial": "bbs{}".format(i), "fs": volumes[vid]["fs"]} for i, vid in enumerate(drives)]})
+            results = answer.get("results") or {}
+
         for vid, v in sorted(volumes.items()):
             info = {"title": v["title"], "size": v["size"], "fs": v["fs"], "label": v["label"],
                     "browsable": False, "error": None}
-            if v["fs"] in BROWSABLE_FS:
-                try:
-                    self._mount_volume(vid, v["fs"])
+            if v["fs"] in VM_FS:
+                if vid not in drives:
+                    info["error"] = "more than {} filesystems: not opened".format(HELPER_MAX_DRIVES)
+                elif results.get(vid) is None and vid in results:
                     info["browsable"] = True
-                except Exception as e:
-                    info["error"] = str(e)[:300]
+                    self.browsable.add(vid)
+                else:
+                    info["error"] = "could not be mounted: {}".format(results.get(vid) or "no answer")
             elif v["fs"] == "LVM2_member":
                 info["error"] = "LVM physical volume: browse its logical volumes"
             elif v["fs"] == "swap":
@@ -1559,102 +2063,32 @@ class VmBrowseSession(object):
             out.append({"name": vg_name, "missing_pvs": missing, "lvs": lvs})
         return out
 
-    def _mount_volume(self, vid, fs):
-        fstype, opts = BROWSABLE_FS[fs]
-        image = os.path.join(self.img_mnt, vid + ".img")
-        loop = _run(["losetup", "--find", "--show", "--read-only", image], timeout=60).stdout.decode().strip()
-        self.loops.append(loop)
-        _loop_record(loop, vid + ".img", True)
-        target = os.path.join(self.vol_root, vid)
-        os.makedirs(target, mode=0o700, exist_ok=True)
-        _run(["mount", "-t", fstype, "-o", opts + ",nodev,nosuid,noexec", loop, target], timeout=300)
-        self.mounts[vid] = target
+    # -- browse (through the helper VM) ----------------------------------------
 
-    # -- browse -------------------------------------------------------------
-
-    def resolve(self, vid, path):
-        """Absolute path of `path` inside volume `vid`; refuses to leave it
-        (.., or a symlink of the guest pointing elsewhere)."""
-        root = self.mounts.get(vid)
-        if root is None:
+    def _check(self, vid):
+        if vid not in self.browsable or self.vm is None:
             raise RuntimeError("volume {} is not browsable".format(vid))
-        rel = "/".join(p for p in str(path or "").split("/") if p not in ("", "."))
-        if any(p == ".." for p in rel.split("/")):
-            raise RuntimeError("invalid path")
-        full = os.path.join(root, rel) if rel else root
-        real = os.path.realpath(full)
-        if real != root and not real.startswith(root + "/"):
-            raise RuntimeError("{} leads outside the volume".format(path))
-        return full, rel
 
     def list(self, vid, path, limit=5000):
-        import stat as stat_mod
-        full, rel = self.resolve(vid, path)
-        if not os.path.isdir(full) or os.path.islink(full):
-            raise RuntimeError("{} is not a directory".format(path or "/"))
-        entries = []
-        truncated = False
-        with os.scandir(full) as it:
-            for e in it:
-                if len(entries) >= limit:
-                    truncated = True
-                    break
-                try:
-                    st = e.stat(follow_symlinks=False)
-                except OSError:
-                    continue
-                if stat_mod.S_ISDIR(st.st_mode):
-                    kind = "d"
-                elif stat_mod.S_ISREG(st.st_mode):
-                    kind = "f"
-                elif stat_mod.S_ISLNK(st.st_mode):
-                    kind = "l"
-                else:
-                    kind = "o"
-                item = {"name": e.name, "type": kind, "size": st.st_size if kind == "f" else None,
-                        "mtime": int(st.st_mtime), "mode": stat_mod.filemode(st.st_mode)}
-                if kind == "l":
-                    try:
-                        item["target"] = os.readlink(e.path)
-                    except OSError:
-                        pass
-                entries.append(item)
-        entries.sort(key=lambda x: (x["type"] != "d", x["name"].lower()))
-        return {"volume": vid, "path": rel, "entries": entries, "truncated": truncated}
+        self._check(vid)
+        listing = self.vm.request({"op": "list", "vid": vid, "path": str(path or "")}, timeout=300)["listing"]
+        listing["volume"] = vid
+        return listing
 
     def download(self, vid, paths, sink):
-        """Write a tar.gz of the selected paths of a volume to sink (a file
-        object). Symlinks are stored as links, never followed."""
-        import tarfile
-        members = []
-        for p in paths[:1000]:
-            full, rel = self.resolve(vid, p)
-            if not rel:
-                rel = "."
-            members.append((full, rel))
-        if not members:
+        """Write a tar.gz of the selected paths of a volume to sink."""
+        self._check(vid)
+        paths = [str(p) for p in list(paths)[:1000]]
+        if not paths:
             raise RuntimeError("nothing selected")
-        count = [0]
-
-        def track(info):
-            count[0] += 1
-            return info
-        with tarfile.open(fileobj=sink, mode="w|gz", format=tarfile.PAX_FORMAT) as tar:
-            for full, rel in members:
-                tar.add(full, arcname=rel, recursive=True, filter=track)
-        return count[0]
+        return self.vm.request({"op": "tar", "vid": vid, "paths": paths}, timeout=900, sink=sink)["entries"]
 
     # -- close ----------------------------------------------------------------
 
     def close(self):
-        for vid, target in list(self.mounts.items()):
-            if _run(["umount", target], timeout=120, check=False).returncode != 0:
-                _run(["umount", "-l", target], timeout=60, check=False)
-        self.mounts = {}
-        for loop in self.loops:
-            _run(["losetup", "-d", loop], timeout=60, check=False)
-            _loop_record(loop, None, False)
-        self.loops = []
+        if self.vm is not None:
+            self.vm.stop()
+            self.vm = None
         for mnt, proc in ((self.img_mnt, self.img_proc), (self.borg_mnt, self.borg_proc)):
             _unmount_fuse(mnt)
             _stop_group(proc)
@@ -1761,7 +2195,7 @@ def _kill_stale_processes(marker):
                 cmd = f.read().replace(b"\x00", b" ").decode("utf-8", errors="replace")
         except OSError:
             continue
-        if marker in cmd and ("borg" in cmd or "imagefs" in cmd):
+        if marker in cmd and ("borg" in cmd or "imagefs" in cmd or "qemu" in cmd):
             try:
                 os.kill(int(pid), signal.SIGTERM)
             except OSError:
@@ -1781,6 +2215,10 @@ class VmBrowser(object):
         self.sessions = {}
         self.lock = threading.RLock()
         self.reaper = None
+        # Called with {"archive_id", "state": open|closed, "reason"} or
+        # {"state": "closed_all"}; the core agent reports it to the server,
+        # which shows how long a repository has been locked by a session
+        self.notify = None
 
     @staticmethod
     def unavailable():
@@ -1801,7 +2239,22 @@ class VmBrowser(object):
             ctypes.CDLL("libfuse.so.2")
         except OSError:
             return "libfuse2 is not installed"
-        return None
+        return BrowseVM.unavailable()
+
+    def _notify(self, event):
+        if self.notify is not None:
+            try:
+                self.notify(event)
+            except Exception as e:
+                logger.warning("Could not report a VM browse session change: {}".format(e))
+
+    def close(self, archive_key, reason):
+        with self.lock:
+            s = self.sessions.pop(archive_key, None)
+            if s is not None:
+                s.close()
+                self._notify({"archive_id": archive_key, "state": "closed", "reason": reason})
+            return s is not None
 
     @contextlib.contextmanager
     def use(self, archive_key, ref, borg_mount_cmd, env, log=None):
@@ -1821,6 +2274,7 @@ class VmBrowser(object):
         """Leftovers of an agent that stopped with sessions open."""
         if not os.path.isdir(self.ROOT):
             _detach_recorded_loops()
+            self._notify({"state": "closed_all", "reason": "agent restarted"})
             return
         try:
             with open("/proc/mounts") as f:
@@ -1845,6 +2299,7 @@ class VmBrowser(object):
         _kill_stale_processes(self.ROOT + "/")
         for name in os.listdir(self.ROOT):
             shutil.rmtree(os.path.join(self.ROOT, name), ignore_errors=True)
+        self._notify({"state": "closed_all", "reason": "agent restarted"})
 
     def session(self, archive_key, ref, borg_mount_cmd, env, log=None):
         """The open session of an archive, opened now if needed."""
@@ -1858,7 +2313,7 @@ class VmBrowser(object):
                 raise RuntimeError("file-level browsing is unavailable on this node: {}".format(reason))
             # One archive mounted at a time keeps the node's resources and the
             # repository locks in check
-            self.close_all()
+            self.close_all("another restore point was opened")
             os.makedirs(self.ROOT, mode=0o700, exist_ok=True)
             s = VmBrowseSession(self.ROOT, archive_key, ref)
             try:
@@ -1867,14 +2322,14 @@ class VmBrowser(object):
                 s.close()
                 raise
             self.sessions[archive_key] = s
+            self._notify({"archive_id": archive_key, "state": "open"})
             self._start_reaper()
             return s
 
-    def close_all(self):
+    def close_all(self, reason="closed"):
         with self.lock:
-            for key, s in list(self.sessions.items()):
-                s.close()
-                del self.sessions[key]
+            for key in list(self.sessions):
+                self.close(key, reason)
 
     def _start_reaper(self):
         import threading
@@ -1888,8 +2343,7 @@ class VmBrowser(object):
                     for key, s in list(self.sessions.items()):
                         if s.busy == 0 and time.time() - s.last_used > self.IDLE_SECONDS:
                             logger.info("Closing idle VM browse session {}".format(key))
-                            s.close()
-                            del self.sessions[key]
+                            self.close(key, "idle for {} minutes".format(self.IDLE_SECONDS // 60))
                     if not self.sessions:
                         self.reaper = None
                         return
@@ -2145,5 +2599,7 @@ if __name__ == "__main__":
         sys.exit(segfs_serve(sys.argv[2], sys.argv[3]))
     if len(sys.argv) == 4 and sys.argv[1] == "imagefs":
         sys.exit(imagefs_serve(sys.argv[2], sys.argv[3]))
+    if len(sys.argv) == 2 and sys.argv[1] == "vmhelper":
+        sys.exit(vmhelper_main())
     sys.stderr.write("usage: bbs-hypervisor.py segfs|imagefs <spec.json> <mountpoint>\n")
     sys.exit(2)

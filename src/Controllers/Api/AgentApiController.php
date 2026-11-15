@@ -292,6 +292,61 @@ class AgentApiController extends Controller
         $this->json(['status' => 'ok', 'size' => $size + (int) $written]);
     }
 
+    /**
+     * POST /api/agent/hypervisor/browse-session - a file-level browse session
+     * opened or closed on the agent: {archive_id, state: open|closed, reason}
+     * or {state: closed_all}. Times are the server's, not the node's.
+     */
+    public function hypervisorBrowseSession(): void
+    {
+        $agent = $this->authenticateAgent();
+        if (($agent['agent_type'] ?? 'client') !== 'hypervisor') {
+            $this->json(['error' => 'Not a hypervisor agent'], 403);
+        }
+        $input = $this->getJsonInput();
+        $state = (string) ($input['state'] ?? '');
+        $reason = substr((string) ($input['reason'] ?? ''), 0, 200) ?: null;
+        $agentId = (int) $agent['id'];
+        $closeOpen = function (string $where, array $params, ?string $why) use ($agentId) {
+            $this->db->query(
+                "UPDATE vm_browse_sessions SET closed_at = NOW(), close_reason = ?
+                 WHERE agent_id = ? AND closed_at IS NULL" . $where,
+                array_merge([$why, $agentId], $params)
+            );
+        };
+
+        if ($state === 'closed_all') {
+            $closeOpen('', [], $reason);
+            $this->json(['status' => 'ok']);
+        }
+        $archiveId = (int) ($input['archive_id'] ?? 0);
+        $archive = $this->db->fetchOne(
+            "SELECT ar.id, ar.repository_id FROM archives ar JOIN repositories r ON r.id = ar.repository_id
+             WHERE ar.id = ? AND r.agent_id = ?",
+            [$archiveId, $agentId]
+        );
+        if ($state === 'open') {
+            if (!$archive) {
+                $this->json(['error' => 'Unknown archive'], 404);
+            }
+            // The agent keeps one session at a time
+            $closeOpen('', [], 'another restore point was opened');
+            $this->db->insert('vm_browse_sessions', [
+                'agent_id' => $agentId,
+                'archive_id' => $archiveId,
+                'repository_id' => (int) $archive['repository_id'],
+                'opened_at' => date('Y-m-d H:i:s'),
+                'last_used_at' => date('Y-m-d H:i:s'),
+            ]);
+            $this->json(['status' => 'ok']);
+        }
+        if ($state === 'closed') {
+            $closeOpen(' AND archive_id = ?', [$archiveId], $reason);
+            $this->json(['status' => 'ok']);
+        }
+        $this->json(['error' => 'Unknown state'], 400);
+    }
+
     public function hypervisorAssignments(): void
     {
         $agent = $this->authenticateAgent();
@@ -775,6 +830,11 @@ class AgentApiController extends Controller
                 // A file-level browse answer (structure, listing): read back by
                 // the browser page, never shown as a log line
                 $this->db->update('backup_jobs', ['task_result' => $input['output_log']], 'id = ?', [$jobId]);
+                // The session was used: its idle countdown starts again
+                $this->db->query(
+                    "UPDATE vm_browse_sessions SET last_used_at = NOW() WHERE agent_id = ? AND archive_id = ? AND closed_at IS NULL",
+                    [$agent['id'], (int) ($job['restore_archive_id'] ?? 0)]
+                );
             } elseif (($job['task_type'] ?? '') === 'list_dir' && $result === 'completed') {
                 $this->db->update('backup_jobs', [
                     'task_result' => $input['output_log'],

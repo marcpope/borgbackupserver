@@ -936,7 +936,7 @@ def close_vm_browse_sessions():
     browser = getattr(HYPERVISOR_MODULE, "BROWSER", None) if HYPERVISOR_MODULE else None
     if browser is not None:
         try:
-            browser.close_all()
+            browser.close_all("a backup or restore needs the repository")
         except Exception as e:
             logger.warning("Could not close the VM browse sessions: {}".format(e))
 
@@ -1029,6 +1029,11 @@ def execute_vm_browse(config, task):
         browser = getattr(HYPERVISOR_MODULE, "BROWSER", None) if HYPERVISOR_MODULE else None
         if browser is None:
             raise RuntimeError("this agent's hypervisor module cannot browse VM backups")
+        if action == "close":
+            closed = browser.close(str(task.get("archive_id") or task.get("archive_name")), "closed by a user")
+            report_status(config, {"job_id": job_id, "result": "completed",
+                                   "output_log": json.dumps({"closed": closed})})
+            return
         if remote_key:
             with open(REMOTE_KEY_PATH, "w", newline="\n") as kf:
                 kf.write(remote_key.replace("\r\n", "\n").replace("\r", "\n").rstrip() + "\n")
@@ -7421,6 +7426,10 @@ def main():
     global HYPERVISOR_MODULE
     hypervisor_module = HYPERVISOR_MODULE = load_hypervisor_module(config)
     if hypervisor_module is not None and getattr(hypervisor_module, "BROWSER", None) is not None:
+        # The server shows how long a browse session has held a repository
+        # lock; tell it when sessions open and close (idle, backup, restart)
+        hypervisor_module.BROWSER.notify = lambda event: api_request(
+            config, "/api/agent/hypervisor/browse-session", method="POST", data=event)
         try:
             hypervisor_module.BROWSER.cleanup_stale()
         except Exception as e:

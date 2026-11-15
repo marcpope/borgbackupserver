@@ -24,6 +24,44 @@ class HypervisorBackupService
         $this->db = Database::getInstance();
     }
 
+    /** The agent closes an idle browse session after this many seconds (see VmBrowser.IDLE_SECONDS). */
+    public const BROWSE_IDLE_SECONDS = 600;
+
+    /**
+     * Open browse sessions of an agent, with how long each has held its
+     * repository's lock and when it closes by itself if left idle.
+     */
+    public function openBrowseSessions(int $agentId, ?int $archiveId = null): array
+    {
+        $sql = "SELECT s.*, ar.vm_ref, ar.archive_name, ar.created_at as archive_created_at, r.name as repo_name,
+                       TIMESTAMPDIFF(SECOND, s.opened_at, NOW()) as locked_seconds,
+                       TIMESTAMPDIFF(SECOND, s.last_used_at, NOW()) as idle_seconds
+                FROM vm_browse_sessions s
+                LEFT JOIN archives ar ON ar.id = s.archive_id
+                LEFT JOIN repositories r ON r.id = s.repository_id
+                WHERE s.agent_id = ? AND s.closed_at IS NULL";
+        $params = [$agentId];
+        if ($archiveId !== null) {
+            $sql .= " AND s.archive_id = ?";
+            $params[] = $archiveId;
+        }
+        $rows = $this->db->fetchAll($sql . " ORDER BY s.id DESC", $params);
+        foreach ($rows as &$row) {
+            $row['closes_in_seconds'] = max(0, self::BROWSE_IDLE_SECONDS - (int) $row['idle_seconds']);
+        }
+        return $rows;
+    }
+
+    /** "3 min", "1 h 05 min" */
+    public static function shortDuration(int $seconds): string
+    {
+        if ($seconds < 60) {
+            return $seconds . ' s';
+        }
+        $m = intdiv($seconds, 60);
+        return $m < 60 ? $m . ' min' : intdiv($m, 60) . ' h ' . sprintf('%02d', $m % 60) . ' min';
+    }
+
     /** Where the tar.gz of a file-level download (vm_browse job) is kept. */
     public static function browseDownloadPath(int $jobId): string
     {
