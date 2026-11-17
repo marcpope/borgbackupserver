@@ -1321,6 +1321,12 @@ KEY
         if [ "$DIRECTION" = "push" ]; then SRC="$LOCAL_PATH"; DST="$REMOTE"; else SRC="$REMOTE"; DST="$LOCAL_PATH"; fi
 
         # Timeouts: see rclone-sync (#438).
+        #
+        # rclone runs in the background so a cancel reaches it (#577): the
+        # scheduler sends SIGTERM to the outer sudo, which passes it to this
+        # shell, the trap passes it to the inner sudo, and that hands it to
+        # rclone. In the foreground bash would hold the signal until rclone
+        # finished on its own.
         sudo -u "$USERNAME" env \
             "HOME=/var/bbs/cache/$USERNAME" \
             "XDG_CACHE_HOME=$CACHE_DIR" \
@@ -1331,8 +1337,18 @@ KEY
             --transfers 4 --checkers 8 \
             -v --stats-one-line --stats 5s \
             --contimeout 30s --timeout 5m --retries 2 --low-level-retries 5 \
-            "${EXTRA_ARGS[@]}" 2>&1
+            "${EXTRA_ARGS[@]}" 2>&1 &
+        RCLONE_PID=$!
+        trap 'kill -TERM "$RCLONE_PID" 2>/dev/null' TERM INT
+        wait "$RCLONE_PID"
         EXIT_CODE=$?
+        # A trapped signal returns from wait early (status > 128); wait again
+        # for rclone's own exit status.
+        while kill -0 "$RCLONE_PID" 2>/dev/null; do
+            wait "$RCLONE_PID"
+            EXIT_CODE=$?
+        done
+        trap - TERM INT
 
         if [ "$DIRECTION" = "pull" ]; then
             chown -R "$USERNAME":www-data "$LOCAL_PATH"

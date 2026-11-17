@@ -6851,11 +6851,50 @@ def heartbeat_thread(config):
             time.sleep(1)
 
 
+def ensure_exec_tmpdir():
+    """Give borg a temp dir it can run from when /tmp is mounted noexec (#575).
+
+    The official borg binary is a PyInstaller bundle: on every run it unpacks
+    itself under $TMPDIR and executes from there. Hosts that mount /tmp
+    noexec (common hardening on RHEL-family servers) make that fail, so the
+    binary test in _install_borg_binary fails, the server queues the update
+    again every poll, and a borg already installed that way can't start at
+    all. Point TMPDIR at a directory under the agent's own config dir
+    instead; borg and every subprocess inherit it. Linux only: Windows and
+    macOS don't mount temp space noexec.
+    """
+    if IS_WINDOWS or IS_MACOS:
+        return
+    noexec = getattr(os, "ST_NOEXEC", 0)
+    if not noexec:
+        return
+    current = tempfile.gettempdir()
+    try:
+        if not (os.statvfs(current).f_flag & noexec):
+            return
+    except OSError:
+        return
+    alt = os.path.join(os.path.dirname(CONFIG_PATH), "tmp")
+    try:
+        os.makedirs(alt, mode=0o700, exist_ok=True)
+        if os.statvfs(alt).f_flag & noexec:
+            logger.warning("{} and {} are both mounted noexec; borg's bundled binary can't run from either".format(current, alt))
+            return
+    except OSError as e:
+        logger.warning("{} is mounted noexec and {} can't be created ({}); borg's bundled binary may fail to start".format(current, alt, e))
+        return
+    for var in ("TMPDIR", "TMP", "TEMP"):
+        os.environ[var] = alt
+    tempfile.tempdir = alt
+    logger.info("{} is mounted noexec; using {} as the temp dir so borg can run".format(current, alt))
+
+
 def main():
     global running, task_running, current_job_id
 
     setup_logging()
     logger.info("BBS Agent v{} starting".format(AGENT_VERSION))
+    ensure_exec_tmpdir()
     if IS_WINDOWS and SSH_CMD != "ssh":
         logger.info("Using bundled SSH: {}".format(SSH_CMD))
     if IS_DROPBEAR:
@@ -6979,4 +7018,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-# bbs-signature: v1 slrwxMLSHgekVGN590TKmU5KZGwByubk474U2NuQ/g9w6un7wtEnPG8lh3BVhoplTdLbmoduGBlkNSb+NJDCAQ==
+# bbs-signature: v1 QkWrfAivVTPWA8FYSmSJVyEN7/FJnmMt4YV1M4r+7reHv0eXAkPFQUrdBL5rOYhg9FyghCDc0ID+jNCCTpWGCw==

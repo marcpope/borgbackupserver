@@ -707,6 +707,18 @@ foreach ($serverJobs as $sj) {
         } else {
             $runAsUser = $sj['ssh_unix_user'] ?? null;
             $syncResult = $s3Service->syncRepository($s3Repo, $s3Agent, $creds, $runAsUser, (int) $sj['id']);
+            if (!empty($syncResult['cancelled'])) {
+                // Cancelled from the queue while rclone ran; the row already
+                // says so and the transfer has been stopped (#577).
+                $db->insert('server_log', [
+                    'agent_id' => $sj['agent_id'],
+                    'backup_job_id' => $sj['id'],
+                    'level' => 'warning',
+                    'message' => "Offsite sync to \"{$destName}\" stopped: job cancelled",
+                ]);
+                echo date('Y-m-d H:i:s') . " S3 sync job #{$sj['id']} cancelled, transfer stopped\n";
+                continue;
+            }
             $s3Result = $syncResult['success'] ? 'completed' : 'failed';
             $s3Output = $syncResult['output'] ?? '';
             $s3Error = $syncResult['success'] ? null : $s3Output;
@@ -860,6 +872,16 @@ foreach ($serverJobs as $sj) {
         } else {
             $runAsUser = $sj['ssh_unix_user'] ?? null;
             $restoreResult = $s3Service->restoreRepository($s3Repo, $s3Agent, $creds, $runAsUser, $sourceRepo, (int) $sj['id']);
+            if (!empty($restoreResult['cancelled'])) {
+                $db->insert('server_log', [
+                    'agent_id' => $sj['agent_id'],
+                    'backup_job_id' => $sj['id'],
+                    'level' => 'warning',
+                    'message' => "Restore from \"{$destName}\" stopped: job cancelled. The local copy may be incomplete.",
+                ]);
+                echo date('Y-m-d H:i:s') . " S3 restore job #{$sj['id']} cancelled, transfer stopped\n";
+                continue;
+            }
             $s3Result = $restoreResult['success'] ? 'completed' : 'failed';
             $s3Output = $restoreResult['output'] ?? '';
             $s3Error = $restoreResult['success'] ? null : $s3Output;

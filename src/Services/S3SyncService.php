@@ -457,9 +457,15 @@ class S3SyncService
      * 2>&1. A partial line is kept until its newline arrives, so a stats line
      * split across two reads is never handed over truncated.
      *
-     * @return array{stdout:string,stderr:string,timedOut:bool}
+     * $shouldStop is asked every couple of seconds whether to give up (the
+     * job was cancelled, #577). When it says so the process gets SIGTERM,
+     * which the helper passes down to rclone, and SIGKILL if it is still
+     * there 15s later. The run is then reported as cancelled, whatever
+     * output it had produced.
+     *
+     * @return array{stdout:string,stderr:string,timedOut:bool,cancelled:bool}
      */
-    private function pump($proc, array $pipes, ?callable $onLine, ?int $timeoutSeconds): array
+    private function pump($proc, array $pipes, ?callable $onLine, ?int $timeoutSeconds, ?callable $shouldStop = null): array
     {
         stream_set_blocking($pipes[1], false);
         stream_set_blocking($pipes[2], false);
@@ -467,6 +473,9 @@ class S3SyncService
         $tail = ['', ''];
         $timedOut = false;
         $deadline = $timeoutSeconds === null ? null : time() + $timeoutSeconds;
+        $stopping = false;
+        $stopAt = 0;
+        $lastCheck = 0;
 
         while (true) {
             // Status first, read second: a process that exits between the two
@@ -501,12 +510,32 @@ class S3SyncService
                 proc_terminate($proc, 9);
                 break;
             }
+            if ($stopping) {
+                if (time() - $stopAt >= 15) {
+                    proc_terminate($proc, 9);
+                    break;
+                }
+            } elseif ($shouldStop !== null && time() - $lastCheck >= 2) {
+                $lastCheck = time();
+                if ($shouldStop()) {
+                    $stopping = true;
+                    $stopAt = time();
+                    proc_terminate($proc, 15);
+                }
+            }
             // rclone reports every 5s; polling five times a second is enough to
             // stay responsive without spinning.
             usleep(200000);
         }
 
-        return ['stdout' => $out[0], 'stderr' => $out[1], 'timedOut' => $timedOut];
+        return ['stdout' => $out[0], 'stderr' => $out[1], 'timedOut' => $timedOut, 'cancelled' => $stopping];
+    }
+
+    /** For pump(): has this job been cancelled from the queue? */
+    private function jobCancelled(int $jobId): bool
+    {
+        $row = $this->db->fetchOne("SELECT status FROM backup_jobs WHERE id = ?", [$jobId]);
+        return $row === null || $row['status'] === 'cancelled';
     }
 
     /**
@@ -514,7 +543,7 @@ class S3SyncService
      * A timeout kills a run that hangs on a dead endpoint; null waits.
      * Returns ['stdout', 'stderr', 'exitCode', 'timedOut'].
      */
-    private function runDirect(array $dest, array $args, ?int $timeoutSeconds = null, ?callable $onLine = null): array
+    private function runDirect(array $dest, array $args, ?int $timeoutSeconds = null, ?callable $onLine = null, ?callable $shouldStop = null): array
     {
         $env = [
             'RCLONE_CONFIG' => '/dev/null',
@@ -524,10 +553,10 @@ class S3SyncService
         $desc = [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']];
         $proc = proc_open(array_merge(['rclone'], $args), $desc, $pipes, null, $env);
         if (!is_resource($proc)) {
-            return ['stdout' => '', 'stderr' => 'Failed to start rclone process', 'exitCode' => -1, 'timedOut' => false];
+            return ['stdout' => '', 'stderr' => 'Failed to start rclone process', 'exitCode' => -1, 'timedOut' => false, 'cancelled' => false];
         }
         fclose($pipes[0]);
-        $r = $this->pump($proc, $pipes, $onLine, $timeoutSeconds);
+        $r = $this->pump($proc, $pipes, $onLine, $timeoutSeconds, $shouldStop);
         fclose($pipes[1]);
         fclose($pipes[2]);
         $exitCode = proc_close($proc);
@@ -536,6 +565,7 @@ class S3SyncService
             'stderr' => $r['stderr'],
             'exitCode' => $r['timedOut'] ? -1 : $exitCode,
             'timedOut' => $r['timedOut'],
+            'cancelled' => $r['cancelled'],
         ];
     }
 
@@ -546,11 +576,11 @@ class S3SyncService
      * credentials and SSH keys do not show in ps. The helper removes the
      * file; this removes it too in case the helper never ran.
      */
-    private function runViaHelper(array $dest, string $runAsUser, string $direction, string $localPath, string $remote, ?callable $onLine = null): array
+    private function runViaHelper(array $dest, string $runAsUser, string $direction, string $localPath, string $remote, ?callable $onLine = null, ?callable $shouldStop = null): array
     {
         $envFile = tempnam(sys_get_temp_dir(), 'bbs-dest-');
         if ($envFile === false) {
-            return ['stdout' => '', 'stderr' => 'Cannot create a temp file in ' . sys_get_temp_dir(), 'exitCode' => -1, 'timedOut' => false];
+            return ['stdout' => '', 'stderr' => 'Cannot create a temp file in ' . sys_get_temp_dir(), 'exitCode' => -1, 'timedOut' => false, 'cancelled' => false];
         }
         chmod($envFile, 0600);
         $lines = '';
@@ -566,10 +596,10 @@ class S3SyncService
             $desc = [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']];
             $proc = proc_open($cmd, $desc, $pipes, null, array_filter($_SERVER, 'is_string'));
             if (!is_resource($proc)) {
-                return ['stdout' => '', 'stderr' => 'Failed to start rclone process', 'exitCode' => -1, 'timedOut' => false];
+                return ['stdout' => '', 'stderr' => 'Failed to start rclone process', 'exitCode' => -1, 'timedOut' => false, 'cancelled' => false];
             }
             fclose($pipes[0]);
-            $r = $this->pump($proc, $pipes, $onLine, null);
+            $r = $this->pump($proc, $pipes, $onLine, null, $shouldStop);
             fclose($pipes[1]);
             fclose($pipes[2]);
             return [
@@ -577,6 +607,7 @@ class S3SyncService
                 'stderr' => $r['stderr'],
                 'exitCode' => proc_close($proc),
                 'timedOut' => false,
+                'cancelled' => $r['cancelled'],
             ];
         } finally {
             @unlink($envFile);
@@ -697,14 +728,18 @@ class S3SyncService
         // The helper already runs rclone with -v --stats-one-line --stats 5s;
         // the direct path did not, so it had nothing to report. Both now do.
         $onLine = $jobId !== null ? $this->progressReporter($jobId) : null;
+        $shouldStop = $jobId !== null ? fn(): bool => $this->jobCancelled($jobId) : null;
         if ($runAsUser) {
-            $r = $this->runViaHelper($dest, $runAsUser, 'push', $localPath, $remote, $onLine);
+            $r = $this->runViaHelper($dest, $runAsUser, 'push', $localPath, $remote, $onLine, $shouldStop);
         } else {
             $r = $this->runDirect($dest, array_merge(
                 ['sync', $localPath, $remote, '--transfers', '4', '--checkers', '8'],
                 self::STATS_FLAGS,
                 $this->rcloneFlags($dest)
-            ), null, $onLine);
+            ), null, $onLine, $shouldStop);
+        }
+        if (!empty($r['cancelled'])) {
+            return ['success' => false, 'cancelled' => true, 'output' => 'Cancelled; the transfer was stopped'];
         }
         $fullOutput = trim($r['stdout'] . "\n" . $r['stderr']);
         $ok = $r['exitCode'] === 0;
@@ -742,14 +777,18 @@ class S3SyncService
         }
 
         $onLine = $jobId !== null ? $this->progressReporter($jobId) : null;
+        $shouldStop = $jobId !== null ? fn(): bool => $this->jobCancelled($jobId) : null;
         if ($runAsUser) {
-            $r = $this->runViaHelper($dest, $runAsUser, 'pull', $localPath, $remote, $onLine);
+            $r = $this->runViaHelper($dest, $runAsUser, 'pull', $localPath, $remote, $onLine, $shouldStop);
         } else {
             $r = $this->runDirect($dest, array_merge(
                 ['sync', $remote, $localPath, '--transfers', '4', '--checkers', '8'],
                 self::STATS_FLAGS,
                 $this->rcloneFlags($dest)
-            ), null, $onLine);
+            ), null, $onLine, $shouldStop);
+        }
+        if (!empty($r['cancelled'])) {
+            return ['success' => false, 'cancelled' => true, 'output' => 'Cancelled; the transfer was stopped'];
         }
         $fullOutput = trim($r['stdout'] . "\n" . $r['stderr']);
         $ok = $r['exitCode'] === 0;
