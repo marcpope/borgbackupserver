@@ -747,7 +747,8 @@ class BorgBaseService
             return ['success' => false, 'error' => "BorgBase API returned HTTP {$code} with an unreadable body."];
         }
         if (!empty($decoded['errors'])) {
-            $messages = array_map(fn($e) => (string) ($e['message'] ?? 'unknown error'), $decoded['errors']);
+            // One error per requested field, often the same text: say it once.
+            $messages = array_unique(array_map(fn($e) => (string) ($e['message'] ?? 'unknown error'), $decoded['errors']));
             return ['success' => false, 'error' => implode('; ', $messages)];
         }
         if ($code >= 400) {
