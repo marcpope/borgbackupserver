@@ -115,7 +115,7 @@ class BorgBaseApiController extends Controller
         $this->json($payload);
     }
 
-    /** PUT /api/v1/borgbase-accounts/{id} — {name?, api_token?} */
+    /** PUT /api/v1/borgbase-accounts/{id} — {name?, api_token?, plan_max_size_gb?} */
     public function update(int $id): void
     {
         $this->guard();
@@ -136,6 +136,20 @@ class BorgBaseApiController extends Controller
                 $this->json(['error' => 'BorgBase rejected the token: ' . $result['error']], 422);
             }
             $warning = $result['warning'] ?? null;
+        }
+
+        // Plan size by hand, since BorgBase no longer tells API tokens the
+        // plan (#574). null clears it.
+        if (array_key_exists('plan_max_size_gb', $input)) {
+            $raw = $input['plan_max_size_gb'];
+            if ($raw !== null && (!is_numeric($raw) || (int) $raw != $raw || (int) $raw <= 0)) {
+                $this->json(['error' => 'plan_max_size_gb must be a positive whole number of GB, or null'], 422);
+            }
+            $gb = $raw === null ? null : (int) $raw;
+            if ($gb !== (isset($account['plan_max_size_gb']) ? (int) $account['plan_max_size_gb'] : null)) {
+                $service->setPlanSize($id, $gb);
+                $service->refreshAccount($id);
+            }
         }
 
         $payload = $this->accountPayload($service->getById($id), $service);

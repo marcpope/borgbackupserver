@@ -164,6 +164,25 @@ class BorgBaseAccountController extends Controller
             }
         }
 
+        // Plan size by hand (#574). Only meaningful when the token can't read
+        // the plan; a token that can will overwrite it on the next refresh.
+        if (array_key_exists('plan_size_gb', $_POST)) {
+            $raw = trim((string) $_POST['plan_size_gb']);
+            if ($raw !== '' && !ctype_digit($raw)) {
+                $this->flash('danger', 'Plan size must be a whole number of GB, or blank to clear it.');
+                $this->redirect('/borgbase-accounts/' . $id);
+            }
+            $gb = $raw === '' ? null : (int) $raw;
+            if ($gb !== (isset($account['plan_max_size_gb']) ? (int) $account['plan_max_size_gb'] : null)) {
+                $result = $service->setPlanSize($id, $gb);
+                if (!$result['success']) {
+                    $this->flash('danger', $result['error']);
+                    $this->redirect('/borgbase-accounts/' . $id);
+                }
+                $service->refreshAccount($id);
+            }
+        }
+
         $this->flash('success', 'Account updated.');
         $this->redirect('/borgbase-accounts/' . $id);
     }

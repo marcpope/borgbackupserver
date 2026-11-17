@@ -289,6 +289,11 @@ $csrf = $this->csrfToken();
                     <input type="text" class="form-control font-monospace" name="api_token" autocomplete="new-password" data-lpignore="true" data-1p-ignore="true" spellcheck="false">
                     <div class="form-text">BorgBase → Account → API → New Token. Name it (for example "BBS") and choose <strong>Full Access</strong> so BBS can create and delete repositories.</div>
                 </div>
+                <div class="mt-3 mb-1">
+                    <label class="form-label fw-semibold">Plan size <span class="text-muted fw-normal">(GB, optional)</span></label>
+                    <input type="number" class="form-control" name="plan_size_gb" min="1" step="1" placeholder="unknown" value="<?= $account['plan_max_size_gb'] !== null ? (int) $account['plan_max_size_gb'] : '' ?>">
+                    <div class="form-text">BorgBase no longer shares plan details with API tokens, so enter your plan's storage here for the usage bar. Leave it blank to show usage without a percentage.</div>
+                </div>
                 <?php if (!empty($account['ssh_public_key'])): ?>
                 <div class="mt-3">
                     <label class="form-label fw-semibold small">SSH key registered on BorgBase</label>

@@ -172,11 +172,14 @@ class BorgBaseService
         if (!$overview['success']) {
             return ['success' => false, 'error' => $overview['error']];
         }
-        $this->db->update('borgbase_accounts', [
+        $fields = [
             'api_token_encrypted' => Encryption::encrypt($token),
-            'username' => $overview['username'],
             'can_write' => null,
-        ], 'id = ?', [$id]);
+        ];
+        if (!empty($overview['account'])) {
+            $fields['username'] = $overview['username'];
+        }
+        $this->db->update('borgbase_accounts', $fields, 'id = ?', [$id]);
 
         $warning = null;
         if (empty($account['borgbase_ssh_key_id'])) {
@@ -193,6 +196,23 @@ class BorgBaseService
             $result['warning'] = $warning;
         }
         return $result;
+    }
+
+    /**
+     * Record the plan's size by hand, for accounts whose token can't read
+     * the plan (#574). Null clears it. The caller refreshes afterwards so
+     * the repository bars follow the new ceiling; a later refresh that does
+     * get the plan from BorgBase overwrites it.
+     *
+     * @return array{success: bool, error?: string}
+     */
+    public function setPlanSize(int $id, ?int $gb): array
+    {
+        if ($gb !== null && $gb <= 0) {
+            return ['success' => false, 'error' => 'Plan size must be a whole number of GB, or blank to clear it.'];
+        }
+        $this->db->update('borgbase_accounts', ['plan_max_size_gb' => $gb], 'id = ?', [$id]);
+        return ['success' => true];
     }
 
     /**
@@ -476,14 +496,20 @@ class BorgBaseService
     // ---------------------------------------------------------------
 
     /**
-     * One query for everything the account card and page need.
+     * Everything the account card and page need: the repositories and SSH
+     * keys, which is what proves the token works, plus the account's plan
+     * when BorgBase will tell us.
      *
-     * @return array{success: bool, error?: string, username?: string, plan?: array, repos?: array, keys?: array}
+     * Since November 2026 BorgBase answers `me` (username, active plan)
+     * only for a browser session, not for API tokens (#574). The plan is
+     * asked for separately so a refusal there costs us the plan figures and
+     * nothing else; `account` says whether it came back.
+     *
+     * @return array{success: bool, error?: string, account?: bool, username?: string, plan?: ?array, repos?: array, keys?: array}
      */
     public function fetchOverview(string $token): array
     {
         $res = $this->graphql($token, '{
-            me { username activePlan { id name maxRepos maxSizeGb includedGb } }
             sshList { id name hashSha256 }
             repoList { id name region repoPath quota quotaEnabled currentUsage lastModified borgVersion format
                        fullAccessKeys server { hostname } }
@@ -492,19 +518,37 @@ class BorgBaseService
             return $res;
         }
         $data = $res['data'];
-        if (empty($data['me'])) {
+        if (!is_array($data['repoList'] ?? null)) {
             return ['success' => false, 'error' => 'BorgBase did not recognise the token.'];
         }
-        return [
+        $overview = [
             'success' => true,
-            'username' => (string) ($data['me']['username'] ?? ''),
-            'plan' => $data['me']['activePlan'] ?? null,
-            'repos' => $data['repoList'] ?? [],
+            'account' => false,
+            'username' => null,
+            'plan' => null,
+            'repos' => $data['repoList'],
             'keys' => $data['sshList'] ?? [],
         ];
+
+        $me = $this->graphql($token, '{ me { username activePlan { id name maxRepos maxSizeGb includedGb } } }');
+        if ($me['success'] && !empty($me['data']['me'])) {
+            $overview['account'] = true;
+            $overview['username'] = (string) ($me['data']['me']['username'] ?? '');
+            $overview['plan'] = $me['data']['me']['activePlan'] ?? null;
+        }
+        return $overview;
     }
 
-    /** Write plan and usage from an overview into the account row. */
+    /**
+     * Write plan and usage from an overview into the account row.
+     *
+     * Without account access the plan can't be read, so the figures BorgBase
+     * won't confirm are dropped rather than left stale: a plan name or
+     * repository limit from before an upgrade would mislabel the card and
+     * block "Add Repository". The plan size is the exception: it feeds the
+     * usage bar, the account page lets the admin enter it by hand, and a
+     * stale size is a cosmetic problem the admin can see and correct.
+     */
     private function applyOverview(int $id, array $overview): void
     {
         $plan = $overview['plan'] ?? [];
@@ -512,22 +556,38 @@ class BorgBaseService
         foreach ($overview['repos'] as $r) {
             $usageMb += (float) ($r['currentUsage'] ?? 0);
         }
-        $this->db->update('borgbase_accounts', [
-            'username' => $overview['username'] ?? null,
-            'plan_name' => $plan['name'] ?? null,
-            'plan_max_repos' => isset($plan['maxRepos']) ? (int) $plan['maxRepos'] : null,
-            'plan_max_size_gb' => isset($plan['maxSizeGb']) ? (int) $plan['maxSizeGb'] : null,
-            'plan_included_gb' => isset($plan['includedGb']) ? (int) $plan['includedGb'] : null,
+        $fields = [
             'usage_bytes' => (int) round($usageMb * 1000 * 1000),
             'remote_repo_count' => count($overview['repos']),
             'checked_at' => $this->db->now(),
             'check_error' => null,
-        ], 'id = ?', [$id]);
+        ];
+        if (!empty($overview['account'])) {
+            $fields += [
+                'username' => $overview['username'] ?? null,
+                'plan_name' => $plan['name'] ?? null,
+                'plan_max_repos' => isset($plan['maxRepos']) ? (int) $plan['maxRepos'] : null,
+                'plan_max_size_gb' => isset($plan['maxSizeGb']) ? (int) $plan['maxSizeGb'] : null,
+                'plan_included_gb' => isset($plan['includedGb']) ? (int) $plan['includedGb'] : null,
+            ];
+        } else {
+            $fields += [
+                'plan_name' => null,
+                'plan_max_repos' => null,
+                'plan_included_gb' => null,
+            ];
+        }
+        $this->db->update('borgbase_accounts', $fields, 'id = ?', [$id]);
 
         // Per-location usage. A repo's own quota is the bar's total when
         // BorgBase enforces one; otherwise the plan's size is the ceiling
         // every repo on the account shares.
-        $planBytes = isset($plan['maxSizeGb']) ? (int) $plan['maxSizeGb'] * 1000 * 1000 * 1000 : 0;
+        $planGb = isset($plan['maxSizeGb']) ? (int) $plan['maxSizeGb'] : null;
+        if ($planGb === null) {
+            $row = $this->db->fetchOne("SELECT plan_max_size_gb FROM borgbase_accounts WHERE id = ?", [$id]);
+            $planGb = isset($row['plan_max_size_gb']) ? (int) $row['plan_max_size_gb'] : null;
+        }
+        $planBytes = $planGb !== null ? $planGb * 1000 * 1000 * 1000 : 0;
         $byUser = [];
         foreach ($overview['repos'] as $r) {
             $byUser[(string) $r['id']] = $r;
