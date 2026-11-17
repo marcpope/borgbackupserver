@@ -11,3 +11,4 @@ __pycache__/
 CLAUDE.md
 .claude/
 *.psd
+.env.md
