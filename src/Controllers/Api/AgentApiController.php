@@ -239,6 +239,230 @@ class AgentApiController extends Controller
     }
 
     /**
+     * GET /api/agent/hypervisor/assignments
+     * Polled every 30 s by a hypervisor agent's inventory thread (apart from
+     * the task loop, so it keeps working during a backup): which hypervisors
+     * it serves, with which connector, how often to report the inventory, and
+     * whether Refresh was pressed.
+     */
+    /**
+     * POST /api/agent/hypervisor/browse-upload?job_id=&offset= - one chunk
+     * (raw body) of the tar.gz a vm_browse download task is preparing. Chunks
+     * are appended in order; the offset must be the size received so far.
+     */
+    public function hypervisorBrowseUpload(): void
+    {
+        $agent = $this->authenticateAgent();
+        if (($agent['agent_type'] ?? 'client') !== 'hypervisor') {
+            $this->json(['error' => 'Not a hypervisor agent'], 403);
+        }
+        $jobId = (int) ($_GET['job_id'] ?? 0);
+        $offset = (int) ($_GET['offset'] ?? -1);
+        $job = $this->db->fetchOne(
+            "SELECT id, status, restore_options FROM backup_jobs WHERE id = ? AND agent_id = ? AND task_type = 'vm_browse'",
+            [$jobId, $agent['id']]
+        );
+        if (!$job || !in_array($job['status'], ['sent', 'running'], true)) {
+            $this->json(['error' => 'No running browse download with this id'], 404);
+        }
+        $options = json_decode($job['restore_options'] ?? '', true) ?: [];
+        if (($options['action'] ?? '') !== 'download') {
+            $this->json(['error' => 'This browse task is not a download'], 400);
+        }
+
+        $path = \BBS\Services\Hypervisors\HypervisorBackupService::browseDownloadPath($jobId);
+        clearstatcache(true, $path);
+        $size = is_file($path) ? filesize($path) : 0;
+        if ($offset !== $size) {
+            $this->json(['error' => 'Offset mismatch', 'size' => $size], 409);
+        }
+        $free = @disk_free_space(dirname($path));
+        if ($free !== false && $free < 1073741824) {
+            $this->json(['error' => 'Less than 1 GB free on the server for downloads'], 413);
+        }
+        $in = fopen('php://input', 'rb');
+        $out = fopen($path, 'ab');
+        if (!$in || !$out) {
+            $this->json(['error' => 'Cannot write the download file'], 500);
+        }
+        $written = stream_copy_to_stream($in, $out);
+        fclose($in);
+        fclose($out);
+        $this->db->update('backup_jobs', ['last_progress_at' => date('Y-m-d H:i:s')], 'id = ?', [$jobId]);
+        $this->json(['status' => 'ok', 'size' => $size + (int) $written]);
+    }
+
+    /**
+     * POST /api/agent/hypervisor/browse-session - a file-level browse session
+     * opened or closed on the agent: {archive_id, state: open|closed, reason}
+     * or {state: closed_all}. Times are the server's, not the node's.
+     */
+    public function hypervisorBrowseSession(): void
+    {
+        $agent = $this->authenticateAgent();
+        if (($agent['agent_type'] ?? 'client') !== 'hypervisor') {
+            $this->json(['error' => 'Not a hypervisor agent'], 403);
+        }
+        $input = $this->getJsonInput();
+        $state = (string) ($input['state'] ?? '');
+        $reason = substr((string) ($input['reason'] ?? ''), 0, 200) ?: null;
+        $agentId = (int) $agent['id'];
+        $closeOpen = function (string $where, array $params, ?string $why) use ($agentId) {
+            $this->db->query(
+                "UPDATE vm_browse_sessions SET closed_at = NOW(), close_reason = ?
+                 WHERE agent_id = ? AND closed_at IS NULL" . $where,
+                array_merge([$why, $agentId], $params)
+            );
+        };
+
+        if ($state === 'closed_all') {
+            $closeOpen('', [], $reason);
+            $this->json(['status' => 'ok']);
+        }
+        $archiveId = (int) ($input['archive_id'] ?? 0);
+        $archive = $this->db->fetchOne(
+            "SELECT ar.id, ar.repository_id FROM archives ar JOIN repositories r ON r.id = ar.repository_id
+             WHERE ar.id = ? AND r.agent_id = ?",
+            [$archiveId, $agentId]
+        );
+        if ($state === 'open') {
+            if (!$archive) {
+                $this->json(['error' => 'Unknown archive'], 404);
+            }
+            // The agent keeps one session at a time
+            $closeOpen('', [], 'another restore point was opened');
+            $this->db->insert('vm_browse_sessions', [
+                'agent_id' => $agentId,
+                'archive_id' => $archiveId,
+                'repository_id' => (int) $archive['repository_id'],
+                'opened_at' => date('Y-m-d H:i:s'),
+                'last_used_at' => date('Y-m-d H:i:s'),
+            ]);
+            $this->json(['status' => 'ok']);
+        }
+        if ($state === 'closed') {
+            $closeOpen(' AND archive_id = ?', [$archiveId], $reason);
+            $this->json(['status' => 'ok']);
+        }
+        $this->json(['error' => 'Unknown state'], 400);
+    }
+
+    public function hypervisorAssignments(): void
+    {
+        $agent = $this->authenticateAgent();
+        if (($agent['agent_type'] ?? 'client') !== 'hypervisor') {
+            $this->json(['error' => 'Not a hypervisor agent'], 403);
+        }
+
+        $assigned = $this->db->fetchAll(
+            "SELECT id, type, inventory_interval_minutes, refresh_requested FROM hypervisors WHERE agent_id = ? ORDER BY id",
+            [$agent['id']]
+        );
+
+        $this->json([
+            'status' => 'ok',
+            'hypervisors' => array_map(fn($h) => [
+                'id' => (int) $h['id'],
+                'type' => $h['type'],
+                'inventory_interval' => max(1, min(60, (int) $h['inventory_interval_minutes'])) * 60,
+                'refresh' => !empty($h['refresh_requested']),
+                // Connection settings for proxy connectors go here (decrypted
+                // from config_encrypted) once one exists.
+            ], $assigned),
+        ]);
+    }
+
+    /**
+     * POST /api/agent/hypervisor/inventory
+     * A hypervisor agent reports the inventory of one of the hypervisors it
+     * serves (hypervisor_id, as listed in its task poll), in the common model
+     * of HypervisorConnector. The VM list replaces the stored one.
+     * Client agents are refused: hypervisors are only created from Add
+     * Hypervisor, never by an agent.
+     */
+    public function hypervisorInventory(): void
+    {
+        $agent = $this->authenticateAgent();
+        if (($agent['agent_type'] ?? 'client') !== 'hypervisor') {
+            $this->json(['error' => 'Not a hypervisor agent'], 403);
+        }
+        $input = $this->getJsonInput();
+
+        $connector = \BBS\Services\Hypervisors\HypervisorRegistry::available($input['type'] ?? null);
+        if (!$connector || empty($input['hypervisor_id']) || !isset($input['vms']) || !is_array($input['vms'])) {
+            $this->json(['error' => 'Unknown hypervisor type or invalid inventory'], 400);
+        }
+
+        $info = $connector->normalizeInfo(is_array($input['info'] ?? null) ? $input['info'] : []);
+        $vms = [];
+        foreach (array_slice($input['vms'], 0, 5000) as $vm) {
+            if (is_array($vm) && ($n = $connector->normalizeVmInput($vm)) !== null) {
+                $vms[$n['ref']] = $n;
+            }
+        }
+
+        $now = date('Y-m-d H:i:s');
+        $pdo = $this->db->getPdo();
+        $pdo->beginTransaction();
+        try {
+            $hypervisor = $this->db->fetchOne(
+                "SELECT id FROM hypervisors WHERE id = ? AND agent_id = ? AND type = ? FOR UPDATE",
+                [(int) $input['hypervisor_id'], $agent['id'], $connector->slug()]
+            );
+            if (!$hypervisor) {
+                $pdo->rollBack();
+                $this->json(['error' => 'This agent does not serve that hypervisor'], 404);
+            }
+            $hypervisorId = (int) $hypervisor['id'];
+
+            $this->db->update('hypervisors', [
+                'info' => json_encode($info),
+                'inventory_at' => $now,
+                'refresh_requested' => 0,
+            ], 'id = ?', [$hypervisorId]);
+
+            foreach ($vms as $vm) {
+                $this->db->query("
+                    INSERT INTO hypervisor_vms
+                        (hypervisor_id, vm_ref, name, host, status, cpus, memory_bytes, uptime_seconds,
+                         guest_tools, is_template, tags, disks, extra, last_seen)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON DUPLICATE KEY UPDATE
+                        name = VALUES(name), host = VALUES(host), status = VALUES(status),
+                        cpus = VALUES(cpus), memory_bytes = VALUES(memory_bytes),
+                        uptime_seconds = VALUES(uptime_seconds), guest_tools = VALUES(guest_tools),
+                        is_template = VALUES(is_template), tags = VALUES(tags), disks = VALUES(disks),
+                        extra = VALUES(extra), last_seen = VALUES(last_seen)
+                ", [
+                    $hypervisorId, $vm['ref'], $vm['name'], $vm['host'], $vm['status'],
+                    $vm['cpus'], $vm['memory_bytes'], $vm['uptime_seconds'],
+                    $vm['guest_tools'], $vm['is_template'], $vm['tags'],
+                    json_encode($vm['disks']), json_encode($vm['extra']), $now,
+                ]);
+            }
+
+            $refs = array_map('strval', array_keys($vms));
+            if (empty($refs)) {
+                $this->db->delete('hypervisor_vms', 'hypervisor_id = ?', [$hypervisorId]);
+            } else {
+                $placeholders = implode(',', array_fill(0, count($refs), '?'));
+                $this->db->delete('hypervisor_vms', "hypervisor_id = ? AND vm_ref NOT IN ({$placeholders})",
+                    array_merge([$hypervisorId], $refs));
+            }
+
+            $pdo->commit();
+        } catch (\Throwable $e) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            error_log('Hypervisor inventory failed for agent ' . $agent['id'] . ': ' . $e->getMessage());
+            $this->json(['error' => 'Could not store inventory'], 500);
+        }
+
+        $this->json(['status' => 'ok', 'hypervisor_id' => $hypervisorId, 'vms' => count($vms)]);
+    }
+
+    /**
      * POST /api/agent/progress
      * Agent reports in-progress updates for a running job.
      */
@@ -362,7 +586,7 @@ class AgentApiController extends Controller
         // gets a limit that fits its bounded size (up to 20000 entries)
         // and the MEDIUMTEXT column (#536).
         foreach (['error_log', 'output_log'] as $k) {
-            $limit = ($k === 'output_log' && $job['task_type'] === 'list_dir') ? 8388608 : 65536;
+            $limit = ($k === 'output_log' && in_array($job['task_type'], ['list_dir', 'vm_browse'], true)) ? 8388608 : 65536;
             if (isset($input[$k]) && is_string($input[$k]) && strlen($input[$k]) > $limit) {
                 $input[$k] = substr($input[$k], 0, $limit) . "\n[truncated]";
             }
@@ -517,6 +741,7 @@ class AgentApiController extends Controller
             $archiveData = [
                 'repository_id' => $job['repository_id'],
                 'backup_job_id' => $jobId,
+                'vm_ref' => $job['vm_ref'] ?? null,
                 'archive_name' => $input['archive_name'],
                 // What borg reported it stored, not the client's pre-count
                 // estimate — the estimate cannot see exclude patterns and on
@@ -601,7 +826,16 @@ class AgentApiController extends Controller
         // as a fast-path, but DB is the source of truth — Cache returns
         // unavailable on systems where memcached isn't running.
         if (!empty($input['output_log'])) {
-            if (($job['task_type'] ?? '') === 'list_dir' && $result === 'completed') {
+            if (($job['task_type'] ?? '') === 'vm_browse' && $result === 'completed') {
+                // A file-level browse answer (structure, listing): read back by
+                // the browser page, never shown as a log line
+                $this->db->update('backup_jobs', ['task_result' => $input['output_log']], 'id = ?', [$jobId]);
+                // The session was used: its idle countdown starts again
+                $this->db->query(
+                    "UPDATE vm_browse_sessions SET last_used_at = NOW() WHERE agent_id = ? AND archive_id = ? AND closed_at IS NULL",
+                    [$agent['id'], (int) ($job['restore_archive_id'] ?? 0)]
+                );
+            } elseif (($job['task_type'] ?? '') === 'list_dir' && $result === 'completed') {
                 $this->db->update('backup_jobs', [
                     'task_result' => $input['output_log'],
                 ], 'id = ?', [$jobId]);
@@ -738,6 +972,7 @@ class AgentApiController extends Controller
                 $archiveData = [
                     'repository_id' => $job['repository_id'],
                     'backup_job_id' => $jobId,
+                    'vm_ref' => $job['vm_ref'] ?? null,
                     'archive_name' => $input['archive_name'],
                     // What borg reported it stored, not the client's pre-count
                 // estimate — the estimate cannot see exclude patterns and on
@@ -962,13 +1197,15 @@ class AgentApiController extends Controller
         if ($shouldAutoPrune) {
             $existingPrune = $this->db->fetchOne(
                 "SELECT id FROM backup_jobs
-                 WHERE backup_plan_id = ? AND task_type = 'prune' AND status IN ('queued', 'sent', 'running')
+                 WHERE backup_plan_id = ? AND vm_ref <=> ? AND task_type = 'prune' AND status IN ('queued', 'sent', 'running')
                  LIMIT 1",
-                [$job['backup_plan_id']]
+                [$job['backup_plan_id'], $job['vm_ref'] ?? null]
             );
             if (!$existingPrune) {
                 $pruneJobId = $this->db->insert('backup_jobs', [
                     'backup_plan_id' => $job['backup_plan_id'],
+                    // VM backups prune their own VM's series (see scheduler.php)
+                    'vm_ref' => $job['vm_ref'] ?? null,
                     'agent_id' => $job['agent_id'],
                     'repository_id' => $job['repository_id'],
                     'task_type' => 'prune',
@@ -1239,6 +1476,7 @@ class AgentApiController extends Controller
             'install.sh' => 'agent/install.sh',
             'bbs-agent.py' => 'agent/bbs-agent.py',
             'bbs-agent-start.sh' => 'agent/bbs-agent-start.sh',
+            'bbs-hypervisor.py' => 'agent/bbs-hypervisor.py',
             'com.borgbackupserver.agent.plist' => 'agent/com.borgbackupserver.agent.plist',
             'install-windows.ps1' => 'agent/install-windows.ps1',
             'uninstall-windows.ps1' => 'agent/uninstall-windows.ps1',

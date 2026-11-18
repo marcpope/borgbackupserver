@@ -57,7 +57,7 @@ class SchedulerService
         $notificationService = new NotificationService();
 
         $dueSchedules = $this->db->fetchAll("
-            SELECT s.*, bp.agent_id, bp.repository_id, bp.name as plan_name
+            SELECT s.*, bp.agent_id, bp.repository_id, bp.name as plan_name, bp.hypervisor_id, bp.vm_selection
             FROM schedules s
             JOIN backup_plans bp ON bp.id = s.backup_plan_id
             JOIN agents a ON a.id = bp.agent_id
@@ -72,6 +72,28 @@ class SchedulerService
         $created = [];
 
         foreach ($dueSchedules as $schedule) {
+            // VM backup plan: one job per VM, each skipped while that VM
+            // still has one queued or running.
+            if (!empty($schedule['hypervisor_id'])) {
+                $vmJobIds = (new \BBS\Services\Hypervisors\HypervisorBackupService())->queueJobs([
+                    'id' => $schedule['backup_plan_id'],
+                    'agent_id' => $schedule['agent_id'],
+                    'repository_id' => $schedule['repository_id'],
+                    'name' => $schedule['plan_name'],
+                    'hypervisor_id' => $schedule['hypervisor_id'],
+                    'vm_selection' => $schedule['vm_selection'],
+                ], 'Scheduled');
+                $this->db->update('schedules', [
+                    'last_run' => $now,
+                    'next_run' => $this->calculateNextRun($schedule),
+                ], 'id = ?', [$schedule['id']]);
+                $notificationService->resolve('missed_schedule', $schedule['agent_id'], $schedule['backup_plan_id']);
+                foreach ($vmJobIds as $vmJobId) {
+                    $created[] = ['job_id' => $vmJobId, 'plan' => $schedule['plan_name'], 'agent_id' => $schedule['agent_id']];
+                }
+                continue;
+            }
+
             // Check if there's already a pending/running job for this plan
             $existing = $this->db->fetchOne("
                 SELECT id FROM backup_jobs

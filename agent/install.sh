@@ -4,12 +4,16 @@
 # Usage: curl -s https://your-server/get-agent | sudo bash -s -- --server https://your-server --key API_KEY
 #        Behind a self-signed or private-CA certificate, add --cacert /path/to/ca.pem (or --insecure),
 #        and give curl the same flag (--cacert / -k) for the get-agent download itself.
+#        --hypervisor installs a hypervisor agent (Proxmox VE node): the same agent plus
+#        the hypervisor module, with role = hypervisor in its config. Use the command
+#        shown on the hypervisor's page in BBS.
 #
 set -e
 
 INSTALL_DIR="/opt/bbs-agent"
 CONFIG_DIR="/etc/bbs-agent"
 SERVER_URL=""
+AGENT_ROLE="client"
 API_KEY=""
 CA_CERT=""
 CURL_INSECURE=""
@@ -111,6 +115,7 @@ while [[ $# -gt 0 ]]; do
         --key)    API_KEY="$2";    shift 2 ;;
         --cacert|--ca-cert) CA_CERT="$2"; shift 2 ;;
         --insecure|-k) CURL_INSECURE="--insecure"; shift ;;
+        --hypervisor) AGENT_ROLE="hypervisor"; shift ;;
         *)        echo -e "${RED}Unknown option: $1${NC}"; exit 1 ;;
     esac
 done
@@ -144,7 +149,7 @@ if [ -n "$CURL_INSECURE" ]; then
 fi
 
 if [ -z "$SERVER_URL" ] || [ -z "$API_KEY" ]; then
-    echo -e "${RED}Usage: install.sh --server https://your-server --key API_KEY [--cacert /path/to/ca.pem] [--insecure]${NC}"
+    echo -e "${RED}Usage: install.sh --server https://your-server --key API_KEY [--hypervisor] [--cacert /path/to/ca.pem] [--insecure]${NC}"
     exit 1
 fi
 
@@ -590,8 +595,30 @@ install_agent() {
     fi
     chmod +x "$INSTALL_DIR/uninstall.sh" 2>/dev/null || true
 
+    # Hypervisor agent: the hypervisor module goes next to the agent. A
+    # client agent must not carry it, so a reinstall as a client removes it.
+    if [ "$AGENT_ROLE" = "hypervisor" ]; then
+        if command -v curl &>/dev/null; then
+            curl -sf "${CURL_SSL_ARGS[@]}" -o "$INSTALL_DIR/bbs-hypervisor.py" "$SERVER_URL/api/agent/download?file=bbs-hypervisor.py" || true
+        elif command -v wget &>/dev/null; then
+            wget -q "${WGET_SSL_ARGS[@]}" -O "$INSTALL_DIR/bbs-hypervisor.py" "$SERVER_URL/api/agent/download?file=bbs-hypervisor.py" || true
+        elif command -v fetch &>/dev/null; then
+            fetch -q "${FETCH_SSL_ARGS[@]}" -o "$INSTALL_DIR/bbs-hypervisor.py" "$SERVER_URL/api/agent/download?file=bbs-hypervisor.py" || true
+        fi
+        if ! grep -q "^CONNECTORS" "$INSTALL_DIR/bbs-hypervisor.py" 2>/dev/null; then
+            stop_spinner
+            print_error "Could not download the hypervisor module from the server"
+            exit 1
+        fi
+    else
+        rm -f "$INSTALL_DIR/bbs-hypervisor.py"
+    fi
+
     stop_spinner
     print_success "Agent downloaded to ${DIM}$INSTALL_DIR${NC}"
+    if [ "$AGENT_ROLE" = "hypervisor" ]; then
+        print_success "Hypervisor module installed"
+    fi
 
     # Write config
     cat > "$CONFIG_DIR/config.ini" <<EOF
@@ -603,6 +630,7 @@ ${CURL_INSECURE:+insecure = true}
 
 [agent]
 poll_interval = 30
+role = $AGENT_ROLE
 EOF
 
     chmod 600 "$CONFIG_DIR/config.ini"
