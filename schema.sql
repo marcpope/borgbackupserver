@@ -244,6 +244,7 @@ CREATE TABLE backup_plans (
     name VARCHAR(100) NOT NULL,
     directories TEXT NOT NULL,
     excludes TEXT DEFAULT NULL,
+    patterns TEXT DEFAULT NULL,
     advanced_options TEXT DEFAULT NULL,
     snapshot TINYINT(1) NOT NULL DEFAULT 0,
     stream_db_dumps TINYINT(1) NOT NULL DEFAULT 0,
@@ -621,6 +622,7 @@ CREATE TABLE backup_templates (
     description VARCHAR(255) DEFAULT '',
     directories TEXT NOT NULL,
     excludes TEXT DEFAULT NULL,
+    patterns TEXT DEFAULT NULL,
     advanced_options TEXT DEFAULT NULL,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP

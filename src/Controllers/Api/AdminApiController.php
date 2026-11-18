@@ -430,7 +430,7 @@ class AdminApiController extends Controller
         }
         unset($rr);
         $plans = $this->db->fetchAll(
-            "SELECT bp.id, bp.name, bp.directories, bp.excludes, bp.advanced_options, bp.enabled,
+            "SELECT bp.id, bp.name, bp.directories, bp.excludes, bp.patterns, bp.advanced_options, bp.enabled,
                     bp.snapshot, bp.stream_db_dumps, bp.priority, bp.repository_id,
                     bp.prune_minutes, bp.prune_hours, bp.prune_days,
                     bp.prune_weeks, bp.prune_months, bp.prune_years,
@@ -917,7 +917,7 @@ class AdminApiController extends Controller
         // zeros back on save and quietly wipe the plan's retention policy —
         // only noticed later, when archives start disappearing.
         $plans = $this->db->fetchAll("
-            SELECT bp.id, bp.name, bp.directories, bp.excludes, bp.advanced_options,
+            SELECT bp.id, bp.name, bp.directories, bp.excludes, bp.patterns, bp.advanced_options,
                    bp.enabled, bp.snapshot, bp.stream_db_dumps, bp.priority, bp.repository_id, r.name as repository_name,
                    bp.prune_minutes, bp.prune_hours, bp.prune_days,
                    bp.prune_weeks, bp.prune_months, bp.prune_years,
@@ -999,12 +999,12 @@ class AdminApiController extends Controller
         // request overrides the template's value (#544).
         $templateId = null;
         if (isset($input['template_id']) && $input['template_id'] !== '') {
-            $template = $this->db->fetchOne("SELECT id, directories, excludes, advanced_options FROM backup_templates WHERE id = ?", [(int) $input['template_id']]);
+            $template = $this->db->fetchOne("SELECT id, directories, excludes, patterns, advanced_options FROM backup_templates WHERE id = ?", [(int) $input['template_id']]);
             if (!$template) {
                 $this->json(['error' => 'Backup template not found'], 404);
             }
             $templateId = (int) $template['id'];
-            foreach (['directories', 'excludes', 'advanced_options'] as $field) {
+            foreach (['directories', 'excludes', 'patterns', 'advanced_options'] as $field) {
                 if (!array_key_exists($field, $input) && ($template[$field] ?? '') !== '') {
                     $input[$field] = $template[$field];
                 }
@@ -1018,7 +1018,7 @@ class AdminApiController extends Controller
         $profileFields = ['frequency', 'times', 'day_of_month',
             'prune_minutes', 'prune_hours', 'prune_days', 'prune_weeks', 'prune_months', 'prune_years'];
         if ($templateId === null) {
-            array_push($profileFields, 'directories', 'excludes', 'advanced_options');
+            array_push($profileFields, 'directories', 'excludes', 'patterns', 'advanced_options');
         }
         foreach ($profileFields as $field) {
             if (!array_key_exists($field, $input) && ($profileDefaults[$field] ?? '') !== '') {
@@ -1034,6 +1034,7 @@ class AdminApiController extends Controller
         $repositoryId = (int) ($input['repository_id'] ?? 0);
         $directories = trim($input['directories'] ?? '');
         $excludes = trim($input['excludes'] ?? '');
+        $patterns = trim($input['patterns'] ?? '');
         $advancedOptions = trim($input['advanced_options'] ?? '--compression lz4 --exclude-caches --noatime');
         $frequency = $input['frequency'] ?? 'daily';
         $times = $input['times'] ?? '02:00';
@@ -1050,7 +1051,7 @@ class AdminApiController extends Controller
         if (empty($name) || empty($directories) || empty($repositoryId)) {
             $this->json(['error' => 'name, repository_id, and directories (or a template_id) are required'], 400);
         }
-        if (($fieldError = \BBS\Services\BorgCommandBuilder::validatePlanFields($advancedOptions, $directories)) !== null) {
+        if (($fieldError = \BBS\Services\BorgCommandBuilder::validatePlanFields($advancedOptions, $directories, $patterns)) !== null) {
             $this->json(['error' => $fieldError], 422);
         }
         if (!empty($input['snapshot']) && ($snapError = $this->snapshotUnavailableReason($agent)) !== null) {
@@ -1090,6 +1091,7 @@ class AdminApiController extends Controller
             'name' => $name,
             'directories' => $directories,
             'excludes' => $excludes ?: null,
+            'patterns' => $patterns ?: null,
             'advanced_options' => $advancedOptions,
             'snapshot' => !empty($input['snapshot']) ? 1 : 0,
             'stream_db_dumps' => !empty($input['stream_db_dumps']) ? 1 : 0,
@@ -1178,6 +1180,7 @@ class AdminApiController extends Controller
             'repository_id' => $repositoryId,
             'directories' => $directories,
             'excludes' => $excludes,
+            'patterns' => $patterns,
             'advanced_options' => $advancedOptions,
             'template_id' => $templateId,
             'frequency' => $frequency,
@@ -1841,16 +1844,17 @@ class AdminApiController extends Controller
 
         // Update plan fields (only those provided)
         $planData = [];
-        foreach (['name', 'directories', 'excludes', 'advanced_options'] as $field) {
+        foreach (['name', 'directories', 'excludes', 'patterns', 'advanced_options'] as $field) {
             if (isset($input[$field])) {
                 $planData[$field] = trim($input[$field]) ?: null;
             }
         }
-        if (isset($planData['advanced_options']) || isset($planData['directories'])) {
-            $current = $this->db->fetchOne("SELECT advanced_options, directories FROM backup_plans WHERE id = ?", [$planId]);
+        if (isset($planData['advanced_options']) || isset($planData['directories']) || isset($planData['patterns'])) {
+            $current = $this->db->fetchOne("SELECT advanced_options, directories, patterns FROM backup_plans WHERE id = ?", [$planId]);
             $fieldError = \BBS\Services\BorgCommandBuilder::validatePlanFields(
                 array_key_exists('advanced_options', $planData) ? $planData['advanced_options'] : ($current['advanced_options'] ?? null),
-                array_key_exists('directories', $planData) ? $planData['directories'] : ($current['directories'] ?? null)
+                array_key_exists('directories', $planData) ? $planData['directories'] : ($current['directories'] ?? null),
+                array_key_exists('patterns', $planData) ? $planData['patterns'] : ($current['patterns'] ?? null)
             );
             if ($fieldError !== null) {
                 $this->json(['error' => $fieldError], 422);

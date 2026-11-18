@@ -587,6 +587,7 @@ class SettingsApiController extends Controller
             'description' => $row['description'],
             'directories' => $row['directories'],
             'excludes' => $row['excludes'],
+            'patterns' => $row['patterns'] ?? null,
             'advanced_options' => $row['advanced_options'],
             'usage_count' => isset($row['usage_count']) ? (int) $row['usage_count'] : 0,
             'created_at' => $row['created_at'],
@@ -618,7 +619,8 @@ class SettingsApiController extends Controller
         }
 
         $advancedOptions = trim((string) ($input['advanced_options'] ?? '')) ?: null;
-        if (($fieldError = \BBS\Services\BorgCommandBuilder::validatePlanFields($advancedOptions, $directories)) !== null) {
+        $patterns = trim((string) ($input['patterns'] ?? '')) ?: null;
+        if (($fieldError = \BBS\Services\BorgCommandBuilder::validatePlanFields($advancedOptions, $directories, $patterns)) !== null) {
             $this->json(['error' => $fieldError], 422);
         }
         $id = $this->db->insert('backup_templates', [
@@ -626,6 +628,7 @@ class SettingsApiController extends Controller
             'description' => trim((string) ($input['description'] ?? '')) ?: null,
             'directories' => $directories,
             'excludes' => trim((string) ($input['excludes'] ?? '')) ?: null,
+            'patterns' => $patterns,
             'advanced_options' => $advancedOptions,
         ]);
 
@@ -658,16 +661,17 @@ class SettingsApiController extends Controller
             }
             $data['directories'] = $dirs;
         }
-        foreach (['description', 'excludes', 'advanced_options'] as $field) {
+        foreach (['description', 'excludes', 'patterns', 'advanced_options'] as $field) {
             if (array_key_exists($field, $input)) {
                 $data[$field] = trim((string) $input[$field]) ?: null;
             }
         }
-        if (array_key_exists('advanced_options', $data) || array_key_exists('directories', $data)) {
-            $current = $this->db->fetchOne("SELECT advanced_options, directories FROM backup_templates WHERE id = ?", [$id]);
+        if (array_key_exists('advanced_options', $data) || array_key_exists('directories', $data) || array_key_exists('patterns', $data)) {
+            $current = $this->db->fetchOne("SELECT advanced_options, directories, patterns FROM backup_templates WHERE id = ?", [$id]);
             $fieldError = \BBS\Services\BorgCommandBuilder::validatePlanFields(
                 array_key_exists('advanced_options', $data) ? $data['advanced_options'] : ($current['advanced_options'] ?? null),
-                array_key_exists('directories', $data) ? $data['directories'] : ($current['directories'] ?? null)
+                array_key_exists('directories', $data) ? $data['directories'] : ($current['directories'] ?? null),
+                array_key_exists('patterns', $data) ? $data['patterns'] : ($current['patterns'] ?? null)
             );
             if ($fieldError !== null) {
                 $this->json(['error' => $fieldError], 422);

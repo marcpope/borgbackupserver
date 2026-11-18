@@ -18,6 +18,7 @@ class BackupPlanController extends Controller
         $name = trim($_POST['name'] ?? '');
         $directories = trim($_POST['directories'] ?? '');
         $excludes = trim($_POST['excludes'] ?? '');
+        $patterns = trim($_POST['patterns'] ?? '');
         $advancedOptions = trim($_POST['advanced_options'] ?? '');
         $frequency = $_POST['frequency'] ?? 'daily';
         $times = trim($_POST['times'] ?? '');
@@ -35,7 +36,7 @@ class BackupPlanController extends Controller
             $this->flash('danger', 'Name, repository, and directories are required.');
             $this->redirect("/clients/{$agentId}?tab=schedules");
         }
-        if (($fieldError = \BBS\Services\BorgCommandBuilder::validatePlanFields($advancedOptions, $directories)) !== null) {
+        if (($fieldError = \BBS\Services\BorgCommandBuilder::validatePlanFields($advancedOptions, $directories, $patterns)) !== null) {
             $this->flash('danger', $fieldError);
             $this->redirect("/clients/{$agentId}?tab=schedules");
         }
@@ -66,6 +67,7 @@ class BackupPlanController extends Controller
             'name' => $name,
             'directories' => $directories,
             'excludes' => $excludes ?: null,
+            'patterns' => $patterns ?: null,
             'advanced_options' => $advancedOptions ?: null,
             'snapshot' => !empty($_POST['snapshot']) ? 1 : 0,
             'stream_db_dumps' => !empty($_POST['stream_db_dumps']) ? 1 : 0,
@@ -130,16 +132,18 @@ class BackupPlanController extends Controller
         if (isset($_POST['name'])) $data['name'] = trim($_POST['name']);
         if (isset($_POST['directories'])) $data['directories'] = trim($_POST['directories']);
         if (isset($_POST['excludes'])) $data['excludes'] = trim($_POST['excludes']) ?: null;
+        if (isset($_POST['patterns'])) $data['patterns'] = trim($_POST['patterns']) ?: null;
         if (isset($_POST['advanced_options'])) $data['advanced_options'] = trim($_POST['advanced_options']) ?: null;
         // An unticked checkbox is absent from the POST; the form carries a
         // marker so "absent" can be told from "not on this form".
         if (isset($_POST['snapshot_present'])) $data['snapshot'] = !empty($_POST['snapshot']) ? 1 : 0;
         if (isset($_POST['stream_db_dumps_present'])) $data['stream_db_dumps'] = !empty($_POST['stream_db_dumps']) ? 1 : 0;
         if (isset($_POST['priority']) && in_array($_POST['priority'], ['normal', 'low', 'idle'], true)) $data['priority'] = $_POST['priority'];
-        if (isset($_POST['advanced_options']) || isset($_POST['directories'])) {
+        if (isset($_POST['advanced_options']) || isset($_POST['directories']) || isset($_POST['patterns'])) {
             $fieldError = \BBS\Services\BorgCommandBuilder::validatePlanFields(
                 $data['advanced_options'] ?? $plan['advanced_options'],
-                $data['directories'] ?? $plan['directories']
+                $data['directories'] ?? $plan['directories'],
+                array_key_exists('patterns', $data) ? $data['patterns'] : ($plan['patterns'] ?? null)
             );
             if ($fieldError !== null) {
                 $this->flash('danger', $fieldError);
@@ -347,6 +351,7 @@ class BackupPlanController extends Controller
             'name' => $plan['name'] . ' (Copy)',
             'directories' => $plan['directories'],
             'excludes' => $plan['excludes'],
+            'patterns' => $plan['patterns'] ?? null,
             'advanced_options' => $plan['advanced_options'],
             'snapshot' => $plan['snapshot'] ?? 0,
             'stream_db_dumps' => $plan['stream_db_dumps'] ?? 0,

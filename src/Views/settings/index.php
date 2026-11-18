@@ -1848,7 +1848,7 @@ document.addEventListener('change', function (e) {
 <?php if ($activeTab === 'templates'): ?>
 <div class="settings-page-head">
     <h1 class="settings-page-title">Backup Templates</h1>
-    <p class="settings-page-lede mb-0">A template pre-fills the directories, excludes and borg options of a new backup plan, so a kind of machine is described once rather than typed out per client.</p>
+    <p class="settings-page-lede mb-0">A template pre-fills the directories, excludes, patterns and borg options of a new backup plan, so a kind of machine is described once rather than typed out per client.</p>
 </div>
 <div>
     <div>
@@ -1914,6 +1914,11 @@ document.addEventListener('change', function (e) {
                                     <div class="col-md-3">
                                         <label class="form-label small text-muted mb-0">Excludes</label>
                                         <textarea class="form-control form-control-sm" name="excludes" rows="3" placeholder="One per line"><?= htmlspecialchars($tpl['excludes'] ?? '') ?></textarea>
+                                    </div>
+                                    <div class="col-md-3">
+                                        <label class="form-label small text-muted mb-0">Patterns</label>
+                                        <textarea class="form-control form-control-sm" name="patterns" rows="3" placeholder="+ /etc/**&#10;- **/*.iso"><?= htmlspecialchars($tpl['patterns'] ?? '') ?></textarea>
+                                        <div class="invalid-feedback tpl-patterns-error"></div>
                                     </div>
                                 </div>
                                 <div class="row g-2 mb-2">
@@ -1991,6 +1996,11 @@ document.addEventListener('change', function (e) {
                     <label class="form-label fw-semibold">Excludes</label>
                     <textarea class="form-control" name="excludes" rows="3" placeholder="*.tmp&#10;*.log"></textarea>
                 </div>
+                <div class="col-md-3">
+                    <label class="form-label fw-semibold">Patterns</label>
+                    <textarea class="form-control" name="patterns" rows="3" placeholder="+ /etc/**&#10;- **/*.iso"></textarea>
+                    <div class="invalid-feedback tpl-patterns-error"></div>
+                </div>
             </div>
             <div class="row g-3">
                 <div class="col-md-6">
@@ -2064,11 +2074,50 @@ document.addEventListener('change', function (e) {
         });
         advField.value = [opts.join(' '), custom].filter(Boolean).join(' ');
     }
+    // Client-side mirror of BorgCommandBuilder::validatePatterns().
+    // The server stays authoritative; this only saves a round trip.
+    // Returns '' when fine.
+    function bbsValidatePatterns(text) {
+        if (text.trim() === '') return '';
+        if (new TextEncoder().encode(text).length > 65535) {
+            return 'Patterns file is too large (max 65535 bytes).';
+        }
+        const lines = text.split(/\r\n|\r|\n/);
+        for (const raw of lines) {
+            const line = raw.trim();
+            if (line === '' || line[0] === '#') continue;
+            if (line.length < 3 || 'RP+-!'.indexOf(line[0]) === -1 || line[1] !== ' ') {
+                return 'Patterns line "' + line + '" is not valid: each rule starts with R, P, +, - or ! followed by a space.';
+            }
+            if (line[0] === 'R' && line.slice(2).charAt(0) === '/') {
+                return 'Patterns line "' + line + '" is not valid: absolute R roots duplicate every file (remove the R line).';
+            }
+        }
+        return '';
+    }
+
+    function bbsCheckPatternsField(field, feedback) {
+        const err = bbsValidatePatterns(field.value);
+        field.classList.toggle('is-invalid', err !== '');
+        if (feedback) feedback.textContent = err;
+        return err === '';
+    }
     document.querySelectorAll('.tpl-form').forEach(form => {
+        const patField = form.querySelector('textarea[name="patterns"]');
+        if (patField) {
+            patField.addEventListener('input', function() {
+                bbsCheckPatternsField(patField, form.querySelector('.tpl-patterns-error'));
+            });
+        }
+        form.addEventListener('submit', function(e) {
+            syncTplForm(form);
+            if (patField && !bbsCheckPatternsField(patField, form.querySelector('.tpl-patterns-error'))) {
+                e.preventDefault();
+            }
+        });
         form.querySelectorAll('.tpl-borg-opt').forEach(cb => cb.addEventListener('change', () => syncTplForm(form)));
         const compType = form.querySelector('.tpl-comp-type');
         if (compType) compType.addEventListener('input', () => syncTplForm(form));
-        form.addEventListener('submit', () => syncTplForm(form));
         syncTplForm(form);
     });
 })();
@@ -2935,12 +2984,12 @@ if ($metricsProxies === []) {
                 <tr><td><span class="badge bg-success">GET</span></td><td><code>/api/v1/clients/{id}/repositories</code></td><td>List repositories</td></tr>
                 <tr><td><span class="badge bg-primary">POST</span></td><td><code>/api/v1/clients/{id}/repositories</code></td><td>Create a repository</td></tr>
                 <tr><td><span class="badge bg-success">GET</span></td><td><code>/api/v1/clients/{id}/plans</code></td><td>List backup plans</td></tr>
-                <tr><td><span class="badge bg-primary">POST</span></td><td><code>/api/v1/clients/{id}/plans</code></td><td>Create a backup plan (with optional plugin configs). <code>template_id</code> fills directories, excludes and advanced options from a backup template; fields you send override it.</td></tr>
+                <tr><td><span class="badge bg-primary">POST</span></td><td><code>/api/v1/clients/{id}/plans</code></td><td>Create a backup plan (with optional plugin configs). <code>template_id</code> fills directories, excludes, patterns and advanced options from a backup template; fields you send override it.</td></tr>
                 <tr><td><span class="badge bg-warning text-dark">PUT</span></td><td><code>/api/v1/clients/{id}/repositories/{repo_id}</code></td><td>Rename a repository</td></tr>
                 <tr><td><span class="badge bg-danger">DELETE</span></td><td><code>/api/v1/clients/{id}/repositories/{repo_id}</code></td><td>Delete a repository (<code>?keep_data=1</code> unlinks only, keeping borg data on disk)</td></tr>
                 <tr><td colspan="3" class="text-muted small fw-semibold pt-2">Backup Plans</td></tr>
                 <tr><td><span class="badge bg-success">GET</span></td><td><code>/api/v1/clients/{id}/plans</code></td><td>List backup plans</td></tr>
-                <tr><td><span class="badge bg-primary">POST</span></td><td><code>/api/v1/clients/{id}/plans</code></td><td>Create a backup plan. <code>template_id</code> fills directories, excludes and advanced options from a backup template; fields you send override it.</td></tr>
+                <tr><td><span class="badge bg-primary">POST</span></td><td><code>/api/v1/clients/{id}/plans</code></td><td>Create a backup plan. <code>template_id</code> fills directories, excludes, patterns and advanced options from a backup template; fields you send override it.</td></tr>
                 <tr><td><span class="badge bg-warning text-dark">PUT</span></td><td><code>/api/v1/clients/{id}/plans/{plan_id}</code></td><td>Edit plan, schedule, plugins</td></tr>
                 <tr><td><span class="badge bg-danger">DELETE</span></td><td><code>/api/v1/clients/{id}/plans/{plan_id}</code></td><td>Delete a plan</td></tr>
                 <tr><td><span class="badge bg-primary">POST</span></td><td><code>/api/v1/clients/{id}/plans/{plan_id}/pause</code></td><td>Pause schedule</td></tr>
