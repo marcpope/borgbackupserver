@@ -643,8 +643,10 @@ if ! mysql -u bbs -p"$DB_PASS" -e "SELECT 1" >/dev/null 2>&1; then
     mysql -e "FLUSH PRIVILEGES;" 2>/dev/null || true
 fi
 
-# Set permissions on backups (recursive for nested content)
-chown -R www-data:www-data /var/bbs/backups
+# Ownership of /var/bbs/backups is restored per-agent after the SSH user
+# recreation loop below (see "Restore per-agent repo ownership"): a
+# recursive www-data chown here would lock every serve user out of
+# borg's owner-only files on each recreate.
 
 # Create ClickHouse database and tables
 if curl -sf http://localhost:8123/ping >/dev/null 2>&1; then
@@ -929,6 +931,32 @@ mysql -u bbs -p"$DB_PASS" bbs -N -e "SELECT ssh_unix_user, id, IFNULL(ssh_home_d
     echo "$STORED_UID" > "$USER_HOME/.uid"
 
     echo "  Restored user: $SSH_USER (uid=$STORED_UID)"
+done
+
+# --- Restore per-agent repo ownership ---
+# borg creates owner-only files and every borg access runs as the
+# repo-owning serve user (client backups over SSH, server maintenance
+# through bbs-ssh-helper borg-cmd), so the old recursive www-data chown
+# locked the serve user out on every recreate. Each backups/N tree
+# belongs to the owner of home/N (same agent id); fix-repo-perms is the
+# same tool repo create/import use. Warn-and-continue per repo: one odd
+# tree must not brick the boot.
+for agent_home in /var/bbs/home/*/; do
+    [ -d "$agent_home" ] || continue
+    repo_user=$(stat -c %U "$agent_home")
+    agent_id=$(basename "$agent_home")
+    repo_dir="/var/bbs/backups/$agent_id"
+    case "$repo_user" in
+        bbs-*) ;;
+        *) echo "backups ownership: skipping $repo_dir (unexpected owner $repo_user)"; continue ;;
+    esac
+    if [ -d "$repo_dir" ]; then
+        for repo in "$repo_dir"/*/; do
+            if [ -d "$repo" ]; then
+                /usr/local/bin/bbs-ssh-helper fix-repo-perms "$repo" "$repo_user" || echo "backups ownership: fix-repo-perms failed for $repo"
+            fi
+        done
+    fi
 done
 
 # --- Legacy SSH compatibility ---
