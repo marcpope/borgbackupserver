@@ -2434,7 +2434,12 @@ foreach ($serverJobs as $sj) {
         }
     }
 
-    echo date('Y-m-d H:i:s') . " Server-side {$sj['task_type']} job #{$sj['id']}: {$result}\n";
+    // The reason goes in this log too, not only the job row: a report that
+    // quotes bbs-scheduler.log otherwise shows "failed" and nothing else (#584).
+    $logReason = $result === 'failed' && $errorOutput !== ''
+        ? ': ' . mb_substr(preg_replace('/\s+/', ' ', trim($errorOutput)), 0, 300)
+        : '';
+    echo date('Y-m-d H:i:s') . " Server-side {$sj['task_type']} job #{$sj['id']}: {$result}{$logReason}\n";
 
     // After successful prune, sync archives table with actual repo contents
     if ($result === 'completed' && $sj['task_type'] === 'prune') {
