@@ -1913,7 +1913,7 @@ $s3SyncServerBackups = ($settings['s3_sync_server_backups'] ?? '0') === '1';
 <!-- Sync configurations — a flat list, not location cards: several of
      these can point at the same S3 (Global credentials), and one repo
      can sync to several of them. -->
-<h6 class="fw-semibold mt-4 mb-2">S3 Sync Configurations</h6>
+<h6 class="fw-semibold mt-4 mb-2">Offsite Sync Configurations</h6>
 <div class="table-responsive">
     <table class="table table-sm table-hover align-middle mb-0">
         <thead>
@@ -1927,18 +1927,26 @@ $s3SyncServerBackups = ($settings['s3_sync_server_backups'] ?? '0') === '1';
             </tr>
         </thead>
         <tbody>
-            <?php foreach ($s3Destinations as $dest):
+            <?php
+            $destDescriber = new \BBS\Services\S3SyncService();
+            $destIcons = ['s3' => 'bi-bucket', 'sftp' => 'bi-hdd-network', 'local' => 'bi-device-hdd'];
+            foreach ($s3Destinations as $dest):
                 $destCfg = json_decode($dest['config'] ?? '{}', true) ?: [];
-                $usesGlobal = ($destCfg['credential_source'] ?? (empty($destCfg['endpoint']) ? 'global' : 'custom')) === 'global';
+                // SFTP and local-disk targets carry no S3 fields, so the
+                // label comes from the target type, not the credentials (#587).
+                $destInfo = $destDescriber->describeDestination($destCfg);
+                $destType = $destInfo['type'];
             ?>
             <tr>
-                <td class="fw-semibold"><i class="bi bi-bucket me-1 text-info"></i><?= htmlspecialchars($dest['name']) ?></td>
+                <td class="fw-semibold"><i class="bi <?= $destIcons[$destType] ?? 'bi-bucket' ?> me-1 text-info"></i><?= htmlspecialchars($dest['name']) ?></td>
                 <td><a href="/clients/<?= $dest['agent_id'] ?>"><?= htmlspecialchars($dest['agent_name']) ?></a></td>
-                <td class="text-truncate" style="max-width: 280px;">
-                    <?php if ($usesGlobal): ?>
+                <td class="text-truncate" style="max-width: 280px;" title="<?= htmlspecialchars($destInfo['label']) ?>">
+                    <?php if ($destType === 's3' && ($destCfg['credential_source'] ?? 'global') !== 'global'): ?>
+                    <?= htmlspecialchars($destCfg['endpoint'] ?? 'Custom') ?><?= !empty($destCfg['bucket']) ? ' / ' . htmlspecialchars($destCfg['bucket']) : '' ?>
+                    <?php elseif ($destType === 's3'): ?>
                     <span class="text-muted">Global S3</span><?php if (!empty($settings['s3_bucket'])): ?> <span class="small text-muted">(<?= htmlspecialchars($settings['s3_bucket']) ?>)</span><?php endif; ?>
                     <?php else: ?>
-                    <?= htmlspecialchars($destCfg['endpoint'] ?? 'Custom') ?><?= !empty($destCfg['bucket']) ? ' / ' . htmlspecialchars($destCfg['bucket']) : '' ?>
+                    <?= htmlspecialchars($destInfo['label']) ?>
                     <?php endif; ?>
                 </td>
                 <td class="text-end"><?= (int) $dest['repo_count'] ?></td>
@@ -1957,9 +1965,9 @@ $s3SyncServerBackups = ($settings['s3_sync_server_backups'] ?? '0') === '1';
 
 <div class="form-text mt-3">
     <i class="bi bi-info-circle me-1"></i>
-    Repositories can replicate to <strong>multiple S3 destinations</strong>. To add one:
-    create an <em>S3 Offsite Sync</em> configuration on the client's Plugins tab (with custom
-    credentials for a second provider), then attach it on the repository's page under
+    Repositories can replicate to <strong>multiple offsite destinations</strong>: S3, an SSH host, or another local disk. To add one:
+    create an <em>S3 Offsite Sync</em> configuration on the client's Plugins tab,
+    then attach it on the repository's page under
     <em>S3 Offsite Mirror &rarr; Add Destination</em>.
 </div>
 <?php endif; ?>
