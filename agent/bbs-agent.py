@@ -218,6 +218,61 @@ def _is_ssh_routine_notice(message):
     return any(n in message for n in SSH_ROUTINE_NOTICES)
 
 
+# Permission errors on files nobody can make readable to the backup: the
+# registry hives, Windows' compatibility junctions ("My Music", localized as
+# "Mi música" and so on), system areas, and macOS's protected Library and
+# iCloud folders. #236 silenced every permission error to hide these, which
+# also hid data folders skipped because of their ACLs: the job showed clean
+# while whole folders were missing from the archive (#585). Now only these
+# count as routine; any other access error marks the job with warnings.
+_ACCESS_ERROR_CODES = ("[WinError 5]", "[Errno 13]", "[Errno 1]")
+_ACCESS_ERROR_LINE = re.compile(r"^(?P<path>.+?): [A-Za-z_ ]+: \[(?:WinError|Errno) \d+\]")
+_WINDOWS_ROUTINE_PATH = re.compile(
+    r"^[a-z]:\\(windows|system volume information|\$recycle\.bin|recovery|config\.msi"
+    r"|documents and settings|programdata\\microsoft)(\\|$)"
+    r"|\\appdata\\"
+    r"|^[a-z]:\\(pagefile|hiberfil|swapfile)\.sys$"
+    r"|^[a-z]:\\dumpstack\.log"
+    r"|^[a-z]:\\users\\[^\\]+\\(documents\\)?(my music|my pictures|my videos|my documents|application data"
+    r"|local settings|cookies|nethood|printhood|recent|sendto|start menu|templates)$"
+)
+_WINDOWS_ROUTINE_NAMES = ("ntuser.", "usrclass.dat")
+_MACOS_ROUTINE_FRAGMENTS = ("/Library/", "/.Trash/", "/.Spotlight-V100/", "/.fseventsd/",
+                            "/.DocumentRevisions-V100/", "/.TemporaryItems/")
+_MACOS_ROUTINE_PREFIXES = ("/System/", "/private/var/", "/dev/", "/.vol/")
+_UNIX_ROUTINE_PREFIXES = ("/proc/", "/sys/", "/dev/", "/run/user/")
+
+
+def _is_access_error(line):
+    return any(code in line for code in _ACCESS_ERROR_CODES)
+
+
+def _routine_access_error(line, windows=None, macos=None):
+    """True when a borg permission error is about a file the user cannot
+    make readable, so it should not flag the job. An unrecognised line is
+    not routine: better a warning than a folder silently left out."""
+    windows = IS_WINDOWS if windows is None else windows
+    macos = IS_MACOS if macos is None else macos
+    m = _ACCESS_ERROR_LINE.match(line.strip())
+    if not m:
+        return False
+    path = m.group("path")
+    if windows:
+        low = path.replace("/", "\\").lower()
+        name = low.rsplit("\\", 1)[-1]
+        if name.startswith(_WINDOWS_ROUTINE_NAMES) or _WINDOWS_ROUTINE_PATH.search(low):
+            return True
+        # Compatibility junctions deny listing to everyone, by design. They
+        # are reparse points, which also catches every localized name.
+        try:
+            return bool(getattr(os.lstat(path), "st_file_attributes", 0) & 0x400)
+        except OSError:
+            return False
+    if macos:
+        return any(f in path + "/" for f in _MACOS_ROUTINE_FRAGMENTS) or (path + "/").startswith(_MACOS_ROUTINE_PREFIXES)
+    return (path + "/").startswith(_UNIX_ROUTINE_PREFIXES)
+
+
 def _translate_borg_rsh_windows(rsh):
     """The server builds BORG_RSH with Unix paths (/etc/bbs-agent/ssh_key,
     /tmp/bbs-remote-ssh-key) and the system ssh; on Windows they have to
@@ -5223,7 +5278,9 @@ def _read_mounts():
                 source = parts[sep + 2].replace("\\040", " ")
                 if fstype in _SNAPSHOT_PSEUDO_FS or fstype.startswith("fuse.") and fstype != "fuse.zfs":
                     continue
-                mounts.append({"mount": mount, "source": source, "fstype": fstype})
+                mounts.append({"mount": mount, "source": source, "fstype": fstype,
+                               "root": parts[3].replace("\\040", " "),
+                               "readonly": "ro" in parts[5].split(",")})
     except OSError:
         return []
     # One entry per mount point: the last one in mountinfo is the visible one.
@@ -5231,6 +5288,67 @@ def _read_mounts():
     for m in mounts:
         seen[m["mount"]] = m
     return sorted(seen.values(), key=lambda m: -len(m["mount"]))
+
+
+def _btrfs_nested_subvolumes(mounts):
+    """Pseudo-mount entries for btrfs subvolumes that sit inside a mounted
+    btrfs volume without a mount of their own. A btrfs snapshot does not
+    descend into nested subvolumes: they show up in it as empty
+    directories. Snapshotting only the mount let a backup of a directory in
+    one, or below one, store an empty directory and report success. Each
+    becomes an entry like a real sub-mount, so it gets its own snapshot."""
+    btrfs = _snapshot_tool("btrfs")
+    if not btrfs:
+        return []
+    mount_points = set(m["mount"] for m in mounts)
+    found = {}
+    for m in mounts:
+        if m["fstype"] != "btrfs":
+            continue
+        rc, out, _ = _run_quiet([btrfs, "subvolume", "list", m["mount"]], timeout=60)
+        if rc != 0:
+            continue
+        # The mount shows the subvolume or directory at `root`, a path from
+        # the top of the filesystem. `subvolume list` prints a subvolume
+        # below the listed one relative to it, and others from the top;
+        # versions differ on which, so both readings are tried. A reading
+        # only counts if the path is a subvolume root of its own (inode
+        # 256, a device of its own) inside this mount and no deeper one.
+        root = (m.get("root") or "/").rstrip("/")
+        base = m["mount"].rstrip("/")
+        try:
+            mount_dev = os.stat(m["mount"]).st_dev
+        except OSError:
+            continue
+        for line in out.splitlines():
+            if " path " not in line:
+                continue
+            raw = line.split(" path ", 1)[1].strip()
+            candidates = []
+            if raw.startswith("<FS_TREE>/"):
+                top = raw[len("<FS_TREE>"):]
+            else:
+                top = "/" + raw.lstrip("/")
+                candidates.append(base + top)
+            if top.startswith(root + "/"):
+                candidates.append(base + top[len(root):])
+            for path in candidates:
+                if path in mount_points or path in found:
+                    continue
+                if os.path.basename(path).startswith(".bbs-snap-"):
+                    continue
+                if any(mp != m["mount"] and len(mp) > len(m["mount"]) and path.startswith(mp.rstrip("/") + "/")
+                       for mp in mount_points):
+                    continue
+                try:
+                    st = os.stat(path)
+                except OSError:
+                    continue
+                if st.st_ino != 256 or st.st_dev == mount_dev:
+                    continue
+                found[path] = {"mount": path, "source": m["source"], "fstype": "btrfs", "root": top,
+                               "readonly": m.get("readonly", False)}
+    return list(found.values())
 
 
 def _lvm_info(source):
@@ -5257,7 +5375,23 @@ def _snapshot_method(mount):
     (None, reason)."""
     fstype = mount["fstype"]
     if fstype == "btrfs":
-        return ("btrfs", None) if _snapshot_tool("btrfs") else (None, "btrfs tools not installed")
+        if not _snapshot_tool("btrfs"):
+            return (None, "btrfs tools not installed")
+        # btrfs snapshots whole subvolumes only. A mount point is normally a
+        # subvolume root, but a bind mount, such as a Docker volume of a
+        # directory, can be any directory, and `btrfs subvolume snapshot`
+        # then fails with "Not a Btrfs subvolume" (#582). Every subvolume's
+        # root directory is inode 256.
+        try:
+            if os.stat(mount["mount"]).st_ino != 256:
+                return (None, "{} is a directory on btrfs, not a subvolume".format(mount["mount"]))
+        except OSError as e:
+            return (None, "cannot read {}: {}".format(mount["mount"], e))
+        # The snapshot is created inside the volume, so a read-only mount
+        # (a Docker volume with :ro) cannot take one.
+        if mount.get("readonly"):
+            return (None, "{} is mounted read-only".format(mount["mount"]))
+        return ("btrfs", None)
     if fstype == "zfs":
         return ("zfs", None) if _snapshot_tool("zfs") else (None, "zfs tools not installed")
     info = _lvm_info(mount["source"])
@@ -5267,6 +5401,57 @@ def _snapshot_method(mount):
             return (None, "LVM volume group {} has no free space for a snapshot".format(vg))
         return ("lvm", info)
     return (None, "{} on {} is not a snapshot-capable volume".format(fstype, mount["source"]))
+
+
+_MOUNT_PROBE = None
+
+
+def _in_container():
+    if os.path.exists("/.dockerenv") or os.path.exists("/run/.containerenv"):
+        return True
+    try:
+        with open("/proc/1/cgroup") as f:
+            data = f.read()
+        return "docker" in data or "kubepods" in data or "containerd" in data
+    except OSError:
+        return False
+
+
+def _mount_probe():
+    """(ok, reason): whether this process may bind-mount. Snapshots need it
+    to build the tree borg reads, and btrfs needs the same rights to delete
+    a snapshot again. A container has neither by default: Docker drops
+    CAP_SYS_ADMIN and its AppArmor profile denies mount. Without this check
+    the agent offered snapshots, took one, failed on the bind mount and
+    could not remove the snapshot, leaving it in the user's data (#582).
+    Rights do not change while the process runs, so the answer is cached."""
+    global _MOUNT_PROBE
+    if _MOUNT_PROBE is not None:
+        return _MOUNT_PROBE
+    mount = _snapshot_tool("mount") or "mount"
+    umount = _snapshot_tool("umount") or "umount"
+    base = "/run/bbs-agent/mount-probe-{}".format(os.getpid())
+    src, dst = os.path.join(base, "src"), os.path.join(base, "dst")
+    try:
+        os.makedirs(src, exist_ok=True)
+        os.makedirs(dst, exist_ok=True)
+        rc, out, err = _run_quiet([mount, "--bind", src, dst], timeout=15)
+        if rc == 0:
+            if _run_quiet([umount, dst], timeout=15)[0] != 0:
+                _run_quiet([umount, "-l", dst], timeout=15)
+            result = (True, None)
+        elif _in_container():
+            result = (False, "the container may not mount file systems; give it cap_add SYS_ADMIN "
+                              "and security_opt apparmor=unconfined, or run it privileged")
+        else:
+            detail = (err or out).strip().splitlines()
+            result = (False, "the agent may not mount file systems: {}".format(detail[0] if detail else "rc {}".format(rc)))
+    except OSError as e:
+        result = (False, "mount check failed: {}".format(e))
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
+    _MOUNT_PROBE = result
+    return result
 
 
 def get_snapshot_support():
@@ -5296,6 +5481,11 @@ def get_snapshot_support():
     if os.geteuid() != 0:
         methods = set()
         reason = "the agent must run as root to take snapshots"
+    elif methods:
+        mount_ok, mount_reason = _mount_probe()
+        if not mount_ok:
+            methods = set()
+            reason = mount_reason
     return {"capable": bool(methods), "methods": sorted(methods), "volumes": volumes, "reason": reason}
 
 
@@ -5336,6 +5526,11 @@ class SnapshotSession(object):
         tree, and return (command, cwd) with the paths made relative."""
         if not hasattr(os, "geteuid") or os.geteuid() != 0:
             raise RuntimeError("snapshots need the agent to run as root")
+        # Before any snapshot exists: one taken without mount rights can be
+        # neither mounted nor removed (#582).
+        mount_ok, mount_reason = _mount_probe()
+        if not mount_ok:
+            raise RuntimeError(mount_reason)
         dirs = [d for d in (directories or "").splitlines() if d.strip()]
         dirs = [os.path.normpath(d.strip()) for d in dirs]
         if not dirs:
@@ -5343,6 +5538,7 @@ class SnapshotSession(object):
         mounts = _read_mounts()
         if not mounts:
             raise RuntimeError("could not read the mount table")
+        mounts = sorted(mounts + _btrfs_nested_subvolumes(mounts), key=lambda m: -len(m["mount"]))
 
         def owner(path):
             for m in mounts:
@@ -6504,23 +6700,20 @@ def _execute_task_inner(config, task, job_id, task_type, command, env_vars,
                     "file changed while we backed it up", # active mysql / mailspool / log
                     "file vanished while we backed it up",# transient files
                     "stat: [Errno 2]",                    # file deleted between scan and read
-                    # OS-level "you can't read this" errors on files we don't
-                    # control — registry hives on Windows, system caches on
-                    # macOS, iCloud-synced folders. The user can't grant the
-                    # backup process access, so flagging every backup with
-                    # had_warnings just adds noise (#236). Error codes in
-                    # brackets are locale-independent.
-                    "[WinError 5]",                       # Windows: Access denied (NTUSER.DAT, special folders)
-                    "[Errno 13]",                         # POSIX: Permission denied
-                    "[Errno 1]",                          # POSIX: Operation not permitted (macOS SIP)
-                    "[Errno 11]",                         # POSIX: Resource (deadlock) — common in macOS iCloud
+                    # macOS iCloud folders that are not downloaded (#236).
+                    # Error codes in brackets are locale-independent.
+                    "[Errno 11]",                         # POSIX: Resource (deadlock)
                 )
                 warning_lines = [
                     ln for ln in error_output.splitlines() if ln.strip()
                 ]
+                # Permission errors count as routine only on system files
+                # and folders nobody can grant access to (#236); on a data
+                # folder they mean the archive is missing it (#585).
                 actionable = [
                     ln for ln in warning_lines
-                    if not any(p in ln for p in routine_patterns)
+                    if not (_routine_access_error(ln) if _is_access_error(ln)
+                            else any(p in ln for p in routine_patterns))
                 ]
                 if actionable:
                     had_warnings = True
@@ -7018,4 +7211,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-# bbs-signature: v1 OKcx7Tn29huCKThmCCUoA4m7ubqHGAsrbu2gUjU/6boj56Xbb8X4MFQFdXMIkg1B6u3lmlFbM7WPbLBzPI5YCw==
+# bbs-signature: v1 1Xd0Y1LpS8eY8PeIvEzg/EE2dqJS9gwoEkWb/WvKVqv1bRtwWXGOgtmY6VI7NcUTap0VJPq+06nklsgZtq1IBg==

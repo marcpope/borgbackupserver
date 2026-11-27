@@ -2,13 +2,17 @@ FROM python:3.11-slim
 
 # Runtime deps for the agent plus all database CLI tools so one image
 # handles filesystem, MySQL, PostgreSQL, and MongoDB backups out of the
-# box. Keep everything in a single layer and clean out apt caches.
+# box. btrfs-progs lets "Back up from a snapshot" work on btrfs volumes
+# mounted into the container (#582); the container also needs mount
+# rights for that, see the agent's Docker docs. Keep everything in a
+# single layer and clean out apt caches.
 RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
         borgbackup \
         openssh-client \
         ca-certificates \
         curl \
         default-mysql-client \
+        btrfs-progs \
     && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
 # PostgreSQL clients from the PostgreSQL apt repository, several majors at
