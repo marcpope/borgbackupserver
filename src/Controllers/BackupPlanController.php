@@ -31,6 +31,11 @@ class BackupPlanController extends Controller
         $pruneMonths = (int) ($_POST['prune_months'] ?? 6);
         $pruneYears = (int) ($_POST['prune_years'] ?? 0);
 
+        // A plan whose plugins write a folder may leave Directories empty:
+        // the plugin's folder is what it backs up (#579).
+        if ($directories === '' && $agentId) {
+            $directories = $this->pluginDirectoriesFromPost($agentId);
+        }
         if (empty($name) || empty($agentId) || empty($repositoryId) || empty($directories)) {
             $this->flash('danger', 'Name, repository, and directories are required.');
             $this->redirect("/clients/{$agentId}?tab=schedules");
@@ -128,7 +133,16 @@ class BackupPlanController extends Controller
 
         $data = [];
         if (isset($_POST['name'])) $data['name'] = trim($_POST['name']);
-        if (isset($_POST['directories'])) $data['directories'] = trim($_POST['directories']);
+        if (isset($_POST['directories'])) {
+            $data['directories'] = trim($_POST['directories']);
+            if ($data['directories'] === '') {
+                $data['directories'] = $this->pluginDirectoriesFromPost((int) $plan['agent_id']);
+            }
+            if ($data['directories'] === '') {
+                $this->flash('danger', 'Add at least one directory, or select a database or InterWorx plugin, which backs up its own folder.');
+                $this->redirect("/clients/{$plan['agent_id']}?tab=schedules");
+            }
+        }
         if (isset($_POST['excludes'])) $data['excludes'] = trim($_POST['excludes']) ?: null;
         if (isset($_POST['advanced_options'])) $data['advanced_options'] = trim($_POST['advanced_options']) ?: null;
         // An unticked checkbox is absent from the POST; the form carries a
@@ -186,10 +200,29 @@ class BackupPlanController extends Controller
             $times = trim($_POST['times'] ?? '');
             $dayOfWeek = \BBS\Services\SchedulerService::formatDaysOfWeek($_POST['day_of_week'] ?? '');
             $dayOfMonth = isset($_POST['day_of_month']) && $_POST['day_of_month'] !== '' ? $_POST['day_of_month'] : null;
-            // Same resolution as plan creation, so editing a plan does not
-            // move it from the profile's zone to the editor's (#559).
-            $planTz = (new \BBS\Services\ClientProfileService())
-                ->planTimezoneFor((int) $plan['agent_id'], $_SESSION['timezone'] ?? null);
+            // The schedule keeps the zone it already has. The edit form says
+            // "Times are in <that zone>", so the times posted back are in it.
+            // Resolving afresh fell back to the editor's own zone when the
+            // client profile has none, so a user who changed their profile
+            // zone moved every plan they re-saved by the difference (#583).
+            // A schedule without a zone resolves as plan creation does, so
+            // it lands in the profile's zone, not the editor's (#559).
+            $existingSched = $this->db->fetchOne(
+                "SELECT timezone FROM schedules WHERE backup_plan_id = ? ORDER BY id LIMIT 1",
+                [$id]
+            );
+            $planTz = (string) ($existingSched['timezone'] ?? '');
+            try {
+                if ($planTz !== '') {
+                    new \DateTimeZone($planTz);
+                }
+            } catch (\Exception $e) {
+                $planTz = '';
+            }
+            if ($planTz === '') {
+                $planTz = (new \BBS\Services\ClientProfileService())
+                    ->planTimezoneFor((int) $plan['agent_id'], $_SESSION['timezone'] ?? null);
+            }
             $nextRun = $this->calculateNextRun($frequency, $times, $dayOfWeek, $dayOfMonth, $planTz);
 
             $this->db->update('schedules', [
@@ -413,6 +446,33 @@ class BackupPlanController extends Controller
      * plugin_config[plugin_id]=config_id map for older form posts.
      * Returns an error string if the selection is invalid, else null.
      */
+    /**
+     * The output folders of the plugin configs ticked on the plan form, one
+     * per line, for a plan saved with no directories of its own (#579).
+     */
+    private function pluginDirectoriesFromPost(int $agentId): string
+    {
+        $ids = isset($_POST['plan_plugin_configs']) && is_array($_POST['plan_plugin_configs'])
+            ? array_values(array_unique(array_filter(array_map('intval', $_POST['plan_plugin_configs']))))
+            : [];
+        $directories = '';
+        foreach ($ids as $cid) {
+            $pc = $this->db->fetchOne(
+                "SELECT pc.config, p.slug FROM plugin_configs pc JOIN plugins p ON p.id = pc.plugin_id
+                 WHERE pc.id = ? AND pc.agent_id = ?",
+                [$cid, $agentId]
+            );
+            if (!$pc) {
+                continue;
+            }
+            $dir = \BBS\Services\PluginManager::outputDirectory($pc['slug'], json_decode($pc['config'] ?? '{}', true) ?: []);
+            if ($dir !== null) {
+                $directories = \BBS\Services\PluginManager::addDirectory($directories, $dir);
+            }
+        }
+        return $directories;
+    }
+
     private function savePluginConfigs(int $planId, int $agentId): ?string
     {
         $configIds = [];

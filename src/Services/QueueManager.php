@@ -383,11 +383,9 @@ class QueueManager
                     $pluginManager = new PluginManager();
                     $plugins = $pluginManager->buildPluginPayload($job['backup_plan_id'], $job['agent_id']);
                     foreach ($plugins as $p) {
-                        if (!empty($p['config']['dump_dir'])) {
-                            $dumpDir = rtrim($p['config']['dump_dir'], '/');
-                            if (strpos($plan['directories'], $dumpDir) === false) {
-                                $plan['directories'] .= "\n" . $dumpDir;
-                            }
+                        $pluginDir = PluginManager::outputDirectory((string) ($p['slug'] ?? ''), $p['config'] ?? []);
+                        if ($pluginDir !== null) {
+                            $plan['directories'] = PluginManager::addDirectory($plan['directories'], $pluginDir);
                         }
                     }
                 }
@@ -783,11 +781,9 @@ class QueueManager
                     $pluginManager = new PluginManager();
                     $plugins = $pluginManager->buildPluginPayload($job['backup_plan_id'], $job['agent_id']);
                     foreach ($plugins as $p) {
-                        if (!empty($p['config']['dump_dir'])) {
-                            $dumpDir = rtrim($p['config']['dump_dir'], '/');
-                            if (strpos($plan['directories'], $dumpDir) === false) {
-                                $plan['directories'] .= "\n" . $dumpDir;
-                            }
+                        $pluginDir = PluginManager::outputDirectory((string) ($p['slug'] ?? ''), $p['config'] ?? []);
+                        if ($pluginDir !== null) {
+                            $plan['directories'] = PluginManager::addDirectory($plan['directories'], $pluginDir);
                         }
                     }
                 }

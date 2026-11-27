@@ -212,6 +212,55 @@ class PluginManager
     }
 
     /**
+     * The folder a plugin writes its output to, which every backup that
+     * runs the plugin has to include: dump_dir for the database plugins,
+     * output_dir for InterWorx. Null for plugins that write nothing.
+     * InterWorx was left out before, so its archives only reached the
+     * backup when the plan listed the folder itself (#579).
+     */
+    public static function outputDirectory(string $slug, array $config): ?string
+    {
+        if (in_array($slug, ['mysql_dump', 'pg_dump', 'mongo_dump', 'mssql_dump'], true)) {
+            $dir = trim((string) ($config['dump_dir'] ?? ''));
+        } elseif ($slug === 'interworx') {
+            // The agent's own default when the setting is blank.
+            $dir = trim((string) ($config['output_dir'] ?? '')) ?: '/chroot/home/backup/interworx';
+        } else {
+            return null;
+        }
+        if ($dir === '') {
+            return null;
+        }
+        $trimmed = rtrim($dir, '/\\');
+        // Keep a bare root ("/" or "C:\") as it is.
+        return ($trimmed === '' || preg_match('/^[A-Za-z]:$/', $trimmed)) ? $dir : $trimmed;
+    }
+
+    /**
+     * Add a directory to a plan's newline-separated list unless the list
+     * already covers it: the same path, or a parent of it. The old check
+     * was a substring test, so a plan listing /var/backups/mysql-old
+     * silently dropped a dump folder at /var/backups/mysql (#579).
+     */
+    public static function addDirectory(string $directories, string $dir): string
+    {
+        $norm = static function (string $path): string {
+            $path = rtrim(str_replace('\\', '/', trim($path)), '/');
+            return preg_match('/^[A-Za-z]:(\/|$)/', $path) ? strtolower($path) : $path;
+        };
+        $want = $norm($dir);
+        $lines = array_values(array_filter(array_map('trim', preg_split('/\r?\n/', $directories)), 'strlen'));
+        foreach ($lines as $line) {
+            $have = $norm($line);
+            if ($have === $want || str_starts_with($want, $have . '/')) {
+                return $directories;
+            }
+        }
+        $lines[] = $dir;
+        return implode("\n", $lines);
+    }
+
+    /**
      * Get all named plugin configs for an agent.
      */
     public function getPluginConfigs(int $agentId): array
@@ -605,7 +654,7 @@ class PluginManager
                     'label' => 'Dump Directory',
                     'default' => '/home/bbs/mysql',
                     'required' => true,
-                    'help' => 'Local directory where dumps are saved. Automatically included in backup directories.',
+                    'help' => 'Local directory where dumps are saved. Backed up with every plan that runs this config; it does not need to be listed in the plan directories.',
                 ],
                 'compress' => [
                     'type' => 'checkbox',
@@ -665,7 +714,7 @@ class PluginManager
                     'label' => 'Dump Directory',
                     'default' => '/home/bbs/pgdump',
                     'required' => true,
-                    'help' => 'Local directory where dumps are saved. Automatically included in backup directories.',
+                    'help' => 'Local directory where dumps are saved. Backed up with every plan that runs this config; it does not need to be listed in the plan directories.',
                 ],
                 'compress' => [
                     'type' => 'checkbox',
@@ -728,7 +777,7 @@ class PluginManager
                     'label' => 'Dump Directory',
                     'default' => 'C:\\ProgramData\\BBS\\mssql',
                     'required' => true,
-                    'help' => 'Directory on the SQL Server machine where the .bak files are written. Automatically included in backup directories. On Linux use e.g. /var/opt/mssql/bbs-backup.',
+                    'help' => 'Directory on the SQL Server machine where the .bak files are written. Backed up with every plan that runs this config; it does not need to be listed in the plan directories. On Linux use e.g. /var/opt/mssql/bbs-backup.',
                 ],
                 'compress' => [
                     'type' => 'checkbox',
@@ -808,7 +857,7 @@ class PluginManager
                     'label' => 'Dump Directory',
                     'default' => '/home/bbs/mongodump',
                     'required' => true,
-                    'help' => 'Local directory where dumps are saved. Automatically included in backup directories.',
+                    'help' => 'Local directory where dumps are saved. Backed up with every plan that runs this config; it does not need to be listed in the plan directories.',
                 ],
                 'compress' => [
                     'type' => 'checkbox',
@@ -886,7 +935,7 @@ class PluginManager
                     'label' => 'Output Directory',
                     'default' => '/chroot/home/backup/interworx',
                     'required' => true,
-                    'help' => 'Directory where InterWorx backup archives are saved. Automatically included in backup directories.',
+                    'help' => 'Directory where InterWorx backup archives are saved. Backed up with every plan that runs this config; it does not need to be listed in the plan directories.',
                 ],
                 'no_disabled' => [
                     'type' => 'checkbox',

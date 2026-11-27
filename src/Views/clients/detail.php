@@ -574,6 +574,9 @@ $sizeDisplay = $totalSize > 0 ? \BBS\Services\ServerStats::formatBytes((int) $to
                     if (!empty($plan['times']) && in_array($freq, ['daily','weekly','monthly'])) $sched .= ' @ ' . htmlspecialchars($plan['times']);
                     if ($freq === 'weekly' && isset($plan['day_of_week'])) { $sched = \BBS\Services\SchedulerService::daysOfWeekLabel($plan['day_of_week']) . ' @ ' . htmlspecialchars($plan['times'] ?? '00:00'); }
                     if ($freq === 'monthly' && isset($plan['day_of_month'])) { $dom = $plan['day_of_month']; $sched = 'Monthly on ' . ($dom === 'last' ? 'last day' : $dom) . ' @ ' . htmlspecialchars($plan['times'] ?? '00:00'); }
+                    // Name the zone when it is not the viewer's: the times are
+                    // stored in the schedule's zone, not converted (#583).
+                    if (!$isManual && !empty($plan['times']) && in_array($freq, ['daily','weekly','monthly']) && !empty($plan['schedule_timezone']) && $plan['schedule_timezone'] !== ($_SESSION['timezone'] ?? '')) $sched .= ' ' . htmlspecialchars($plan['schedule_timezone']);
                     if ($isManual) $sched = 'Manual (no schedule)';
                     $isRemote = ($plan['repo_storage_type'] ?? 'local') === 'remote_ssh';
                     $slugs = $planPlugins[(int) $plan['id']] ?? [];
@@ -1807,7 +1810,8 @@ $sizeDisplay = $totalSize > 0 ? \BBS\Services\ServerStats::formatBytes((int) $to
             $type = $typeLabels[$slug] ?? ucfirst(str_replace('_', ' ', $slug));
             ?>
             <label class="border rounded p-2 position-relative d-flex align-items-center gap-2 ppc-card <?= $checked ? 'border-primary bg-primary-subtle' : '' ?>" style="width:190px;cursor:pointer;" for="<?= $cid ?>" draggable="true">
-                <input class="form-check-input position-absolute" type="checkbox" name="plan_plugin_configs[]" value="<?= (int) $c['id'] ?>" data-slug="<?= htmlspecialchars($slug) ?>" id="<?= $cid ?>" <?= $checked ? 'checked' : '' ?> style="top:6px;right:6px;margin:0;">
+                <?php $outDir = \BBS\Services\PluginManager::outputDirectory($slug, json_decode($c['config'] ?? '{}', true) ?: []); ?>
+                <input class="form-check-input position-absolute" type="checkbox" name="plan_plugin_configs[]" value="<?= (int) $c['id'] ?>" data-slug="<?= htmlspecialchars($slug) ?>"<?= $outDir !== null ? ' data-dir="' . htmlspecialchars($outDir) . '"' : '' ?> id="<?= $cid ?>" <?= $checked ? 'checked' : '' ?> style="top:6px;right:6px;margin:0;">
                 <span class="ppc-step badge rounded-pill bg-primary position-absolute" style="top:-7px;left:-7px;font-size:0.65rem;display:none;">1</span>
                 <i class="bi bi-grip-vertical text-muted" style="cursor:grab;font-size:0.9rem;" title="Drag to change the order they run in"></i>
                 <?= $iconHtml ?>
@@ -1863,6 +1867,20 @@ $sizeDisplay = $totalSize > 0 ? \BBS\Services\ServerStats::formatBytes((int) $to
             box.style.display = db ? '' : 'none';
         }
 
+        // A ticked plugin that writes a folder (database dumps, InterWorx)
+        // backs that folder up itself, so the plan needs no directory of its
+        // own. An empty Directories box gets the folder, and stops being
+        // required while such a plugin is ticked (#579).
+        function syncDirs(list, changed) {
+            var form = list.closest('form');
+            var dirs = form && form.querySelector('textarea[name="directories"]');
+            if (!dirs) return;
+            if (changed && changed.checked && changed.dataset.dir && dirs.value.trim() === '') {
+                dirs.value = changed.dataset.dir;
+            }
+            dirs.required = !list.querySelector('input[data-dir]:checked');
+        }
+
         function wire(list) {
             if (list.dataset.ppcWired) return;
             list.dataset.ppcWired = '1';
@@ -1906,10 +1924,12 @@ $sizeDisplay = $totalSize > 0 ? \BBS\Services\ServerStats::formatBytes((int) $to
                 }
                 renumber(list);
                 syncStream(list);
+                syncDirs(list, e.target);
             });
 
             renumber(list);
             syncStream(list);
+            syncDirs(list, null);
         }
 
         function wireAll() { document.querySelectorAll('.ppc-sortable').forEach(wire); }
@@ -1971,6 +1991,10 @@ $sizeDisplay = $totalSize > 0 ? \BBS\Services\ServerStats::formatBytes((int) $to
                 $dom = $plan['day_of_month'];
                 $domLabel = $dom === 'last' ? 'Last day' : $dom;
                 $schedSummary = 'Monthly on ' . $domLabel . ' @ ' . htmlspecialchars($plan['times'] ?? '00:00');
+            }
+            // Name the zone when it is not the viewer's (#583).
+            if ($plan['times'] && in_array($freq, ['daily','weekly','monthly']) && !empty($plan['schedule_timezone']) && $plan['schedule_timezone'] !== ($_SESSION['timezone'] ?? '')) {
+                $schedSummary .= ' ' . htmlspecialchars($plan['schedule_timezone']);
             }
             $statusColor = $isActive ? 'success' : ($isManual ? 'info' : 'secondary');
             $statusLabel = $isActive ? 'Active' : ($isManual ? 'Manual' : 'Paused');
