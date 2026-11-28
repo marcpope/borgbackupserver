@@ -2699,7 +2699,8 @@ class AdminApiController extends Controller
               AND {$agentWhere}
             GROUP BY hour, bj.task_type, bj.status", $agentParams);
 
-        $restoreTypes = ['restore', 'restore_mysql', 'restore_pg', 'restore_mongo', 'restore_mssql'];
+        // Hypervisors: restore_vm (full VM restore) counts as a restore
+        $restoreTypes = ['restore', 'restore_mysql', 'restore_pg', 'restore_mongo', 'restore_mssql', 'restore_vm'];
         $buckets = [];
         foreach ($rows as $row) {
             $h = $row['hour'];
@@ -4648,7 +4649,8 @@ class AdminApiController extends Controller
         ]);
 
         // Auto-queue a break-lock to clean up any stale borg lock
-        if ($job['repository_id'] && in_array($job['task_type'], ['backup', 'restore', 'restore_mysql', 'restore_pg', 'restore_mongo', 'restore_mssql'])) {
+        // (Hypervisors: a cancelled VM restore can leave one too)
+        if ($job['repository_id'] && in_array($job['task_type'], ['backup', 'restore', 'restore_mysql', 'restore_pg', 'restore_mongo', 'restore_mssql', 'restore_vm'])) {
             $this->db->insert('backup_jobs', [
                 'agent_id' => $job['agent_id'],
                 'repository_id' => $job['repository_id'],

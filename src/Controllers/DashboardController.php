@@ -11,7 +11,8 @@ class DashboardController extends Controller
     /** Category → task_type list, for filtering the Recently Completed panel. */
     private const RECENT_JOB_CATEGORIES = [
         'backup'  => ['backup'],
-        'restore' => ['restore', 'restore_mysql', 'restore_pg', 'restore_mongo', 'restore_mssql', 's3_restore'],
+        // Hypervisors: restore_vm (full VM restore) listed with the restores
+        'restore' => ['restore', 'restore_mysql', 'restore_pg', 'restore_mongo', 'restore_mssql', 'restore_vm', 's3_restore'],
         'prune'   => ['prune'],
         'compact' => ['compact'],
         's3'      => ['s3_sync'],
@@ -602,7 +603,8 @@ class DashboardController extends Controller
         // Group task types into 3 categories
         $categoryMap = [
             'backup' => 'backups',
-            'restore' => 'restores', 'restore_mysql' => 'restores', 'restore_pg' => 'restores', 'restore_mongo' => 'restores', 'restore_mssql' => 'restores',
+            // Hypervisors: restore_vm counted with the restores
+            'restore' => 'restores', 'restore_mysql' => 'restores', 'restore_pg' => 'restores', 'restore_mongo' => 'restores', 'restore_mssql' => 'restores', 'restore_vm' => 'restores',
             's3_sync' => 's3_sync',
         ];
         // Index by hour+category

@@ -93,6 +93,22 @@ class App
         $this->router->map('GET', '/dashboard/health-json', 'DashboardController@apiHealthJson');
         $this->router->map('GET', '/dashboard/active-json', 'DashboardController@apiActiveJson');
 
+        // Hypervisors: hypervisor pages (HypervisorController), see docs/hypervisors.md
+        $this->router->map('GET', '/hypervisors', 'HypervisorController@index');
+        $this->router->map('GET', '/hypervisors/add', 'HypervisorController@add');
+        $this->router->map('POST', '/hypervisors/add', 'HypervisorController@store');
+        $this->router->map('GET', '/hypervisors/[i:id]', 'HypervisorController@detail');
+        $this->router->map('POST', '/hypervisors/[i:id]/refresh', 'HypervisorController@refresh');
+        $this->router->map('POST', '/hypervisors/[i:id]/settings', 'HypervisorController@updateSettings');
+        $this->router->map('POST', '/hypervisors/[i:id]/plans', 'HypervisorController@storePlan');
+        $this->router->map('POST', '/hypervisors/[i:id]/restore', 'HypervisorController@restore');
+        $this->router->map('GET', '/hypervisors/[i:id]/browse/[i:archiveId]', 'HypervisorController@browse');
+        $this->router->map('POST', '/hypervisors/[i:id]/browse/[i:archiveId]', 'HypervisorController@browseRequest');
+        $this->router->map('GET', '/hypervisors/[i:id]/browse-task/[i:jobId]', 'HypervisorController@browseTask');
+        $this->router->map('GET', '/hypervisors/[i:id]/browse-download/[i:jobId]', 'HypervisorController@browseDownload');
+        $this->router->map('GET', '/hypervisors/[i:id]/browse-session/[i:archiveId]', 'HypervisorController@browseSession');
+        $this->router->map('POST', '/hypervisors/[i:id]/browse-close/[i:archiveId]', 'HypervisorController@browseClose');
+
         // Clients (Agents)
         $this->router->map('GET', '/clients', 'ClientController@index');
         $this->router->map('GET', '/clients/add', 'ClientController@add');
@@ -303,6 +319,11 @@ class App
         $this->router->map('POST', '/api/agent/status', 'Api\\AgentApiController@status');
         $this->router->map('POST', '/api/agent/heartbeat', 'Api\\AgentApiController@heartbeat');
         $this->router->map('POST', '/api/agent/info', 'Api\\AgentApiController@info');
+        // Hypervisors: endpoints for hypervisor agents only (403 for a client agent)
+        $this->router->map('POST', '/api/agent/hypervisor/inventory', 'Api\\AgentApiController@hypervisorInventory');
+        $this->router->map('GET', '/api/agent/hypervisor/assignments', 'Api\\AgentApiController@hypervisorAssignments');
+        $this->router->map('POST', '/api/agent/hypervisor/browse-upload', 'Api\\AgentApiController@hypervisorBrowseUpload');
+        $this->router->map('POST', '/api/agent/hypervisor/browse-session', 'Api\\AgentApiController@hypervisorBrowseSession');
         $this->router->map('POST', '/api/agent/catalog', 'Api\\AgentApiController@catalog');
         $this->router->map('GET', '/api/agent/ssh-key', 'Api\\AgentApiController@sshKey');
         $this->router->map('GET', '/api/agent/download', 'Api\\AgentApiController@downloadFile');

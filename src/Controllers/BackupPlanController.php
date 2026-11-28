@@ -265,7 +265,10 @@ class BackupPlanController extends Controller
         $agentId = $plan['agent_id'];
         $this->db->delete('backup_plans', 'id = ?', [$id]);
         $this->flash('success', "Backup plan \"{$plan['name']}\" deleted.");
-        $this->redirect("/clients/{$agentId}?tab=schedules");
+        // Hypervisors: a VM plan is managed from its hypervisor's page
+        $this->redirect(!empty($plan['hypervisor_id'])
+            ? "/hypervisors/{$plan['hypervisor_id']}?tab=backups"
+            : "/clients/{$agentId}?tab=schedules");
     }
 
     public function trigger(int $id): void
@@ -281,6 +284,17 @@ class BackupPlanController extends Controller
 
         // Require trigger_backup permission
         $this->requirePermission(PermissionService::TRIGGER_BACKUP, $plan['agent_id']);
+
+        // Hypervisors: Run now of a VM plan queues one backup job per VM
+        // (each VM already queued or running is skipped), then goes back to
+        // the hypervisor page. See docs/hypervisors.md#d3-one-backup-job-and-one-archive-per-vm-inside-the-normal-pipeline
+        if (!empty($plan['hypervisor_id'])) {
+            $jobIds = (new \BBS\Services\Hypervisors\HypervisorBackupService())->queueJobs($plan, 'Manual');
+            $this->flash($jobIds ? 'success' : 'warning', $jobIds
+                ? count($jobIds) . ' VM backup(s) queued.'
+                : 'No VM to back up: none selected, or all already queued.');
+            $this->redirect("/hypervisors/{$plan['hypervisor_id']}?tab=backups");
+        }
 
         // Check if this plan already has an active job (no point running the same plan twice)
         $planBusy = $this->db->fetchOne("
