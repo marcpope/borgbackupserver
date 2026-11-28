@@ -928,6 +928,7 @@ $dfFix = function (string $s): string {
                             'restore_pg'      => 'bi-database text-primary',
                             'restore_mongo'   => 'bi-database text-primary',
                             'restore_mssql'   => 'bi-database text-primary',
+                            'restore_vm'      => 'bi-pc-display text-primary', // Hypervisors: VM restore
                             'check'           => 'bi-shield-check text-success',
                             'repo_check'      => 'bi-shield-check text-success',
                             'repo_repair'     => 'bi-tools text-warning',
@@ -1454,6 +1455,7 @@ document.addEventListener('DOMContentLoaded', function () {
             'restore_pg':      'bi-database text-primary',
             'restore_mongo':   'bi-database text-primary',
             'restore_mssql':   'bi-database text-primary',
+            'restore_vm':      'bi-pc-display text-primary', // Hypervisors: VM restore
             'check':           'bi-shield-check text-success',
             'repo_check':      'bi-shield-check text-success',
             'repo_repair':     'bi-tools text-warning',
