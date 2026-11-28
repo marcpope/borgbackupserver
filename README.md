@@ -19,6 +19,7 @@ The developer has made a system for provisioning Demos at no cost here: [Borg Ba
 - **File-level restore** — catalog data is saved in ClickHouse DB for fast search and file-tree without having to lock the borg repo
 - **Download archives** — extract and download files as .tar.gz directly from the browser
 - **Database plugins** — MySQL and PostgreSQL pre-dumps with automatic restore back into the database as a copy or replacement
+- **Proxmox VE VM backups** — dedicated hypervisor agent on the node: VM disk backups from LVM-thin snapshots with changed block tracking, restore as a new VM, and file-level browsing of VM backups (see [docs/hypervisors.md](docs/hypervisors.md))
 - **Flexible scheduling** — hourly to monthly intervals, multiple plans per client, manual trigger
 - **Backup templates** — pre-configured and customizeable directory sets for common server roles
 - **Retention policies** — per-plan prune settings (hourly/daily/weekly/monthly/yearly)
