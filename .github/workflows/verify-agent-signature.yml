@@ -3,11 +3,12 @@ name: Verify agent signature
 # Every push must carry agent scripts signed by a key in
 # agent/signing-key.pub, or agents in the field will refuse the update.
 # Verification needs only the public key.
+# Hypervisors: agent/bbs-hypervisor.py added to the signed files
 on:
   push:
-    paths: ['agent/bbs-agent.py', 'agent/bbs-agent-start.sh', 'agent/signing-key.pub', 'bin/bbs-sign-agent']
+    paths: ['agent/bbs-agent.py', 'agent/bbs-agent-start.sh', 'agent/bbs-hypervisor.py', 'agent/signing-key.pub', 'bin/bbs-sign-agent']
   pull_request:
-    paths: ['agent/bbs-agent.py', 'agent/bbs-agent-start.sh', 'agent/signing-key.pub', 'bin/bbs-sign-agent']
+    paths: ['agent/bbs-agent.py', 'agent/bbs-agent-start.sh', 'agent/bbs-hypervisor.py', 'agent/signing-key.pub', 'bin/bbs-sign-agent']
 
 jobs:
   verify:

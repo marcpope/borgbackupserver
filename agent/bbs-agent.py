@@ -56,7 +56,7 @@ if not hasattr(subprocess, "run"):
     subprocess.run = _subprocess_run
     subprocess.CompletedProcess = _CompletedProcess
 
-AGENT_VERSION = "2.102.1"
+AGENT_VERSION = "2.103.0-exp.3"
 
 # Ed25519 public keys, hex, that may sign an update to this script and to
 # the start wrapper. Kept in step with agent/signing-key.pub. An update the
@@ -479,6 +479,11 @@ def load_config():
         "server_url": config.get("server", "url").rstrip("/"),
         "api_key": config.get("server", "api_key"),
         "poll_interval": config.getint("agent", "poll_interval", fallback=30),
+        # Hypervisors: "hypervisor" on an agent installed with install.sh
+        # --hypervisor: it then loads bbs-hypervisor.py. Anything else is a
+        # client agent. (The server keeps its own agent_type and refuses
+        # hypervisor API calls from client agents whatever this says.)
+        "role": config.get("agent", "role", fallback="client").strip().lower(),
         "auto_update": auto_update,
         "require_signed_updates": require_signed,
         # Optional: confine shell hooks to one directory on this client.
@@ -756,6 +761,530 @@ def get_system_info(config=None):
         pass
 
     return info
+
+
+# ---------------------------------------------------------------------------
+# Hypervisor agents
+#
+# A hypervisor agent is this same agent with `role = hypervisor` in its
+# config and the hypervisor module (bbs-hypervisor.py) next to it; both are
+# set up by `install.sh --hypervisor`. A client agent has neither, so the
+# hypervisor code (connectors for Proxmox, later VMware) is never on it.
+#
+# Inventory runs in its own thread, apart from the task loop, so the VM list
+# stays current while a long task (a VM backup) runs. Every
+# HYPERVISOR_ASSIGNMENT_POLL seconds the thread asks the server which
+# hypervisors this agent serves, with which connector, how often to report
+# and whether a refresh was requested; it then reports what is due.
+#
+# What this section adds to the agent, and where it is called from:
+#   load_hypervisor_module()        main(), once at start
+#   hypervisor_inventory_thread()   thread started by main()
+#   execute_restore_vm()            _execute_task_inner(), task 'restore_vm'
+#   execute_vm_browse()             _execute_task_inner(), task 'vm_browse'
+#   backup of a VM                  _execute_task_inner(), 'backup' task
+#                                   carrying hypervisor_vm (see "VM backup")
+#   module update                   execute_update_agent()
+# Network: the same HTTPS calls to the server as any agent (four extra
+# endpoints under /api/agent/hypervisor/) and borg over SSH; nothing listens.
+# See docs/hypervisors.md#architecture
+# ---------------------------------------------------------------------------
+
+HYPERVISOR_MODULE_FILE = "bbs-hypervisor.py"
+HYPERVISOR_MODULE = None  # the loaded module on a hypervisor agent (set in main)
+HYPERVISOR_ASSIGNMENT_POLL = 30  # seconds between GET /api/agent/hypervisor/assignments
+HYPERVISOR_DEFAULT_INTERVAL = 300  # inventory interval when the server gives none (s)
+_hypervisor_warned = set()  # problems already logged, so the 30 s poll does not repeat them
+
+
+def _hypervisor_module_path():
+    """bbs-hypervisor.py next to this script (install.sh puts it there)."""
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), HYPERVISOR_MODULE_FILE)
+
+
+def load_hypervisor_module(config):
+    """The hypervisor module, or None on a client agent.
+
+    Only an agent whose config.ini says `role = hypervisor` loads it, and
+    only from next to this script: a client agent never runs hypervisor
+    code, even if the file were present. A missing or broken module is
+    logged and the agent keeps running as a plain agent (its VM tasks then
+    fail with a clear message) rather than not starting at all."""
+    if config.get("role") != "hypervisor":
+        return None
+    path = _hypervisor_module_path()
+    if not os.path.exists(path):
+        logger.error("This agent is configured as a hypervisor agent but {} is missing; "
+                     "re-run the installer with --hypervisor".format(path))
+        return None
+    try:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("bbs_hypervisor", path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        logger.info("Hypervisor module {} loaded (connectors: {})".format(
+            getattr(module, "MODULE_VERSION", "?"), ", ".join(sorted(module.CONNECTORS))))
+        return module
+    except Exception as e:
+        logger.error("Could not load the hypervisor module: {}".format(e))
+        return None
+
+
+def sync_hypervisor_connectors(module, assigned, current):
+    """Connector instances for the hypervisors the server assigns to this
+    agent: [{"id": 3, "type": "proxmox", "settings": {...}}, ...].
+    Returns {hypervisor_id: connector}; unchanged ones are kept.
+
+    An on-host connector is only used if detect() confirms this machine is
+    that hypervisor (a Proxmox hypervisor assigned to an agent that is not
+    on a Proxmox node is ignored, with one warning)."""
+    connectors = {}
+    for item in assigned or []:
+        try:
+            hypervisor_id = int(item.get("id"))
+        except (TypeError, ValueError, AttributeError):
+            continue
+        slug = item.get("type")
+        existing = current.get(hypervisor_id)
+        if existing is not None and existing.slug == slug:
+            connectors[hypervisor_id] = existing
+            continue
+        connector_cls = module.CONNECTORS.get(slug)
+        if connector_cls is None:
+            _warn_once((hypervisor_id, slug, "connector"),
+                       "Hypervisor #{}: connector '{}' is not in this agent's hypervisor module".format(hypervisor_id, slug))
+            continue
+        if connector_cls.deployment == getattr(module, "DEPLOY_AGENT_ON_HOST", "agent_on_host") and not connector_cls.detect():
+            _warn_once((hypervisor_id, slug, "detect"),
+                       "Hypervisor #{} is a {} host, but this machine is not one".format(hypervisor_id, slug))
+            continue
+        connectors[hypervisor_id] = connector_cls(item.get("settings") or {})
+        logger.info("Serving hypervisor #{} ({})".format(hypervisor_id, slug))
+    return connectors
+
+
+def _warn_once(key, message):
+    """Log a warning once per key for the agent's lifetime."""
+    if key not in _hypervisor_warned:
+        _hypervisor_warned.add(key)
+        logger.warning(message)
+
+
+def hypervisor_inventory_thread(config, module):
+    """Report the inventory of each assigned hypervisor when it is due or
+    when the server asks for a refresh. Independent of the task loop.
+
+    Runs as a daemon thread for the agent's lifetime (stops when `running`
+    goes false). Each turn: GET /api/agent/hypervisor/assignments, then a
+    POST /api/agent/hypervisor/inventory for each hypervisor that is due
+    (interval from the server, at least 60 s) or whose Refresh was pressed.
+    Errors are logged at debug level and retried next turn: a server that
+    is briefly unreachable must not fill the log every 30 s."""
+    connectors = {}
+    last_report = {}  # hypervisor id -> time of its last report
+    while running:
+        try:
+            resp = api_request(config, "/api/agent/hypervisor/assignments")
+            if isinstance(resp, dict) and isinstance(resp.get("hypervisors"), list):
+                assigned = resp["hypervisors"]
+                connectors = sync_hypervisor_connectors(module, assigned, connectors)
+                for item in assigned:
+                    try:
+                        hypervisor_id = int(item.get("id"))
+                        interval = max(60, int(item.get("inventory_interval") or HYPERVISOR_DEFAULT_INTERVAL))
+                    except (TypeError, ValueError, AttributeError):
+                        continue
+                    connector = connectors.get(hypervisor_id)
+                    if connector is None:
+                        continue
+                    if item.get("refresh") or time.time() - last_report.get(hypervisor_id, 0) >= interval:
+                        report_hypervisor_inventory(config, hypervisor_id, connector)
+                        last_report[hypervisor_id] = time.time()
+        except Exception as e:
+            logger.debug("Hypervisor assignment poll failed: {}".format(e))
+
+        for _ in range(HYPERVISOR_ASSIGNMENT_POLL):
+            if not running:
+                break
+            time.sleep(1)
+
+
+class BorgArchiveSource(object):
+    """Files of one archive, for a hypervisor restore. `base_command` is the
+    server's "borg extract [options] repo::archive --"; each read runs it
+    with --stdout and one path, so nothing is written to local disk.
+
+    Why not extract to a temp dir and copy: a VM disk can be hundreds of
+    GB; streaming it straight from borg onto the new volume needs no local
+    space and reads the archive once. Read-only on the repository, like
+    any restore. Every borg process started here is registered as
+    current_borg_proc, so a cancel from the server kills it."""
+
+    CHUNK = 4 * 1024 * 1024  # the VM backups' fixed borg chunk size
+
+    def __init__(self, base_command, env):
+        self.base = list(base_command)
+        self.env = env
+
+    def _command(self, path):
+        """borg extract --stdout [options] repo::archive -- <path>"""
+        return self.base[:2] + ["--stdout"] + self.base[2:] + [path]
+
+    @staticmethod
+    def _error(path, stderr_bytes):
+        """One-line error from the last lines of borg's stderr."""
+        lines = [line for line in stderr_bytes.decode("utf-8", errors="replace").splitlines() if line.strip()]
+        return "borg extract of {} failed: {}".format(path, " / ".join(lines[-3:]) or "no output")
+
+    def read(self, path, max_bytes=16 * 1024 * 1024):
+        """A small file of the archive (manifest, VM config)."""
+        res = subprocess.run(self._command(path), env=self.env, stdout=subprocess.PIPE,
+                             stderr=subprocess.PIPE, timeout=3600)
+        if res.returncode != 0:
+            raise RuntimeError(self._error(path, res.stderr))
+        if len(res.stdout) > max_bytes:
+            raise RuntimeError("{} is unexpectedly large ({} bytes)".format(path, len(res.stdout)))
+        return res.stdout
+
+    def copy_to(self, path, device, progress=None):
+        """Stream a disk image of the archive onto a block device. All-zero
+        chunks are skipped rather than written, so a new thin volume stays
+        thin (its unwritten blocks read as zeros). Returns the bytes read.
+
+        SAFETY: writes to `device`. The only caller is the hypervisor
+        module's restore, which passes a volume it has just allocated for
+        the new VM, never an existing VM's disk. progress(bytes) is called
+        every 3 s at most. Raises RuntimeError if borg fails."""
+        global current_borg_proc
+        errfile = tempfile.TemporaryFile()
+        proc = subprocess.Popen(self._command(path), env=self.env, stdout=subprocess.PIPE,
+                                stderr=errfile, **_popen_new_group_kwargs())
+        current_borg_proc = proc  # lets a cancel from the server kill it
+        total = 0
+        zero = bytes(self.CHUNK)
+        last_report = 0
+        try:
+            with open(device, "r+b") as out:
+                while True:
+                    parts = []
+                    need = self.CHUNK
+                    while need > 0:
+                        piece = proc.stdout.read(need)
+                        if not piece:
+                            break
+                        parts.append(piece)
+                        need -= len(piece)
+                    buf = b"".join(parts)
+                    if not buf:
+                        break
+                    if buf == zero[:len(buf)]:
+                        out.seek(len(buf), os.SEEK_CUR)
+                    else:
+                        out.write(buf)
+                    total += len(buf)
+                    if progress and time.time() - last_report >= 3:
+                        progress(total)
+                        last_report = time.time()
+                out.flush()
+                os.fsync(out.fileno())
+            rc = proc.wait()
+        finally:
+            current_borg_proc = None
+            if proc.poll() is None:
+                _kill_process_tree(proc)
+        if rc != 0:
+            errfile.seek(0)
+            raise RuntimeError(self._error(path, errfile.read()))
+        if progress:
+            progress(total)
+        return total
+
+    def list(self, path):
+        """The items under a path of the archive, in archive order, as
+        borg list --json-lines gives them (path, type, size...)."""
+        command = self.base[:1] + ["list", "--json-lines"] + self.base[2:] + [path]
+        res = subprocess.run(command, env=self.env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=3600)
+        if res.returncode != 0:
+            raise RuntimeError(self._error(path, res.stderr))
+        return [json.loads(line) for line in res.stdout.decode("utf-8", errors="replace").splitlines() if line.strip()]
+
+    @contextlib.contextmanager
+    def stream(self, path):
+        """The contents of every file under a path, one after the other in
+        archive order, as a file object. Read it to the end.
+
+        Used for the segment files of a CBT disk: one borg extract for the
+        whole disk instead of one per 64 MiB segment. On an exception in
+        the caller, borg is killed; after a normal exit, a borg error is
+        raised as RuntimeError."""
+        global current_borg_proc
+        errfile = tempfile.TemporaryFile()
+        proc = subprocess.Popen(self._command(path), env=self.env, stdout=subprocess.PIPE,
+                                stderr=errfile, **_popen_new_group_kwargs())
+        current_borg_proc = proc  # lets a cancel from the server kill it
+        try:
+            yield proc.stdout
+        except BaseException:
+            if proc.poll() is None:
+                _kill_process_tree(proc)
+            proc.wait()
+            raise
+        finally:
+            current_borg_proc = None
+        if proc.wait() != 0:
+            errfile.seek(0)
+            raise RuntimeError(self._error(path, errfile.read()))
+
+
+def close_vm_browse_sessions():
+    """Unmount the archives opened for file-level browsing: borg mount holds
+    a lock on the repository that would hold a backup or restore back.
+    Called before every VM backup and VM restore; a no-op on a client agent."""
+    browser = getattr(HYPERVISOR_MODULE, "BROWSER", None) if HYPERVISOR_MODULE else None
+    if browser is not None:
+        try:
+            browser.close_all("a backup or restore needs the repository")
+        except Exception as e:
+            logger.warning("Could not close the VM browse sessions: {}".format(e))
+
+
+class _BrowseUploader(object):
+    """File object for tarfile: sends what is written to the server in
+    chunks (POST /api/agent/hypervisor/browse-upload), for a file-level
+    download from a VM backup.
+
+    Each chunk carries the offset the server must already have (the server
+    answers 409 otherwise), so a retried chunk can never be appended twice.
+    Network errors are retried 5 times with a growing pause; a refusal
+    (400/403/404/409/413) is not retried. The server keeps the file 6 hours
+    and the browser downloads it from there: the node is never contacted
+    by the browser (no inbound connection)."""
+
+    CHUNK = 4 * 1024 * 1024  # under PHP's default post_max_size (8M)
+
+    def __init__(self, config, job_id):
+        self.config = config
+        self.job_id = job_id
+        self.buf = []
+        self.buffered = 0
+        self.total = 0
+        self.last_report = 0
+
+    def write(self, data):
+        self.buf.append(bytes(data))
+        self.buffered += len(data)
+        if self.buffered >= self.CHUNK:
+            self._send()
+        return len(data)
+
+    def flush(self):
+        # tarfile calls flush(); chunks are only sent when full or at finish()
+        pass
+
+    def _send(self):
+        """POST the buffered bytes as one chunk; raises RuntimeError if the
+        server refuses it or stays unreachable."""
+        if not self.buffered:
+            return
+        body = b"".join(self.buf)
+        url = "{}/api/agent/hypervisor/browse-upload?job_id={}&offset={}".format(
+            self.config["server_url"], self.job_id, self.total)
+        error = "no answer"
+        for attempt in range(5):
+            req = urllib.request.Request(url, data=body, method="POST", headers={
+                "Authorization": "Bearer {}".format(self.config["api_key"]),
+                "Content-Type": "application/octet-stream",
+                "User-Agent": "BBS-Agent/{}".format(AGENT_VERSION),
+            })
+            try:
+                with server_urlopen(self.config, req, 300) as resp:
+                    answer = json.loads(resp.read().decode("utf-8"))
+                error = None if answer.get("status") == "ok" else (answer.get("error") or str(answer))
+                break  # an answer, good or a refusal: no retry
+            except urllib.error.HTTPError as e:
+                error = "HTTP {}: {}".format(e.code, e.read().decode("utf-8", errors="replace")[:300])
+                if e.code in (400, 403, 404, 409, 413):
+                    break
+            except Exception as e:
+                error = str(e)
+            time.sleep(2 * (attempt + 1))
+        if error is not None:
+            raise RuntimeError("upload to the server failed: {}".format(error))
+        self.total += len(body)
+        self.buf = []
+        self.buffered = 0
+        if time.time() - self.last_report >= 3:
+            self.last_report = time.time()
+            api_request(self.config, "/api/agent/progress", method="POST", data={
+                "job_id": self.job_id, "bytes_processed": self.total,
+                "status_message": "Preparing the download: {:.1f} MiB".format(self.total / 1048576.0),
+            })
+
+    def finish(self):
+        """Send what is left in the buffer (the end of the tar.gz)."""
+        self._send()
+
+
+def execute_vm_browse(config, task):
+    """File-level browsing of a VM backup (hypervisor agent): open the
+    archive (mount, partitions, filesystems), list a directory of one of its
+    volumes, or send a tar.gz of a selection to the server.
+
+    task["browse"]["action"]: open | list (volume, path) | download
+    (volume, paths) | close. The answer goes back as the job's output_log
+    (JSON), which the server stores as task_result for the browse page.
+    The session stays open between tasks (see VmBrowser in the module), so
+    only the first task of a session pays for the borg mount and the
+    helper VM. Read-only: nothing is written to the repository or to any
+    VM. On a client agent HYPERVISOR_MODULE is None and the task fails."""
+    job_id = task.get("job_id")
+    command = list(task.get("command", []))
+    if command and command[0] == "borg" and BORG_PATH:
+        command[0] = BORG_PATH
+    if _refuse_unsafe_command(config, job_id, command):
+        return
+    if len(command) < 4 or command[1] != "extract" or command[-1] != "--":
+        report_status(config, {"job_id": job_id, "result": "failed", "error_log": "unexpected browse command"})
+        return
+    params = task.get("browse") or {}
+    action = params.get("action")
+    vm = task.get("hypervisor_vm") or {}
+
+    remote_key = task.get("remote_ssh_key")
+    try:
+        browser = getattr(HYPERVISOR_MODULE, "BROWSER", None) if HYPERVISOR_MODULE else None
+        if browser is None:
+            raise RuntimeError("this agent's hypervisor module cannot browse VM backups")
+        if action == "close":
+            closed = browser.close(str(task.get("archive_id") or task.get("archive_name")), "closed by a user")
+            report_status(config, {"job_id": job_id, "result": "completed",
+                                   "output_log": json.dumps({"closed": closed})})
+            return
+        if remote_key:
+            with open(REMOTE_KEY_PATH, "w", newline="\n") as kf:
+                kf.write(remote_key.replace("\r\n", "\n").replace("\r", "\n").rstrip() + "\n")
+            os.chmod(REMOTE_KEY_PATH, 0o600)
+        # The server sends "borg extract [options] repo::archive --" (the
+        # same payload as a VM restore); browsing needs "borg mount -f
+        # [options] repo::archive", -f keeping borg in the foreground as our
+        # child so the session can stop it
+        middle = command[2:-1]
+        mount_cmd = [command[0], "mount", "-f"] + [o for o in middle if o.startswith("--")] \
+            + [o for o in middle if "::" in o]
+        # Despite its name, this builds the environment of any borg restore
+        # here (BORG_RSH fixes, repo access prompts answered): reused as is
+        env = _mssql_restore_borg_env(task.get("env", {}))
+        key = str(task.get("archive_id") or task.get("archive_name"))
+        if action == "open":
+            api_request(config, "/api/agent/progress", method="POST", data={
+                "job_id": job_id, "status_message": "Mounting the backup of VM {}...".format(vm.get("ref"))})
+        with browser.use(key, vm.get("ref"), mount_cmd, env) as session:
+            if action == "open":
+                result = session.structure
+            elif action == "list":
+                result = session.list(params.get("volume"), params.get("path") or "")
+            elif action == "download":
+                sink = _BrowseUploader(config, job_id)
+                count = session.download(params.get("volume"), list(params.get("paths") or []), sink)
+                sink.finish()
+                result = {"file_size": sink.total, "entries": count}
+            else:
+                raise RuntimeError("unknown browse action {!r}".format(action))
+        report_status(config, {"job_id": job_id, "result": "completed", "output_log": json.dumps(result)})
+    except Exception as e:
+        logger.error("Job #{}: VM browse ({}) failed: {}".format(job_id, action, e))
+        report_status(config, {"job_id": job_id, "result": "failed", "error_log": str(e)[:2000]})
+    finally:
+        if remote_key:
+            try:
+                os.remove(REMOTE_KEY_PATH)
+            except OSError:
+                pass
+
+
+def execute_restore_vm(config, task):
+    """Restore a VM archive as a new VM through the hypervisor module.
+
+    The task carries the base borg extract command, the source VM
+    (hypervisor_vm: type, ref) and restore_options (vmid, storage, name,
+    network_down, start). Open browse sessions are closed first (their
+    borg mount would hold the repository lock). The connector does the
+    work (ProxmoxVmRestore in bbs-hypervisor.py): it creates a NEW VM and
+    never writes to an existing one. On a client agent the task fails."""
+    job_id = task.get("job_id")
+    command = list(task.get("command", []))
+    if command and command[0] == "borg" and BORG_PATH:
+        command[0] = BORG_PATH
+    if _refuse_unsafe_command(config, job_id, command):
+        return
+    if len(command) < 4 or command[1] != "extract" or command[-1] != "--":
+        report_status(config, {"job_id": job_id, "result": "failed", "error_log": "unexpected restore command"})
+        return
+
+    remote_key = task.get("remote_ssh_key")
+    if remote_key:
+        try:
+            with open(REMOTE_KEY_PATH, "w", newline="\n") as kf:
+                kf.write(remote_key.replace("\r\n", "\n").replace("\r", "\n").rstrip() + "\n")
+            os.chmod(REMOTE_KEY_PATH, 0o600)
+        except Exception as e:
+            report_status(config, {"job_id": job_id, "result": "failed",
+                                   "error_log": "Failed to write remote SSH key: {}".format(e)})
+            return
+
+    vm = task.get("hypervisor_vm") or {}
+    state = {"last": 0}
+    close_vm_browse_sessions()
+
+    def progress(done, total, message=None):
+        """Report restore progress to the server, at most every 3 s."""
+        if time.time() - state["last"] < 3 and done < total:
+            return
+        state["last"] = time.time()
+        pct = int(done * 100 / total) if total else 0
+        api_request(config, "/api/agent/progress", method="POST", data={
+            "job_id": job_id, "bytes_processed": done, "bytes_total": total,
+            "status_message": "{} ({}%)".format(message or "Restoring", pct),
+        })
+
+    try:
+        if HYPERVISOR_MODULE is None:
+            raise RuntimeError("this agent has no hypervisor module (install it with install.sh --hypervisor)")
+        connector_cls = HYPERVISOR_MODULE.CONNECTORS.get(vm.get("type"))
+        if connector_cls is None or not hasattr(connector_cls, "restore_vm"):
+            raise RuntimeError("the hypervisor module cannot restore '{}' VMs".format(vm.get("type")))
+        api_request(config, "/api/agent/progress", method="POST", data={
+            "job_id": job_id, "status_message": "Reading the backup of VM {}...".format(vm.get("ref")),
+        })
+        # _mssql_restore_borg_env: the generic borg restore environment (see
+        # execute_vm_browse)
+        message = connector_cls().restore_vm(
+            BorgArchiveSource(command, _mssql_restore_borg_env(task.get("env", {}))),
+            vm.get("ref"), task.get("restore_options") or {},
+            lambda msg: log_to_server(config, job_id, msg), progress)
+        report_status(config, {"job_id": job_id, "result": "completed", "output_log": message})
+    except Exception as e:
+        logger.error("Job #{}: VM restore failed: {}".format(job_id, e))
+        report_status(config, {"job_id": job_id, "result": "failed", "error_log": "VM restore failed: {}".format(e)})
+    finally:
+        if remote_key:
+            try:
+                os.remove(REMOTE_KEY_PATH)
+            except OSError:
+                pass
+
+
+def report_hypervisor_inventory(config, hypervisor_id, connector):
+    """Read one hypervisor's inventory through its connector and POST it
+    to /api/agent/hypervisor/inventory. A failure is logged and retried at
+    the next interval; it never stops the inventory thread."""
+    try:
+        inventory = connector.inventory()
+        inventory["hypervisor_id"] = hypervisor_id
+        api_request(config, "/api/agent/hypervisor/inventory", method="POST", data=inventory)
+        logger.debug("Reported hypervisor #{} inventory: {} VMs".format(hypervisor_id, len(inventory["vms"])))
+    except Exception as e:
+        logger.warning("Hypervisor #{} inventory report failed: {}".format(hypervisor_id, e))
 
 
 def register(config):
@@ -1698,8 +2227,13 @@ def _verify_signed_script(data):
 
 
 def _version_tuple(v):
+    # Hypervisors (experimental builds): drop a pre-release suffix such as
+    # "-exp.2" before comparing. Without this, "2.103.0-exp.2" became
+    # (2, 103, 0, 2), seen as newer than the official 2.103.0, so the
+    # experimental agent refused the release as a downgrade.
+    # See docs/hypervisors.md#versioning
     parts = []
-    for p in str(v).split("."):
+    for p in str(v).split("-", 1)[0].split("."):
         digits = "".join(ch for ch in p if ch.isdigit())
         parts.append(int(digits) if digits else 0)
     return tuple(parts)
@@ -1761,6 +2295,32 @@ def execute_update_agent(config, task):
             error_output = "Update refused: the server offers agent {} but this agent runs {}; downgrades are not installed.".format(offered, AGENT_VERSION)
         elif "AGENT_VERSION" not in new_script or len(new_script) < 1000:
             error_output = "Downloaded script failed validation"
+
+        # Hypervisors: a hypervisor agent updates its hypervisor module
+        # together with the core, and only when both are valid: a new core
+        # with an old module (or the reverse) is not a combination anyone
+        # tested. The module must carry a valid signature too (it runs as
+        # root on the hypervisor), and is only written after the core.
+        new_module_bytes = None
+        if not error_output and config.get("role") == "hypervisor" and not IS_WINDOWS:
+            try:
+                mod_req = urllib.request.Request(
+                    "{}/api/agent/download?file={}".format(config['server_url'], HYPERVISOR_MODULE_FILE),
+                    headers=headers, method="GET")
+                with server_urlopen(config, mod_req, 60) as mresp:
+                    new_module_bytes = mresp.read()
+                m_ok, m_why = _verify_signed_script(new_module_bytes)
+                if config.get("require_signed_updates", True) and not m_ok:
+                    error_output = "Update refused: hypervisor module: {}. The agent was not changed.".format(m_why)
+                else:
+                    import ast
+                    ast.parse(new_module_bytes.decode("utf-8"))
+            except SyntaxError as syn_err:
+                error_output = "Downloaded hypervisor module has a syntax error on line {}: {} — keeping current version".format(
+                    syn_err.lineno, syn_err.msg)
+            except Exception as mod_err:
+                error_output = "Could not download the hypervisor module: {} — keeping current version".format(mod_err)
+
         if error_output:
             logger.error(error_output)
         else:
@@ -1800,6 +2360,15 @@ def execute_update_agent(config, task):
             if not IS_WINDOWS:
                 os.chmod(tmp_path, os.stat(script_path).st_mode)
             os.replace(tmp_path, script_path)
+
+            # Hypervisors: install the module verified above (temp file +
+            # rename, so a crash never leaves half a module)
+            if new_module_bytes is not None:
+                module_path = _hypervisor_module_path()
+                with open(module_path + ".tmp", "wb") as mf:
+                    mf.write(new_module_bytes)
+                os.replace(module_path + ".tmp", module_path)
+                logger.info("Updated hypervisor module at {}".format(module_path))
 
             new_version = offered or "unknown"
 
@@ -6132,6 +6701,16 @@ def _execute_task_inner(config, task, job_id, task_type, command, env_vars,
         execute_restore_mssql(config, task)
         return
 
+    # Hypervisors: full VM restore (hypervisor agent)
+    if task_type == "restore_vm":
+        execute_restore_vm(config, task)
+        return
+
+    # Hypervisors: file-level browsing of a VM backup (hypervisor agent)
+    if task_type == "vm_browse":
+        execute_vm_browse(config, task)
+        return
+
     # Report running immediately so the UI shows activity
     api_request(config, "/api/agent/progress", method="POST", data={
         "job_id": job_id,
@@ -6370,6 +6949,44 @@ def _execute_task_inner(config, task, job_id, task_type, command, env_vars,
             })
             return
         logger.info("Executing {} job #{} from snapshot tree {}: {}".format(task_type, job_id, cwd, ' '.join(command)))
+
+    # Hypervisors: VM backup (hypervisor agent). The hypervisor module
+    # snapshots the VM's disks and lays them out for borg; prepare() returns
+    # the borg command and the directory to run it from, and from here on
+    # the backup runs exactly like a file backup (progress, archive record,
+    # catalog). cleanup() in the finally block below removes the snapshots
+    # whatever happens. See ProxmoxVmBackup in bbs-hypervisor.py.
+    vm_session = None
+    if task_type == "backup" and task.get("hypervisor_vm"):
+        vm = task["hypervisor_vm"]
+        try:
+            if HYPERVISOR_MODULE is None:
+                raise RuntimeError("this agent has no hypervisor module (install it with install.sh --hypervisor)")
+            connector_cls = HYPERVISOR_MODULE.CONNECTORS.get(vm.get("type"))
+            if connector_cls is None:
+                raise RuntimeError("the hypervisor module has no '{}' connector".format(vm.get("type")))
+            close_vm_browse_sessions()
+            label = "VM {}{}".format(vm.get("ref"), " ({})".format(vm["name"]) if vm.get("name") else "")
+            api_request(config, "/api/agent/progress", method="POST", data={
+                "job_id": job_id, "status_message": "Snapshotting {}...".format(label),
+            })
+            vm_session = connector_cls().backup_session(vm, lambda msg: log_to_server(config, job_id, msg))
+            command, cwd = vm_session.prepare(command)
+            if hasattr(vm_session, "borg_env"):
+                env = dict(env, **vm_session.borg_env())
+        except Exception as e:
+            if vm_session is not None:
+                vm_session.cleanup()
+            logger.error("Job #{}: VM backup could not start: {}".format(job_id, e))
+            report_status(config, {
+                "job_id": job_id, "result": "failed",
+                "error_log": "VM backup could not start: {}".format(e),
+            })
+            return
+        api_request(config, "/api/agent/progress", method="POST", data={
+            "job_id": job_id, "status_message": "Backing up {}...".format(label),
+        })
+        logger.info("Executing VM backup job #{} from {}: {}".format(job_id, cwd, ' '.join(command)))
 
     if streams is not None and streams.streams:
         command = _prepare_streaming(config, job_id, command, directories, streams)
@@ -6787,6 +7404,17 @@ def _execute_task_inner(config, task, job_id, task_type, command, env_vars,
         if snapshot_session is not None:
             snapshot_session.cleanup()
 
+        if vm_session is not None:
+            # Hypervisors: the session keeps its snapshots as change
+            # tracking references only when borg stored the archive.
+            # `result` is set further up only once borg has finished; read
+            # through locals() because an exception may have skipped it, in
+            # which case the backup counts as failed (snapshots removed).
+            try:
+                vm_session.cleanup(succeeded=(locals().get("result") == "completed"))
+            except TypeError:
+                vm_session.cleanup()  # module older than the agent
+
         # Close the catalog SSH pipe
         catalog_ssh_error = ""
         if catalog_ssh:
@@ -7131,6 +7759,25 @@ def main():
     last_info_report = time.time()
     info_report_interval = 3600
 
+    # Hypervisors: on a hypervisor agent, load the module, clean up browse
+    # sessions left by a previous run, and start the VM inventory in its
+    # own thread (see hypervisor_inventory_thread), so it keeps reporting
+    # during tasks. Nothing happens here on a client agent.
+    global HYPERVISOR_MODULE
+    hypervisor_module = HYPERVISOR_MODULE = load_hypervisor_module(config)
+    if hypervisor_module is not None and getattr(hypervisor_module, "BROWSER", None) is not None:
+        # The server shows how long a browse session has held a repository
+        # lock; tell it when sessions open and close (idle, backup, restart)
+        hypervisor_module.BROWSER.notify = lambda event: api_request(
+            config, "/api/agent/hypervisor/browse-session", method="POST", data=event)
+        try:
+            hypervisor_module.BROWSER.cleanup_stale()
+        except Exception as e:
+            logger.warning("Could not clean up old VM browse sessions: {}".format(e))
+    if hypervisor_module is not None:
+        threading.Thread(target=hypervisor_inventory_thread, args=(config, hypervisor_module),
+                         name="hypervisor-inventory", daemon=True).start()
+
     # Burst-poll window. When the UI's file-browser modal queues list_dir
     # tasks, we want the agent to feel near-real-time — but at 30s default
     # polling, every click is a 15s average wait. Once we see a list_dir
@@ -7185,7 +7832,8 @@ def main():
                             execute_task(config, task)
                         # Refresh burst-poll window when we see a list_dir
                         # task — the user is interactively browsing.
-                        if task.get("task") == "list_dir":
+                        # Hypervisors: vm_browse is interactive the same way.
+                        if task.get("task") in ("list_dir", "vm_browse"):
                             burst_until = time.time() + BURST_WINDOW
                     finally:
                         task_running = False

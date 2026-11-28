@@ -4,7 +4,7 @@ Sign the agent scripts so agents refuse an update that did not come from
 the project's signing key.
 
     bbs-sign-agent keygen            create ~/.bbs/agent-signing.key and print the public key
-    bbs-sign-agent sign [file...]    re-sign agent/bbs-agent.py and agent/bbs-agent-start.sh
+    bbs-sign-agent sign [file...]    re-sign agent/bbs-agent.py, agent/bbs-agent-start.sh and agent/bbs-hypervisor.py
     bbs-sign-agent verify [file...]  check the signatures against agent/signing-key.pub
     bbs-sign-agent selftest          run the Ed25519 implementation against RFC 8032
 
@@ -197,7 +197,10 @@ def verify_file(path, pks):
 # ─── CLI ───────────────────────────────────────────────────────────────────
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DEFAULT_FILES = [os.path.join(ROOT, "agent", "bbs-agent.py"), os.path.join(ROOT, "agent", "bbs-agent-start.sh")]
+# Hypervisors: the hypervisor module runs as root on the node and is
+# replaced by the agent self-update, so it is signed like the agent.
+DEFAULT_FILES = [os.path.join(ROOT, "agent", "bbs-agent.py"), os.path.join(ROOT, "agent", "bbs-agent-start.sh"),
+                 os.path.join(ROOT, "agent", "bbs-hypervisor.py")]
 PUBKEY_FILE = os.path.join(ROOT, "agent", "signing-key.pub")
 KEY_FILE = os.environ.get("BBS_AGENT_SIGNING_KEY") or os.path.expanduser("~/.bbs/agent-signing.key")
 
