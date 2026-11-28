@@ -100,6 +100,10 @@ CREATE TABLE user_permissions (
 CREATE TABLE agents (
     id INT AUTO_INCREMENT PRIMARY KEY,
     name VARCHAR(100) NOT NULL,
+    -- Hypervisors: 'hypervisor' for an agent created from Add Hypervisor and
+    -- installed with install.sh --hypervisor; listed under Hypervisors, not
+    -- Clients. Set by the server only (migration 140).
+    agent_type ENUM('client', 'hypervisor') NOT NULL DEFAULT 'client',
     hostname VARCHAR(255) DEFAULT NULL,
     ip_address VARCHAR(45) DEFAULT NULL,
     mac_address VARCHAR(17) DEFAULT NULL,
@@ -142,6 +146,65 @@ CREATE TABLE agents (
     client_profile_id INT DEFAULT NULL,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
+);
+
+-- Hypervisors: hypervisors and their virtual machines (migrations 140-145,
+-- docs/hypervisors.md#database). `type` is a connector slug from
+-- src/Services/Hypervisors (proxmox; ESXi/vCenter later). agent_role
+-- 'proxy' and config_encrypted are reserved for API-based connectors and
+-- unused so far.
+CREATE TABLE hypervisors (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(100) NOT NULL,
+    type VARCHAR(30) NOT NULL,
+    agent_id INT DEFAULT NULL,
+    agent_role ENUM('host', 'proxy') NOT NULL DEFAULT 'host',
+    config_encrypted TEXT DEFAULT NULL,
+    info JSON DEFAULT NULL,
+    inventory_at DATETIME DEFAULT NULL,
+    -- How often the agent reports the VM inventory, in minutes (1-60)
+    inventory_interval_minutes TINYINT UNSIGNED NOT NULL DEFAULT 5,
+    refresh_requested TINYINT(1) NOT NULL DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_hypervisor_agent (agent_id),
+    FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE
+);
+
+-- Hypervisors: the latest VM inventory, in the common model of
+-- HypervisorConnector; replaced by each report of the agent.
+CREATE TABLE hypervisor_vms (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    hypervisor_id INT NOT NULL,
+    vm_ref VARCHAR(64) NOT NULL,
+    name VARCHAR(255) NOT NULL DEFAULT '',
+    host VARCHAR(100) NOT NULL DEFAULT '',
+    status VARCHAR(20) NOT NULL DEFAULT 'unknown',
+    cpus SMALLINT UNSIGNED DEFAULT NULL,
+    memory_bytes BIGINT UNSIGNED DEFAULT NULL,
+    uptime_seconds BIGINT UNSIGNED DEFAULT NULL,
+    guest_tools TINYINT(1) NOT NULL DEFAULT 0,
+    is_template TINYINT(1) NOT NULL DEFAULT 0,
+    tags VARCHAR(255) DEFAULT NULL,
+    disks JSON DEFAULT NULL,
+    extra JSON DEFAULT NULL,
+    last_seen DATETIME DEFAULT NULL,
+    UNIQUE KEY uniq_hypervisor_vm (hypervisor_id, vm_ref),
+    FOREIGN KEY (hypervisor_id) REFERENCES hypervisors(id) ON DELETE CASCADE
+);
+
+-- Hypervisors: file-level browse sessions reported by the agent (an open
+-- session holds the repository's borg lock); shown in the UI.
+CREATE TABLE vm_browse_sessions (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    agent_id INT NOT NULL,
+    archive_id INT NOT NULL,
+    repository_id INT DEFAULT NULL,
+    opened_at DATETIME NOT NULL,
+    last_used_at DATETIME NOT NULL,
+    closed_at DATETIME DEFAULT NULL,
+    close_reason VARCHAR(200) DEFAULT NULL,
+    KEY idx_vm_browse_open (agent_id, closed_at),
+    FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE
 );
 
 -- --------------------------------------------------------
@@ -241,6 +304,10 @@ CREATE TABLE backup_plans (
     id INT AUTO_INCREMENT PRIMARY KEY,
     agent_id INT NOT NULL,
     repository_id INT NOT NULL,
+    -- Hypervisors: VM backup plan (see migration 142): set for a plan that
+    -- backs up the virtual machines of this hypervisor instead of directories
+    hypervisor_id INT DEFAULT NULL,
+    vm_selection ENUM('selected', 'all') DEFAULT NULL,
     name VARCHAR(100) NOT NULL,
     directories TEXT NOT NULL,
     excludes TEXT DEFAULT NULL,
@@ -260,7 +327,21 @@ CREATE TABLE backup_plans (
     notes_updated_at DATETIME DEFAULT NULL,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE,
-    FOREIGN KEY (repository_id) REFERENCES repositories(id) ON DELETE CASCADE
+    FOREIGN KEY (repository_id) REFERENCES repositories(id) ON DELETE CASCADE,
+    CONSTRAINT fk_backup_plans_hypervisor FOREIGN KEY (hypervisor_id) REFERENCES hypervisors(id) ON DELETE CASCADE
+);
+
+-- Hypervisors: VMs of a VM backup plan: included VMs ('selected'), or
+-- excluded ones ('all', exclude_vm = 1); exclude_disks lists disk keys left
+-- out.
+CREATE TABLE backup_plan_vms (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    backup_plan_id INT NOT NULL,
+    vm_ref VARCHAR(64) NOT NULL,
+    exclude_vm TINYINT(1) NOT NULL DEFAULT 0,
+    exclude_disks JSON DEFAULT NULL,
+    UNIQUE KEY uniq_plan_vm (backup_plan_id, vm_ref),
+    FOREIGN KEY (backup_plan_id) REFERENCES backup_plans(id) ON DELETE CASCADE
 );
 
 CREATE TABLE schedules (
@@ -286,10 +367,14 @@ CREATE TABLE schedules (
 CREATE TABLE backup_jobs (
     id INT AUTO_INCREMENT PRIMARY KEY,
     backup_plan_id INT DEFAULT NULL,
+    -- Hypervisors: the VM a job is for (VM backup and its prune, VM restore,
+    -- file-level browse); NULL otherwise
+    vm_ref VARCHAR(64) DEFAULT NULL,
     agent_id INT NOT NULL,
     repository_id INT DEFAULT NULL,
     source_repository_id INT DEFAULT NULL,
-    task_type ENUM('backup', 'backup_dry_run', 'prune', 'restore', 'restore_mysql', 'restore_pg', 'restore_mongo', 'restore_mssql', 'check', 'compact', 'update_borg', 'update_agent', 'plugin_test', 'plugin_post', 's3_sync', 'repo_check', 'repo_repair', 'break_lock', 's3_restore', 'catalog_sync', 'catalog_rebuild', 'catalog_rebuild_full', 'archive_delete', 'list_dir', 'archive_lock') NOT NULL DEFAULT 'backup',
+    -- Hypervisors: restore_vm and vm_browse added (migrations 143, 144)
+    task_type ENUM('backup', 'backup_dry_run', 'prune', 'restore', 'restore_mysql', 'restore_pg', 'restore_mongo', 'restore_mssql', 'restore_vm', 'check', 'compact', 'update_borg', 'update_agent', 'plugin_test', 'plugin_post', 's3_sync', 'repo_check', 'repo_repair', 'break_lock', 's3_restore', 'catalog_sync', 'catalog_rebuild', 'catalog_rebuild_full', 'archive_delete', 'list_dir', 'archive_lock', 'vm_browse') NOT NULL DEFAULT 'backup',
     plugin_config_id INT DEFAULT NULL,
     -- Frozen at dispatch: what this backup actually ran with (#452)
     directories TEXT DEFAULT NULL,
@@ -310,6 +395,9 @@ CREATE TABLE backup_jobs (
     restore_paths JSON DEFAULT NULL,
     restore_destination VARCHAR(512) DEFAULT NULL,
     restore_databases JSON DEFAULT NULL,
+    -- Hypervisors: restore_vm target (VMID, storage, name, network, start;
+    -- migration 143) or vm_browse request (migration 144)
+    restore_options JSON DEFAULT NULL,
     queued_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     started_at DATETIME DEFAULT NULL,
     completed_at DATETIME DEFAULT NULL,
@@ -326,6 +414,8 @@ CREATE TABLE archives (
     id INT AUTO_INCREMENT PRIMARY KEY,
     repository_id INT NOT NULL,
     backup_job_id INT DEFAULT NULL,
+    -- Hypervisors: the VM this archive holds (VM backup plans)
+    vm_ref VARCHAR(64) DEFAULT NULL,
     archive_name VARCHAR(255) NOT NULL,
     file_count INT NOT NULL DEFAULT 0,
     original_size BIGINT NOT NULL DEFAULT 0,

@@ -15,13 +15,20 @@ class QueueManager
      * (prune, compact, catalog, offsite sync) run on the scheduler and don't
      * care about the agent's connection state.
      */
+    // Hypervisors: restore_vm and vm_browse run on the hypervisor agent
     public const AGENT_BOUND_TASKS = [
-        'backup', 'backup_dry_run', 'restore', 'restore_mysql', 'restore_pg', 'restore_mongo', 'restore_mssql',
-        'update_borg', 'update_agent', 'plugin_test', 'plugin_post', 'list_dir',
+        'backup', 'backup_dry_run', 'restore', 'restore_mysql', 'restore_pg', 'restore_mongo', 'restore_mssql', 'restore_vm',
+        'update_borg', 'update_agent', 'plugin_test', 'plugin_post', 'list_dir', 'vm_browse',
     ];
 
-    /** Task types that never touch the repository's storage. */
-    private const STORAGE_FREE_TASKS = ['update_borg', 'update_agent', 'plugin_test', 'plugin_post', 'list_dir', 'break_lock'];
+    /**
+     * Task types that never touch the repository's storage.
+     * Hypervisors: vm_browse is listed here although its "open" runs a
+     * borg mount: browsing is interactive (each click is a short task) and
+     * reads only what is opened, so it must not wait behind backups for a
+     * storage slot. See docs/hypervisors.md, open question 6.
+     */
+    private const STORAGE_FREE_TASKS = ['update_borg', 'update_agent', 'plugin_test', 'plugin_post', 'list_dir', 'break_lock', 'vm_browse'];
 
     /** Task types the scheduler runs on the server; agents never run or report them. */
     /**
@@ -240,7 +247,8 @@ class QueueManager
         $busyAgents = $this->db->fetchAll(
             "SELECT DISTINCT agent_id FROM backup_jobs
              WHERE status IN ('sent', 'running')
-               AND task_type IN ('backup', 'restore', 'restore_mysql', 'restore_pg', 'restore_mongo', 'restore_mssql')"
+               -- Hypervisors: a VM restore keeps the agent busy like any restore
+               AND task_type IN ('backup', 'restore', 'restore_mysql', 'restore_pg', 'restore_mongo', 'restore_mssql', 'restore_vm')"
         );
         $busyAgentIds = array_column($busyAgents, 'agent_id');
 
@@ -374,6 +382,14 @@ class QueueManager
             if ($job['task_type'] === 'backup' || $job['task_type'] === 'backup_dry_run') {
                 $isDryRun = $job['task_type'] === 'backup_dry_run';
                 $prefix = $job['backup_plan_id'] ? 'plan' . $job['backup_plan_id'] : ($job['repo_name'] ?? 'backup');
+                // Hypervisors: VM backup (hypervisor plan): one archive per VM,
+                // named so the prune can be scoped to that VM; the agent's
+                // hypervisor module supplies the paths, so the plan has none.
+                $vmContext = $isDryRun ? null : (new \BBS\Services\Hypervisors\HypervisorBackupService())->taskContext($job);
+                if ($vmContext) {
+                    $prefix = $vmContext['prefix'];
+                    $plan['directories'] = '';
+                }
                 $archiveName = BorgCommandBuilder::generateArchiveName($isDryRun ? 'dry-run' : $prefix);
 
                 // Build plugin payload and auto-include plugin directories (e.g. mysql dump_dir).
@@ -477,6 +493,13 @@ class QueueManager
                 $extra['stream_db_dumps'] = !empty($job['stream_db_dumps']);
                 // CPU/IO priority for borg on the client (#403).
                 $extra['priority'] = $job['priority'] ?? 'normal';
+                if ($vmContext) {
+                    // Hypervisors: which VM and disks (read by the module).
+                    // The agent's own filesystem snapshots stay off: the module
+                    // takes LVM-thin snapshots of the VM disks itself.
+                    $extra['hypervisor_vm'] = $vmContext['vm'];
+                    $extra['snapshot'] = false;
+                }
 
                 // Include decrypted SSH key for remote repos
                 if ($remoteSshConfig && !empty($job['remote_ssh_key_encrypted'])) {
@@ -521,6 +544,11 @@ class QueueManager
                 $taskPayload = $this->buildRestoreMongoPayload($job);
             } elseif ($job['task_type'] === 'restore_mssql') {
                 $taskPayload = $this->buildRestoreMssqlPayload($job);
+            } elseif ($job['task_type'] === 'restore_vm') {
+                // Hypervisors: VM restore and file-level browsing
+                $taskPayload = $this->buildRestoreVmPayload($job);
+            } elseif ($job['task_type'] === 'vm_browse') {
+                $taskPayload = $this->buildRestoreVmPayload($job, 'vm_browse');
             } elseif ($job['task_type'] === 'update_borg') {
                 $taskPayload = $this->buildBorgUpdatePayload($job);
             } elseif ($job['task_type'] === 'update_agent') {
@@ -772,6 +800,14 @@ class QueueManager
             if ($job['task_type'] === 'backup' || $job['task_type'] === 'backup_dry_run') {
                 $isDryRun = $job['task_type'] === 'backup_dry_run';
                 $prefix = $job['backup_plan_id'] ? 'plan' . $job['backup_plan_id'] : ($job['repo_name'] ?? 'backup');
+                // Hypervisors: VM backup (hypervisor plan): one archive per VM,
+                // named so the prune can be scoped to that VM; the agent's
+                // hypervisor module supplies the paths, so the plan has none.
+                $vmContext = $isDryRun ? null : (new \BBS\Services\Hypervisors\HypervisorBackupService())->taskContext($job);
+                if ($vmContext) {
+                    $prefix = $vmContext['prefix'];
+                    $plan['directories'] = '';
+                }
                 $archiveName = BorgCommandBuilder::generateArchiveName($isDryRun ? 'dry-run' : $prefix);
 
                 // Build plugin payload and auto-include plugin directories (e.g. mysql dump_dir).
@@ -874,6 +910,13 @@ class QueueManager
                 $extra['stream_db_dumps'] = !empty($job['stream_db_dumps']);
                 // CPU/IO priority for borg on the client (#403).
                 $extra['priority'] = $job['priority'] ?? 'normal';
+                if ($vmContext) {
+                    // Hypervisors: which VM and disks (read by the module).
+                    // The agent's own filesystem snapshots stay off: the module
+                    // takes LVM-thin snapshots of the VM disks itself.
+                    $extra['hypervisor_vm'] = $vmContext['vm'];
+                    $extra['snapshot'] = false;
+                }
                 if ($remoteSshConfig && !empty($job['remote_ssh_key_encrypted'])) {
                     try {
                         $extra['remote_ssh_key'] = Encryption::decrypt($job['remote_ssh_key_encrypted']);
@@ -904,6 +947,12 @@ class QueueManager
                 }
             } elseif ($job['task_type'] === 'restore_mssql') {
                 $payload = $this->buildRestoreMssqlPayload($job);
+                if ($payload) {
+                    $tasks[] = $payload;
+                }
+            } elseif ($job['task_type'] === 'restore_vm' || $job['task_type'] === 'vm_browse') {
+                // Hypervisors: VM restore and file-level browsing
+                $payload = $this->buildRestoreVmPayload($job, $job['task_type']);
                 if ($payload) {
                     $tasks[] = $payload;
                 }
@@ -1048,6 +1097,89 @@ class QueueManager
         }
 
         return BorgCommandBuilder::toTaskPayload('restore', $cmd, $env, $extra);
+    }
+
+    /**
+     * Build a restore_vm task payload: restore one VM archive as a new VM on
+     * the hypervisor agent. The agent runs the base command below once per
+     * file it needs, adding --stdout and the path (manifest, VM config, each
+     * disk), and writes the disks straight into new volumes.
+     *
+     * A vm_browse task (file-level browsing) carries the same command, from
+     * which the agent builds its borg mount, and the request in 'browse'.
+     *
+     * Hypervisors: new for this feature. The repository and SSH settings are
+     * built exactly as for a file restore (buildEnv, appendRemotePath).
+     * The hypervisor is found by the agent (JOIN hypervisors ON agent_id):
+     * a node agent serves one hypervisor; see docs/hypervisors.md, open
+     * question 3, for agents that would serve several. A restore point
+     * pruned after the job was queued fails the job instead of leaving it
+     * queued forever.
+     * See docs/hypervisors.md#d6-restore-as-a-new-vm-only
+     */
+    private function buildRestoreVmPayload(array $job, string $task = 'restore_vm'): ?array
+    {
+        $archive = $this->db->fetchOne("
+            SELECT ar.archive_name, ar.vm_ref, r.path as repo_path, r.passphrase_encrypted,
+                   r.storage_type, rsc.remote_port, rsc.ssh_private_key_encrypted as remote_ssh_key_encrypted,
+                   rsc.borg_remote_path, h.type as hypervisor_type
+            FROM archives ar
+            JOIN repositories r ON r.id = ar.repository_id
+            LEFT JOIN remote_ssh_configs rsc ON rsc.id = r.remote_ssh_config_id
+            JOIN hypervisors h ON h.agent_id = r.agent_id
+            WHERE ar.id = ? AND r.agent_id = ?
+            LIMIT 1
+        ", [$job['restore_archive_id'] ?? 0, $job['agent_id']]);
+        if (!$archive || empty($archive['vm_ref'])) {
+            // The restore point was pruned or deleted after the job was
+            // queued: fail it, or it would be re-queued forever
+            $this->db->update('backup_jobs', [
+                'status' => 'failed',
+                'completed_at' => date('Y-m-d H:i:s'),
+                'error_log' => 'The restore point no longer exists (pruned or deleted).',
+            ], "id = ? AND status IN ('queued', 'sent')", [$job['id']]);
+            return null;
+        }
+
+        $repo = ['path' => $archive['repo_path'], 'passphrase_encrypted' => $archive['passphrase_encrypted']];
+        $cmd = ['borg', 'extract', '--lock-wait=600', $repo['path'] . '::' . $archive['archive_name'], '--'];
+
+        $remoteSshConfig = null;
+        if (($archive['storage_type'] ?? 'local') === 'remote_ssh' && !empty($archive['remote_ssh_key_encrypted'])) {
+            $remoteSshConfig = [
+                'remote_port' => $archive['remote_port'] ?? 22,
+                'borg_remote_path' => $archive['borg_remote_path'] ?? null,
+            ];
+            $cmd = BorgCommandBuilder::appendRemotePath($cmd, $archive['borg_remote_path'] ?? null);
+        }
+        $env = BorgCommandBuilder::buildEnv($repo, true, $this->getSshPortForAgent($job['agent_id']), $remoteSshConfig);
+
+        $options = json_decode($job['restore_options'] ?? '{}', true) ?: new \stdClass();
+        $payload = [
+            'task' => $task,
+            'job_id' => $job['id'],
+            'command' => $cmd,
+            'env' => $env,
+            'archive_name' => $archive['archive_name'],
+            'hypervisor_vm' => [
+                'type' => $archive['hypervisor_type'],
+                'ref' => (string) $archive['vm_ref'],
+            ],
+        ];
+        if ($task === 'vm_browse') {
+            $payload['archive_id'] = (int) $job['restore_archive_id'];
+            $payload['browse'] = $options;
+        } else {
+            $payload['restore_options'] = $options;
+        }
+        if ($remoteSshConfig) {
+            try {
+                $payload['remote_ssh_key'] = Encryption::decrypt($archive['remote_ssh_key_encrypted']);
+            } catch (\Exception $e) {
+                $payload['remote_ssh_key'] = $archive['remote_ssh_key_encrypted'];
+            }
+        }
+        return $payload;
     }
 
     /**

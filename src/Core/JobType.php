@@ -17,6 +17,9 @@ class JobType
         'restore_pg' => 'PostgreSQL restore',
         'restore_mongo' => 'MongoDB restore',
         'restore_mssql' => 'SQL Server restore',
+        // Hypervisors: full VM restore and file-level browsing of a VM backup
+        'restore_vm' => 'VM restore',
+        'vm_browse' => 'VM file browse',
         'prune' => 'Prune',
         'compact' => 'Compact',
         's3_sync' => 'Offsite sync',
